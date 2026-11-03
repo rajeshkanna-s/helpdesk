@@ -122,6 +122,25 @@ export default function App() {
     }
   }, [companies, companyAdminSlug, customerPortalSlug, currentUser]);
 
+  // Dynamic Browser Tab Title based on Route
+  useEffect(() => {
+    if (isAdminConsoleRoute) {
+      document.title = 'Admin Console — Multi-Tenant Governance';
+    } else if (companyAdminSlug) {
+      const compName = activeCompany?.name || (companyAdminSlug.toUpperCase() + ' HelpDesk');
+      document.title = `${compName} — Staff Workspace`;
+    } else if (isCustomerPortalRoute && customerPortalSlug) {
+      const compName = activeCompany?.name || (customerPortalSlug.toUpperCase() + ' Support');
+      document.title = `${compName} — Customer Portal`;
+    } else if (isPricingRoute) {
+      document.title = 'Plans & Pricing — Kuwy HelpDesk SaaS';
+    } else if (isSignupRoute) {
+      document.title = 'Create Company Workspace — Kuwy HelpDesk';
+    } else {
+      document.title = 'Kuwy HelpDesk — Enterprise Multi-Tenant Customer Support Platform';
+    }
+  }, [isAdminConsoleRoute, companyAdminSlug, isCustomerPortalRoute, customerPortalSlug, isPricingRoute, isSignupRoute, activeCompany]);
+
   const handleLoginSuccess = (res: LoginResponse) => {
     setAuthToken(res.token || null);
     localStorage.setItem('kuwy_user', JSON.stringify(res));

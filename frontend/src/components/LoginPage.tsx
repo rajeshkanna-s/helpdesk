@@ -572,34 +572,47 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
 
                 <div className="d-flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline-primary py-1 px-2 small rounded-pill"
-                    onClick={() => applyDemoAccount('testadmin@kuwy.in', 'KUWY')}
-                  >
-                    Kuwy Admin
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline-secondary py-1 px-2 small rounded-pill"
-                    onClick={() => applyDemoAccount('testsupport@kuwy.in', 'KUWY')}
-                  >
-                    Kuwy Agent
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline-success py-1 px-2 small rounded-pill"
-                    onClick={() => applyDemoAccount('testsupport@acme.com', 'ACME')}
-                  >
-                    Acme Admin
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline-dark py-1 px-2 small rounded-pill"
-                    onClick={() => applyDemoAccount('testsuperadmin@kuwy.in', '')}
-                  >
-                    Super Admin
-                  </button>
+                  {isSuperAdminRoute ? (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline-dark py-1 px-2.5 small rounded-pill fw-semibold d-flex align-items-center gap-1.5"
+                      onClick={() => applyDemoAccount('testsuperadmin@kuwy.in', '')}
+                    >
+                      <ShieldCheck size={13} className="text-warning" />
+                      <span>Admin Console (testsuperadmin@kuwy.in)</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-outline-primary py-1 px-2 small rounded-pill"
+                        onClick={() => applyDemoAccount('testadmin@kuwy.in', 'KUWY')}
+                      >
+                        Kuwy Company Admin
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-outline-secondary py-1 px-2 small rounded-pill"
+                        onClick={() => applyDemoAccount('testsupport@kuwy.in', 'KUWY')}
+                      >
+                        Kuwy Agent
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-outline-success py-1 px-2 small rounded-pill"
+                        onClick={() => applyDemoAccount('testsupport@acme.com', 'ACME')}
+                      >
+                        Acme Admin
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-outline-dark py-1 px-2 small rounded-pill"
+                        onClick={() => onNavigate?.('/adminconsole')}
+                      >
+                        🛡️ Switch to Admin Console
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 

@@ -16,3 +16,4 @@ public class CustomerContactDto {
     private int openTickets;
     private String createdAt;
 }
+

@@ -10,3 +10,4 @@ public class SaveKbArticleRequest {
     private String slug;
     private String status;
 }
+

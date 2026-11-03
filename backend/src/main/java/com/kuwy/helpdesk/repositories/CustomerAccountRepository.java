@@ -10,3 +10,4 @@ import java.util.List;
 public interface CustomerAccountRepository extends JpaRepository<CustomerAccount, Long> {
     List<CustomerAccount> findByCompanyIdOrderByIdDesc(Long companyId);
 }
+
