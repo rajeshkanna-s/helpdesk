@@ -21,7 +21,7 @@ interface SuperAdminPortalProps {
 }
 
 // 7 Top-Level Admin Navigation Sections covering Screens 40 through 43 + Utilities
-type AdminMenuSection = 
+type AdminMenuSection =
   | 'overview'       // Screen 40: Super Admin Executive Dashboard
   | 'companies'      // Screen 41: Companies Directory & In-Depth Company Detail
   | 'plans'          // Screen 42: Plans, Pricing & Entitlements Management
@@ -327,7 +327,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   const filteredCompanies = companies.filter(c => {
     const matchesStatus = compStatusFilter === 'ALL' || c.status === compStatusFilter;
     const matchesPlan = compPlanFilter === 'ALL' || c.planName?.toUpperCase() === compPlanFilter.toUpperCase();
-    
+
     // Health flag filter
     let matchesHealth = true;
     const seatUtil = (c.userCount || 0) / Math.max(1, c.maxAgents || 1);
@@ -2506,13 +2506,12 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
                         <td>
                           <span
-                            className={`badge ${
-                              u.role?.roleType === 'SUPER_ADMIN'
+                            className={`badge ${u.role?.roleType === 'SUPER_ADMIN'
                                 ? 'bg-warning text-dark fw-bold'
                                 : u.role?.roleType === 'COMPANY_ADMIN'
-                                ? 'bg-primary'
-                                : 'bg-info-subtle text-info-emphasis border border-info-subtle'
-                            }`}
+                                  ? 'bg-primary'
+                                  : 'bg-info-subtle text-info-emphasis border border-info-subtle'
+                              }`}
                           >
                             {u.role?.name || u.role?.roleType}
                           </span>
@@ -2530,9 +2529,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                             {u.role?.roleType !== 'SUPER_ADMIN' && (
                               <button
                                 type="button"
-                                className={`btn btn-sm py-1 px-2.5 rounded-pill d-flex align-items-center gap-1 ${
-                                  u.isActive ? 'btn-outline-danger' : 'btn-outline-success'
-                                }`}
+                                className={`btn btn-sm py-1 px-2.5 rounded-pill d-flex align-items-center gap-1 ${u.isActive ? 'btn-outline-danger' : 'btn-outline-success'
+                                  }`}
                                 style={{ fontSize: '0.72rem' }}
                                 onClick={async () => {
                                   try {
