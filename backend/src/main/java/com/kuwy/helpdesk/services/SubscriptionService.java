@@ -168,3 +168,4 @@ public class SubscriptionService {
         log.warn("LOCKED workspace for company [{}] due to subscription cancellation.", company.getName());
     }
 }
+

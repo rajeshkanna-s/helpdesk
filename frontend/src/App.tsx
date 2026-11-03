@@ -6,7 +6,9 @@ import { SuperAdminPortal } from './components/SuperAdminPortal';
 import { CompanyWorkspace } from './components/CompanyWorkspace';
 import { CustomerPortal } from './components/CustomerPortal';
 import { OnboardingModal } from './components/OnboardingModal';
-import { ShieldCheck, Building2, LifeBuoy, Sparkles, ArrowRight } from 'lucide-react';
+import { MarketingLandingPage } from './components/MarketingLandingPage';
+import { PricingPage } from './components/PricingPage';
+import { CheckoutModal } from './components/CheckoutModal';
 
 export default function App() {
   const [pathname, setPathname] = useState<string>(() => window.location.pathname || '/');
@@ -28,6 +30,12 @@ export default function App() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState<Company | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [selectedOnboardPlan, setSelectedOnboardPlan] = useState<string>('STARTER');
+
+  // Checkout modal state
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [checkoutPlanTier, setCheckoutPlanTier] = useState<string>('STARTER');
+  const [checkoutBillingCycle, setCheckoutBillingCycle] = useState<'monthly' | 'annual'>('annual');
 
   // Listen to browser Back / Forward buttons
   useEffect(() => {
@@ -64,13 +72,14 @@ export default function App() {
   const normalizedPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
   const isAdminConsoleRoute = normalizedPath === '/adminconsole';
   const isSignupRoute = normalizedPath === '/signup';
+  const isPricingRoute = normalizedPath === '/pricing';
 
   // Check company admin route match: e.g. /kuwy/admin or /acme/admin
   const companyAdminMatch = normalizedPath.match(/^\/([^/]+)\/admin$/);
   const companyAdminSlug = companyAdminMatch ? companyAdminMatch[1] : null;
 
   // Check customer portal route match: e.g. /kuwy or /kuwy/portal or /acme
-  const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !companyAdminSlug && normalizedPath !== '/';
+  const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !isPricingRoute && !companyAdminSlug && normalizedPath !== '/';
   const customerPortalMatch = isCustomerPortalRoute ? normalizedPath.match(/^\/([^/]+)(\/portal)?$/) : null;
   const customerPortalSlug = customerPortalMatch ? customerPortalMatch[1] : null;
 
@@ -217,16 +226,47 @@ export default function App() {
   }
 
   // =========================================================================
-  // 4. ONBOARDING SIGNUP ROUTE: http://localhost:5174/signup
+  // 4. DEDICATED PRICING & PLANS ROUTE: http://localhost:5174/pricing
+  // =========================================================================
+  if (isPricingRoute) {
+    return (
+      <>
+        <PricingPage
+          onBack={() => navigate('/')}
+          onSelectPlan={(plan, cycle) => {
+            setCheckoutPlanTier(plan);
+            setCheckoutBillingCycle(cycle);
+            setShowCheckout(true);
+          }}
+          onNavigateToLogin={() => navigate('/kuwy/admin')}
+        />
+        <CheckoutModal
+          isOpen={showCheckout}
+          onClose={() => setShowCheckout(false)}
+          initialPlanTier={checkoutPlanTier}
+          initialBillingCycle={checkoutBillingCycle}
+          activeCompany={effectiveCompany}
+          onPaymentSuccess={() => {
+            setShowCheckout(false);
+            navigate(`/${effectiveCompany.subdomain}/admin`);
+          }}
+        />
+      </>
+    );
+  }
+
+  // =========================================================================
+  // 5. ONBOARDING SIGNUP ROUTE: http://localhost:5174/signup
   // =========================================================================
   if (isSignupRoute || showOnboarding) {
     return (
-      <div className="min-vh-100 bg-slate-900 d-flex flex-column justify-content-center align-items-center p-4" style={{ backgroundColor: '#0f172a' }}>
+      <div className="min-vh-100 bg-slate-900 d-flex flex-column justify-content-center align-items-center p-3 p-md-4" style={{ backgroundColor: '#0b132b' }}>
         <OnboardingModal
           isOpen={true}
+          defaultPlan={selectedOnboardPlan}
           onClose={() => {
             setShowOnboarding(false);
-            navigate('/kuwy/admin');
+            navigate('/');
           }}
           onSuccess={(res) => {
             handleLoginSuccess(res);
@@ -238,162 +278,41 @@ export default function App() {
   }
 
   // =========================================================================
-  // 5. ROOT LANDING & PORTAL DIRECTORY: http://localhost:5174/
+  // 6. PUBLIC MARKETING LANDING PAGE: http://localhost:5174/
   // =========================================================================
   return (
-    <div className="min-vh-100 d-flex flex-column" style={{ backgroundColor: '#0f172a', color: '#f8fafc' }}>
-      {/* Top Navbar */}
-      <header className="px-4 py-3 border-bottom d-flex align-items-center justify-content-between" style={{ borderColor: '#334155' }}>
-        <div className="d-flex align-items-center gap-2">
-          <div className="p-2 bg-primary rounded-3 text-white">
-            <LifeBuoy size={22} />
-          </div>
-          <div>
-            <span className="fw-bolder fs-5 text-white">Kuwy HelpDesk Suite</span>
-            <span className="badge bg-primary ms-2">Multi-Tenant SaaS</span>
-          </div>
-        </div>
-        <div className="d-flex align-items-center gap-2">
-          <button
-            className="btn btn-sm btn-outline-light d-flex align-items-center gap-1.5"
-            onClick={() => navigate('/adminconsole')}
-          >
-            <ShieldCheck size={16} />
-            <span>Admin Console</span>
-          </button>
-          <button
-            className="btn btn-sm btn-primary fw-bold d-flex align-items-center gap-1.5"
-            onClick={() => navigate('/signup')}
-          >
-            <Sparkles size={16} />
-            <span>Create Workspace</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Hero & Directory */}
-      <main className="container my-auto py-5" style={{ maxWidth: '1000px' }}>
-        <div className="text-center mb-5">
-          <h1 className="fw-extrabold display-5 mb-3 text-white">
-            Enterprise Multi-Tenant Customer Support
-          </h1>
-          <p className="lead text-slate-400 mx-auto" style={{ maxWidth: '640px', color: '#94a3b8' }}>
-            Direct URL architecture separating Platform Administration, Company Support Workspaces, and Public Customer Support Portals.
-          </p>
-        </div>
-
-        <div className="row g-4">
-          {/* Card 1: Super Admin Console */}
-          <div className="col-12 col-md-4">
-            <div
-              className="card h-100 p-4 rounded-4 border-0 shadow-lg text-white cursor-pointer hover-card"
-              style={{ backgroundColor: '#1e293b', border: '1px solid #334155', cursor: 'pointer' }}
-              onClick={() => navigate('/adminconsole')}
-            >
-              <div className="d-flex align-items-center justify-content-between mb-3">
-                <div className="p-3 rounded-3 bg-warning text-dark">
-                  <ShieldCheck size={24} />
-                </div>
-                <span className="badge bg-primary-subtle text-primary fw-bold">Super Admin</span>
-              </div>
-              <h4 className="fw-bold mb-2">Admin Console</h4>
-              <p className="small text-slate-400 mb-4" style={{ color: '#94a3b8' }}>
-                Dedicated administration portal for company management, tenant quotas, plan subscriptions, and platform telemetry.
-              </p>
-              <div className="mt-auto d-flex align-items-center justify-content-between text-warning fw-semibold small">
-                <code>/adminconsole</code>
-                <ArrowRight size={16} />
-              </div>
-            </div>
-          </div>
-
-          {/* Card 2: Company Admin Workspace */}
-          <div className="col-12 col-md-4">
-            <div
-              className="card h-100 p-4 rounded-4 border-0 shadow-lg text-white cursor-pointer hover-card"
-              style={{ backgroundColor: '#1e293b', border: '1px solid #334155', cursor: 'pointer' }}
-              onClick={() => navigate('/kuwy/admin')}
-            >
-              <div className="d-flex align-items-center justify-content-between mb-3">
-                <div className="p-3 rounded-3 bg-primary text-white">
-                  <Building2 size={24} />
-                </div>
-                <span className="badge bg-primary text-white fw-bold">Company Staff</span>
-              </div>
-              <h4 className="fw-bold mb-2">Company Admin</h4>
-              <p className="small text-slate-400 mb-4" style={{ color: '#94a3b8' }}>
-                Dedicated support engineer workspace with HelpDesk.com 3-pane layout, email forwarding wizard, macros, and SLA automations.
-              </p>
-              <div className="mt-auto d-flex align-items-center justify-content-between text-primary fw-semibold small">
-                <code>/&#123;company&#125;/admin</code>
-                <ArrowRight size={16} />
-              </div>
-            </div>
-          </div>
-
-          {/* Card 3: Public Customer Portal */}
-          <div className="col-12 col-md-4">
-            <div
-              className="card h-100 p-4 rounded-4 border-0 shadow-lg text-white cursor-pointer hover-card"
-              style={{ backgroundColor: '#1e293b', border: '1px solid #334155', cursor: 'pointer' }}
-              onClick={() => navigate('/kuwy')}
-            >
-              <div className="d-flex align-items-center justify-content-between mb-3">
-                <div className="p-3 rounded-3 bg-success text-white">
-                  <LifeBuoy size={24} />
-                </div>
-                <span className="badge bg-success text-white fw-bold">Public Portal</span>
-              </div>
-              <h4 className="fw-bold mb-2">Customer Portal</h4>
-              <p className="small text-slate-400 mb-4" style={{ color: '#94a3b8' }}>
-                Public self-service hub. Customers submit tickets with documents (PNG, PDF, TXT), verify via Email OTP, and track status.
-              </p>
-              <div className="mt-auto d-flex align-items-center justify-content-between text-success fw-semibold small">
-                <code>/&#123;company&#125;</code>
-                <ArrowRight size={16} />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick Tenant Switcher Bar */}
-        <div className="mt-5 p-3 rounded-4 border d-flex flex-wrap align-items-center justify-content-between gap-3" style={{ backgroundColor: '#1e293b', borderColor: '#334155' }}>
-          <div className="d-flex align-items-center gap-2">
-            <span className="small text-slate-400" style={{ color: '#94a3b8' }}>Active Seeded Tenants:</span>
-            {companies.map(c => (
-              <span key={c.id} className="badge bg-slate-800 border text-white px-2.5 py-1.5" style={{ borderColor: '#475569' }}>
-                {c.name} (<code>{c.subdomain}</code>)
-              </span>
-            ))}
-          </div>
-
-          <div className="d-flex align-items-center gap-2">
-            <button
-              className="btn btn-sm btn-outline-light"
-              onClick={() => navigate('/kuwy')}
-            >
-              Visit Kuwy Portal
-            </button>
-            <button
-              className="btn btn-sm btn-outline-light"
-              onClick={() => navigate('/acme')}
-            >
-              Visit Acme Portal
-            </button>
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={() => navigate('/kuwy/admin')}
-            >
-              Enter Support Desk
-            </button>
-          </div>
-        </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="py-3 text-center small border-top" style={{ borderColor: '#334155', color: '#64748b' }}>
-        Kuwy HelpDesk Suite • Multi-Tenant Architecture & Email Forwarding Engine
-      </footer>
-    </div>
+    <>
+      <MarketingLandingPage
+        onStartTrial={(planTier = 'STARTER') => {
+          setSelectedOnboardPlan(planTier);
+          setShowOnboarding(true);
+          navigate('/signup');
+        }}
+        onNavigateToPricing={() => navigate('/pricing')}
+        onNavigateToLogin={(slug = 'kuwy') => navigate(`/${slug}/admin`)}
+        onNavigateToAdminConsole={() => navigate('/adminconsole')}
+        onOpenPortalDemo={(slug = 'kuwy') => navigate(`/${slug}`)}
+      />
+      <OnboardingModal
+        isOpen={showOnboarding}
+        defaultPlan={selectedOnboardPlan}
+        onClose={() => setShowOnboarding(false)}
+        onSuccess={(res) => {
+          handleLoginSuccess(res);
+          navigate(`/${res.company?.subdomain || 'kuwy'}/admin`);
+        }}
+      />
+      <CheckoutModal
+        isOpen={showCheckout}
+        onClose={() => setShowCheckout(false)}
+        initialPlanTier={checkoutPlanTier}
+        initialBillingCycle={checkoutBillingCycle}
+        activeCompany={effectiveCompany}
+        onPaymentSuccess={() => {
+          setShowCheckout(false);
+          navigate(`/${effectiveCompany.subdomain}/admin`);
+        }}
+      />
+    </>
   );
 }
