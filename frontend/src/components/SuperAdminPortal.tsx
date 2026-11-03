@@ -272,17 +272,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               <ShieldCheck size={22} />
             </div>
             <div className="overflow-hidden">
-              <div className="d-flex align-items-center gap-1.5">
-                <h6 className="mb-0 fw-bolder text-white text-truncate" style={{ fontSize: '0.98rem' }}>
-                  Admin Console
-                </h6>
-                <span className="badge bg-warning text-dark fw-bold" style={{ fontSize: '0.6rem' }}>
-                  OWNER
-                </span>
-              </div>
-              <small className="d-block text-truncate" style={{ color: '#94a3b8', fontSize: '0.72rem' }}>
-                Platform Control Center
-              </small>
+              <h6 className="mb-0 fw-bolder text-white text-truncate" style={{ fontSize: '1.05rem', letterSpacing: '-0.2px' }}>
+                Admin Console
+              </h6>
             </div>
           </div>
 
@@ -800,7 +792,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                             </div>
                           </div>
                           <span className="badge bg-light text-dark border" style={{ fontSize: '0.68rem' }}>
-                            {(u as any).company?.companyCode || 'OWNER'}
+                            {(u as any).company?.companyCode || 'SYSTEM'}
                           </span>
                         </li>
                       ))}

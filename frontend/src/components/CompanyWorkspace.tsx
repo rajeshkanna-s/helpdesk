@@ -535,14 +535,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
             <div className="overflow-hidden">
               <div className="d-flex align-items-center gap-1.5">
                 <h6 className="mb-0 fw-bolder text-white text-truncate" style={{ fontSize: '0.96rem' }}>
-                  Kuwy HelpDesk
+                  {activeCompany.name}
                 </h6>
                 <span className="badge bg-primary text-white fw-bold" style={{ fontSize: '0.6rem' }}>
                   {activeCompany.companyCode}
                 </span>
               </div>
               <small className="d-block text-truncate" style={{ color: '#94a3b8', fontSize: '0.72rem' }}>
-                {activeCompany.name}
+                Company Admin Workspace
               </small>
             </div>
           </div>

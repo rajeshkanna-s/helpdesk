@@ -105,19 +105,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 {isSuperAdminRoute ? <ShieldCheck size={28} className="text-white" /> : <Building2 size={26} className="text-white" />}
               </div>
               <div>
-                <div className="d-flex align-items-center gap-1.5">
-                  <h4 className="fw-bolder text-white mb-0">
-                    {isSuperAdminRoute ? 'Admin Console' : currentCompanyName}
-                  </h4>
-                  <span
-                    className={`badge ${isSuperAdminRoute ? 'bg-warning text-dark' : 'bg-primary text-white'} fw-bold`}
-                    style={{ fontSize: '0.62rem' }}
-                  >
-                    {isSuperAdminRoute ? 'OWNER' : currentCompanyBadge}
-                  </span>
-                </div>
-                <small className={isSuperAdminRoute ? "text-warning fw-semibold" : "text-info fw-semibold"} style={{ fontSize: '0.75rem' }}>
-                  {isSuperAdminRoute ? 'PLATFORM CONTROL CENTER' : 'ENTERPRISE HELPDESK WORKSPACE'}
+                <h4 className="fw-bolder text-white mb-0">
+                  {isSuperAdminRoute ? 'Admin Console' : currentCompanyName}
+                </h4>
+                <small className={isSuperAdminRoute ? "text-slate-300 fw-semibold" : "text-info fw-semibold"} style={{ fontSize: '0.75rem', color: isSuperAdminRoute ? '#cbd5e1' : undefined }}>
+                  {isSuperAdminRoute ? 'PLATFORM ADMINISTRATION' : 'ENTERPRISE HELPDESK WORKSPACE'}
                 </small>
               </div>
             </div>
@@ -212,11 +204,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <div className="mb-4">
             <div className="d-flex align-items-center gap-2 mb-1">
               <h4 className="fw-bolder text-dark mb-0">
-                {isSuperAdminRoute ? 'Admin Console Sign In' : `${currentCompanyName} Sign In`}
+                {isSuperAdminRoute ? 'Admin Console' : `${currentCompanyName} Sign In`}
               </h4>
-              <span className={`badge ${isSuperAdminRoute ? 'bg-warning text-dark' : 'bg-primary text-white'} fw-bold`}>
-                {isSuperAdminRoute ? 'OWNER' : currentCompanyBadge}
-              </span>
+              {!isSuperAdminRoute && (
+                <span className="badge bg-primary text-white fw-bold">
+                  {currentCompanyBadge}
+                </span>
+              )}
             </div>
             <p className="text-muted small mb-0">
               {isSuperAdminRoute
@@ -341,8 +335,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   className={`chip-btn ${email === 'testsuperadmin@kuwy.in' ? 'active' : ''}`}
                   onClick={() => applyDemoAccount('testsuperadmin@kuwy.in', '')}
                 >
-                  <span className="pulse-dot pulse-dot-warning"></span>
-                  <span>👑 Platform Owner (testsuperadmin@kuwy.in)</span>
+                  <span className="pulse-dot pulse-dot-info"></span>
+                  <span>🛡️ Super Admin (testsuperadmin@kuwy.in)</span>
                 </button>
               </div>
             ) : companySlug.toLowerCase() === 'acme' ? (

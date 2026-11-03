@@ -294,11 +294,11 @@ export default function App() {
                 <div className="p-3 rounded-3 bg-warning text-dark">
                   <ShieldCheck size={24} />
                 </div>
-                <span className="badge bg-warning text-dark fw-bold">Platform Owner</span>
+                <span className="badge bg-primary-subtle text-primary fw-bold">Super Admin</span>
               </div>
               <h4 className="fw-bold mb-2">Admin Console</h4>
               <p className="small text-slate-400 mb-4" style={{ color: '#94a3b8' }}>
-                Dedicated platform control center for tenant telemetry, tenant locking, plan management, and cross-organization telemetry.
+                Dedicated administration portal for company management, tenant quotas, plan subscriptions, and platform telemetry.
               </p>
               <div className="mt-auto d-flex align-items-center justify-content-between text-warning fw-semibold small">
                 <code>/adminconsole</code>
