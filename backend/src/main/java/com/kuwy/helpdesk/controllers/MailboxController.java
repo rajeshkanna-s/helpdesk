@@ -92,7 +92,7 @@ public class MailboxController {
      * Endpoint to ingest incoming email (can be invoked by Microsoft Graph Webhook Notification,
      * Email Forwarding, Azure Logic Apps, or tested directly from UI)
      */
-    @PostMapping("/ingest")
+    @PostMapping({"/ingest", "/simulate-incoming-mail", "/simulate"})
     public ResponseEntity<Ticket> ingestEmail(@RequestBody IngestEmailRequest req) {
         Ticket ticket = emailIngestionService.processIncomingEmail(
                 req.getRecipientMailbox(),
@@ -105,6 +105,9 @@ public class MailboxController {
                 req.getMsConversationId(),
                 req.getInReplyTo()
         );
+        if (ticket == null) {
+            return ResponseEntity.noContent().build();
+        }
         return ResponseEntity.ok(ticket);
     }
 
