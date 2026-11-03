@@ -4,7 +4,8 @@ import type { TicketAttachment,
   LoginResponse, AdminOverview, CompanyDetail, CompanyCreateInput, UserCredentialInput,
   MisTrackItem, MisSummary, DepartmentDetail, DepartmentCreateInput,
   SupportEngineer, SupportEngineerCreateInput, KbArticle, CompanySubscription, CannedResponse,
-  Verify2FaRequest, ForgotPasswordRequest, ResetPasswordRequest, InvitationValidationResponse, AcceptInvitationRequest, AgentInvitation } from '../types';
+  Verify2FaRequest, ForgotPasswordRequest, ResetPasswordRequest, InvitationValidationResponse, AcceptInvitationRequest, AgentInvitation,
+  CustomerContact, NotificationItem } from '../types';
 
 const API_BASE = 'http://localhost:8080/api/v1';
 
@@ -579,7 +580,7 @@ export const apiService = {
     return res.data;
   },
 
-  // Knowledge Base Articles
+  // Knowledge Base Articles & Manager (Screen 23)
   async getKbArticles(companyId: number): Promise<KbArticle[]> {
     try {
       const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-articles`, { headers: getHeaders() });
@@ -587,6 +588,56 @@ export const apiService = {
     } catch {
       return [];
     }
+  },
+
+  async getKbCategories(companyId: number): Promise<any[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-categories`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async createKbArticle(companyId: number, data: { categoryId: number; title: string; contentHtml: string; status?: string }): Promise<KbArticle> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/kb-articles`, data, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Customers & Organizations Directory (Screens 20 & 21)
+  async getCustomers(companyId: number): Promise<CustomerContact[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/customers`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async createCustomer(companyId: number, data: Partial<CustomerContact>): Promise<CustomerContact> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/customers`, data, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Notification Center (Screen 24)
+  async getNotifications(companyId: number, userId?: number): Promise<NotificationItem[]> {
+    try {
+      const url = userId
+        ? `${API_BASE}/companies/${companyId}/notifications?userId=${userId}`
+        : `${API_BASE}/companies/${companyId}/notifications`;
+      const res = await axios.get(url, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async markNotificationRead(companyId: number, notifId: number): Promise<void> {
+    await axios.post(`${API_BASE}/companies/${companyId}/notifications/${notifId}/read`, {}, { headers: getHeaders() });
+  },
+
+  async markAllNotificationsRead(companyId: number): Promise<void> {
+    await axios.post(`${API_BASE}/companies/${companyId}/notifications/read-all`, {}, { headers: getHeaders() });
   },
   // -------------------------------------------------------------
   // SUBSCRIPTIONS & BILLING

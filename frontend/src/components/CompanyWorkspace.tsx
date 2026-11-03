@@ -5,13 +5,13 @@ import {
   LogOut, FileSpreadsheet, Users, Search, ChevronRight, ArrowLeft,
   BookOpen, Zap, Play, Pause, RotateCcw, SlidersHorizontal,
   Paperclip, FileText, Image as ImageIcon, Download, Eye, File, X,
-  CreditCard, Globe, ExternalLink
+  CreditCard, Globe, ExternalLink, Bell, UserPlus
 } from 'lucide-react';
 import { apiService, setApiTenantId } from '../services/api';
 import type {
   Company, DashboardStats, Ticket, TicketThread, CompanyMailbox,
   Department, AuthUser, User, KbArticle, ScenarioMacro, TicketAttachment,
-  CannedResponse, CompanySubscription
+  CannedResponse, CompanySubscription, CustomerContact, NotificationItem
 } from '../types';
 import { MisTrackingView } from './MisTrackingView';
 import { SupportEngineersView } from './SupportEngineersView';
@@ -20,6 +20,7 @@ import { EmailForwardingModal } from './EmailForwardingModal';
 export type WorkspaceTab =
   | 'tickets'
   | 'dashboard'
+  | 'customers'
   | 'engineers'
   | 'mis'
   | 'mailboxes'
@@ -123,6 +124,29 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
 
+  // Section D States (Screens 19, 20, 21, 23, 24)
+  const [customers, setCustomers] = useState<CustomerContact[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerContact | null>(null);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showNewCustomerModal, setShowNewCustomerModal] = useState(false);
+  const [newCustFirst, setNewCustFirst] = useState('');
+  const [newCustLast, setNewCustLast] = useState('');
+  const [newCustEmail, setNewCustEmail] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [newCustOrg, setNewCustOrg] = useState('');
+
+  // Notifications State (Screen 24)
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+
+  // KB Manager State (Screen 23)
+  const [kbCategories, setKbCategories] = useState<any[]>([]);
+  const [showNewArticleModal, setShowNewArticleModal] = useState(false);
+  const [newArtTitle, setNewArtTitle] = useState('');
+  const [newArtCatId, setNewArtCatId] = useState<number>(1);
+  const [newArtContent, setNewArtContent] = useState('');
+  const [newArtStatus, setNewArtStatus] = useState<'PUBLISHED' | 'DRAFT'>('PUBLISHED');
+
   // Interactive To-Do Checklist for active ticket
   const [ticketTodos, setTicketTodos] = useState<Record<number, { id: number; text: string; done: boolean }[]>>({
     1: [
@@ -196,6 +220,87 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     return () => clearInterval(interval);
   }, [timerRunning]);
 
+  // Section D Handlers (Screens 20, 23, 24)
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustEmail.trim() || !newCustFirst.trim()) return;
+    try {
+      const created = await apiService.createCustomer(activeCompany.id, {
+        firstName: newCustFirst.trim(),
+        lastName: newCustLast.trim() || undefined,
+        email: newCustEmail.trim(),
+        phone: newCustPhone.trim() || undefined,
+        organization: newCustOrg.trim() || undefined,
+      });
+      setCustomers(prev => [created, ...prev]);
+      setShowNewCustomerModal(false);
+      setNewCustFirst('');
+      setNewCustLast('');
+      setNewCustEmail('');
+      setNewCustPhone('');
+      setNewCustOrg('');
+      showNotification(`Customer contact created: ${created.email}`);
+    } catch {
+      showNotification('Failed to create customer contact', 'warning');
+    }
+  };
+
+  const handleCreateArticle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newArtTitle.trim() || !newArtContent.trim()) return;
+    try {
+      const created = await apiService.createKbArticle(activeCompany.id, {
+        categoryId: newArtCatId,
+        title: newArtTitle.trim(),
+        contentHtml: newArtContent.trim(),
+        status: newArtStatus,
+      });
+      setKbArticles(prev => [created, ...prev]);
+      setShowNewArticleModal(false);
+      setNewArtTitle('');
+      setNewArtContent('');
+      showNotification(`Solution article published: "${created.title}"`);
+    } catch {
+      showNotification('Failed to save solution article', 'warning');
+    }
+  };
+
+  const handleMarkAllNotifsRead = async () => {
+    try {
+      await apiService.markAllNotificationsRead(activeCompany.id);
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      showNotification('All notifications marked as read');
+    } catch {
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    }
+  };
+
+  const handleMarkNotifRead = async (notif: NotificationItem) => {
+    try {
+      await apiService.markNotificationRead(activeCompany.id, notif.id);
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+      if (notif.ticketId) {
+        setShowNotifDropdown(false);
+        setActiveTab('tickets');
+        loadTicketDetail(notif.ticketId);
+      }
+    } catch {
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+    }
+  };
+
+  // Filtered Customers (Screen 20)
+  const filteredCustomers = customers.filter(c => {
+    if (!customerSearch.trim()) return true;
+    const q = customerSearch.toLowerCase();
+    return (
+      (c.displayName || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q) ||
+      (c.phone || '').toLowerCase().includes(q) ||
+      (c.organization || '').toLowerCase().includes(q)
+    );
+  });
+
   const showNotification = (text: string, type: 'success' | 'info' | 'warning' = 'success') => {
     setActionNotice({ type, text });
     setTimeout(() => setActionNotice(null), 4000);
@@ -203,7 +308,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
   const loadCompanyData = async (companyId: number) => {
     try {
-      const [statsData, ticketsData, mailboxesData, deptsData, agentsData, kbData, crData, subData] = await Promise.all([
+      const [
+        statsData, ticketsData, mailboxesData, deptsData,
+        agentsData, kbData, crData, subData,
+        custData, notifsData, catsData
+      ] = await Promise.all([
         apiService.getDashboardStats(companyId).catch(() => null),
         apiService.getTickets(companyId, viewFilter === 'ALL' ? undefined : viewFilter).catch(() => []),
         apiService.getMailboxes(companyId).catch(() => []),
@@ -212,6 +321,9 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         apiService.getKbArticles(companyId).catch(() => []),
         apiService.getCannedResponses(companyId).catch(() => []),
         apiService.getCurrentSubscription(companyId).catch(() => null),
+        apiService.getCustomers(companyId).catch(() => []),
+        apiService.getNotifications(companyId, currentUser.userId).catch(() => []),
+        apiService.getKbCategories(companyId).catch(() => []),
       ]);
 
       if (statsData) setStats(statsData);
@@ -222,6 +334,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       setKbArticles(kbData || []);
       setCannedResponses(crData || []);
       if (subData) setCurrentSubscription(subData);
+      setCustomers(custData || []);
+      setNotifications(notifsData || []);
+      setKbCategories(catsData || []);
+      if (catsData && catsData.length > 0) {
+        setNewArtCatId(catsData[0].id);
+      }
 
       if (mailboxesData.length > 0) {
         setSimMailbox(mailboxesData[0].forwardingAddress || mailboxesData[0].emailAddress);
@@ -494,6 +612,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       title: 'Operational Analytics & SLA Telemetry',
       subtitle: 'Real-time performance indicators and department turnaround targets',
     },
+    customers: {
+      title: 'Customers & Client Organizations Directory',
+      subtitle: 'Screens 20 & 21 • Search customer profiles, company accounts, and ticket histories',
+    },
     engineers: {
       title: 'Category Support Engineers',
       subtitle: 'Manage specialized staff across IT, Finance, Operations, HR & Legal',
@@ -596,6 +718,17 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <BookOpen size={17} />
               <span>Solutions & KB</span>
               <span className="sidebar-badge">{kbArticles.length}</span>
+            </button>
+
+            <button
+              id="rail-tab-customers"
+              type="button"
+              className={`sidebar-menu-btn ${activeTab === 'customers' ? 'active' : ''}`}
+              onClick={() => setActiveTab('customers')}
+            >
+              <Users size={17} />
+              <span>Customers & Orgs</span>
+              <span className="sidebar-badge">{customers.length}</span>
             </button>
           </div>
 
@@ -863,7 +996,86 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <span>Simulate MS 365 Email</span>
             </button>
 
-            {/* New Ticket */}
+            {/* Notification Center Bell (Screen 24) */}
+            <div className="position-relative">
+              <button
+                id="btn-notifications-center"
+                type="button"
+                className="btn btn-sm btn-outline-secondary position-relative p-2 rounded-3 bg-white shadow-xs d-flex align-items-center justify-content-center"
+                onClick={() => setShowNotifDropdown(prev => !prev)}
+                title="Notifications Center (Screen 24)"
+              >
+                <Bell size={16} className="text-secondary" />
+                {notifications.filter(n => !n.isRead).length > 0 && (
+                  <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-white" style={{ fontSize: '0.62rem' }}>
+                    {notifications.filter(n => !n.isRead).length}
+                  </span>
+                )}
+              </button>
+
+              {showNotifDropdown && (
+                <div
+                  className="position-absolute end-0 mt-2 bg-white rounded-4 shadow-2xl border overflow-hidden animate-fade-in"
+                  style={{ width: '380px', zIndex: 1070 }}
+                >
+                  <div className="p-3 bg-light border-bottom d-flex justify-content-between align-items-center">
+                    <div>
+                      <h6 className="fw-bold mb-0 text-dark">Notifications Center</h6>
+                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>
+                        Screen 24 • Operational alerts & inbound events
+                      </small>
+                    </div>
+                    {notifications.some(n => !n.isRead) && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-link p-0 text-primary text-decoration-none fw-semibold small"
+                        onClick={handleMarkAllNotifsRead}
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    {notifications.length === 0 ? (
+                      <div className="p-4 text-center text-muted small">
+                        No notifications recorded.
+                      </div>
+                    ) : (
+                      notifications.map(notif => (
+                        <div
+                          key={notif.id}
+                          className={`p-3 border-bottom cursor-pointer hover-bg-light transition-all ${!notif.isRead ? 'bg-primary-subtle bg-opacity-25' : ''}`}
+                          onClick={() => handleMarkNotifRead(notif)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="d-flex justify-content-between align-items-start mb-1">
+                            <span className="fw-bold text-dark small d-flex align-items-center gap-1.5">
+                              {!notif.isRead && (
+                                <span className="p-1 rounded-circle bg-primary d-inline-block" style={{ width: '6px', height: '6px' }} />
+                              )}
+                              {notif.title}
+                            </span>
+                            <small className="text-muted" style={{ fontSize: '0.68rem' }}>
+                              {notif.createdAt ? new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
+                            </small>
+                          </div>
+                          <p className="text-secondary small mb-1" style={{ fontSize: '0.78rem' }}>
+                            {notif.message}
+                          </p>
+                          {notif.ticketId && (
+                            <span className="badge bg-light text-primary border small" style={{ fontSize: '0.68rem' }}>
+                              View Ticket #{notif.ticketId} →
+                            </span>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* New Ticket (Screen 19) */}
             <button
               id="btn-new-ticket"
               className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 rounded-3 fw-bold shadow-sm px-3"
@@ -1803,6 +2015,200 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           )}
 
           {/* ==============================================================
+              TAB: CUSTOMERS & CLIENT ORGANIZATIONS (Screens 20 & 21)
+              ============================================================== */}
+          {activeTab === 'customers' && (
+            <div className="animate-fade-in">
+              {/* Header banner */}
+              <div className="enterprise-card p-4 mb-4 border border-primary-subtle" style={{ background: 'linear-gradient(135deg, #ffffff, #eff6ff)' }}>
+                <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                  <div className="d-flex align-items-center gap-3">
+                    <div className="p-3 rounded-4 bg-primary text-white shadow-sm">
+                      <Users size={26} />
+                    </div>
+                    <div>
+                      <h4 className="fw-bolder mb-1 text-dark">
+                        Customers & Client Organizations
+                      </h4>
+                      <p className="text-secondary small mb-0">
+                        Screens 20 & 21 • Manage verified customer contacts, dealership organizations, and ticket histories
+                      </p>
+                    </div>
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm px-3 py-2 fw-semibold d-flex align-items-center gap-1.5 shadow-sm rounded-3"
+                      onClick={() => setShowNewCustomerModal(true)}
+                    >
+                      <UserPlus size={16} />
+                      <span>Add Customer Contact</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Stat Counters */}
+              <div className="row g-3 mb-4">
+                <div className="col-12 col-sm-4">
+                  <div className="stat-card p-3 rounded-4 bg-white border shadow-xs d-flex align-items-center gap-3">
+                    <div className="p-2.5 rounded-3 bg-primary-subtle text-primary">
+                      <Users size={20} />
+                    </div>
+                    <div>
+                      <small className="text-muted fw-semibold">Total Customers</small>
+                      <h4 className="fw-bolder mb-0 text-dark">{customers.length}</h4>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-12 col-sm-4">
+                  <div className="stat-card p-3 rounded-4 bg-white border shadow-xs d-flex align-items-center gap-3">
+                    <div className="p-2.5 rounded-3 bg-warning-subtle text-warning-emphasis">
+                      <Inbox size={20} />
+                    </div>
+                    <div>
+                      <small className="text-muted fw-semibold">Active Customer Tickets</small>
+                      <h4 className="fw-bolder mb-0 text-dark">
+                        {customers.reduce((acc, c) => acc + (c.openTickets || 0), 0)}
+                      </h4>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-12 col-sm-4">
+                  <div className="stat-card p-3 rounded-4 bg-white border shadow-xs d-flex align-items-center gap-3">
+                    <div className="p-2.5 rounded-3 bg-success-subtle text-success">
+                      <Building2 size={20} />
+                    </div>
+                    <div>
+                      <small className="text-muted fw-semibold">Corporate Accounts</small>
+                      <h4 className="fw-bolder mb-0 text-dark">
+                        {new Set(customers.map(c => c.organization).filter(o => o && o !== 'Individual Customer')).size}
+                      </h4>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Filter & Search Bar */}
+              <div className="enterprise-card p-3 mb-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <div className="position-relative" style={{ minWidth: '280px', maxWidth: '420px', flex: 1 }}>
+                  <Search size={16} className="position-absolute text-muted" style={{ top: '10px', left: '12px' }} />
+                  <input
+                    type="text"
+                    className="form-control form-control-sm rounded-pill ps-5"
+                    placeholder="Search customer name, email, phone, or organization..."
+                    value={customerSearch}
+                    onChange={e => setCustomerSearch(e.target.value)}
+                  />
+                </div>
+                <div className="text-muted small">
+                  Showing <strong>{filteredCustomers.length}</strong> registered contact(s)
+                </div>
+              </div>
+
+              {/* Customers Directory Table */}
+              <div className="enterprise-card p-0 overflow-hidden shadow-xs">
+                <div className="table-responsive">
+                  <table className="table table-hover align-middle mb-0">
+                    <thead className="table-light">
+                      <tr>
+                        <th className="ps-4">Customer Name</th>
+                        <th>Email & Contact</th>
+                        <th>Organization (Screen 21)</th>
+                        <th>Total Inquiries</th>
+                        <th>Open Status</th>
+                        <th>Joined</th>
+                        <th className="pe-4 text-end">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCustomers.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-5 text-muted">
+                            <Users size={36} className="text-muted mb-2 opacity-50" />
+                            <p className="mb-0">No customer records matching search criteria.</p>
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredCustomers.map(cust => (
+                          <tr key={cust.id} className="cursor-pointer">
+                            <td className="ps-4">
+                              <div className="d-flex align-items-center gap-2.5">
+                                <div
+                                  className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold"
+                                  style={{ width: '34px', height: '34px', backgroundColor: '#3b82f6', fontSize: '0.85rem' }}
+                                >
+                                  {(cust.displayName || cust.firstName || 'C').charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                  <div className="fw-bold text-dark">{cust.displayName || `${cust.firstName} ${cust.lastName || ''}`}</div>
+                                  <small className="text-muted" style={{ fontSize: '0.72rem' }}>ID #{cust.id} • Verified Contact</small>
+                                </div>
+                              </div>
+                            </td>
+                            <td>
+                              <div><code>{cust.email}</code></div>
+                              {cust.phone && <small className="text-secondary">{cust.phone}</small>}
+                            </td>
+                            <td>
+                              <span className={`badge px-2.5 py-1 ${cust.organization && cust.organization !== 'Individual Customer' ? 'bg-primary-subtle text-primary border border-primary-subtle' : 'bg-light text-secondary border'}`}>
+                                {cust.organization || 'Individual Customer'}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="badge bg-light text-dark border">
+                                {cust.totalTickets || 0} tickets
+                              </span>
+                            </td>
+                            <td>
+                              {cust.openTickets > 0 ? (
+                                <span className="badge bg-warning-subtle text-warning-emphasis">
+                                  {cust.openTickets} open
+                                </span>
+                              ) : (
+                                <span className="badge bg-success-subtle text-success">
+                                  All Resolved
+                                </span>
+                              )}
+                            </td>
+                            <td className="text-muted small">
+                              {cust.createdAt ? new Date(cust.createdAt).toLocaleDateString() : 'Active'}
+                            </td>
+                            <td className="pe-4 text-end">
+                              <div className="d-flex justify-content-end gap-1.5">
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline-primary py-1 px-2.5 rounded-2"
+                                  onClick={() => setSelectedCustomer(cust)}
+                                  title="View Customer Details & History"
+                                >
+                                  View History →
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-light border py-1 px-2 rounded-2"
+                                  onClick={() => {
+                                    setNewRequesterEmail(cust.email);
+                                    setNewRequesterName(cust.displayName || cust.firstName);
+                                    setShowNewTicketModal(true);
+                                  }}
+                                  title="Create Ticket on behalf of this customer (Screen 19)"
+                                >
+                                  + Ticket
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==============================================================
               TAB 3: SOLUTIONS & KNOWLEDGE BASE (Freshdesk /a/solutions)
               ============================================================== */}
           {activeTab === 'solutions' && (
@@ -1822,7 +2228,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                   <button
                     className="btn btn-sm btn-success fw-bold d-flex align-items-center gap-1.5 px-3 py-2 rounded-3 shadow-sm"
-                    onClick={() => showNotification('Knowledge base authoring mode active')}
+                    onClick={() => setShowNewArticleModal(true)}
                   >
                     <Plus size={15} />
                     <span>New Solution Article</span>
@@ -2588,6 +2994,271 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       {/* ==============================================================
           MODAL 4: DOCUMENT & IMAGE ATTACHMENT PREVIEW LIGHTBOX
           ============================================================== */}
+      {/* SCREEN 23: NEW SOLUTION ARTICLE MODAL */}
+      {showNewArticleModal && (
+        <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
+          <div className="modal-dialog modal-dialog-centered modal-lg">
+            <div className="modal-content rounded-4 border-0 shadow-2xl">
+              <div className="modal-header bg-success text-white py-3 px-4">
+                <div className="d-flex align-items-center gap-2">
+                  <BookOpen size={20} />
+                  <h5 className="modal-title fw-bold mb-0">Create Knowledge Base Article (Screen 23)</h5>
+                </div>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowNewArticleModal(false)} />
+              </div>
+              <form onSubmit={handleCreateArticle}>
+                <div className="modal-body p-4">
+                  <div className="row g-3 mb-3">
+                    <div className="col-md-8">
+                      <label className="form-label small fw-bold text-dark">Article Title *</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        required
+                        placeholder="e.g. Troubleshooting Vehicle RC Verification Delays"
+                        value={newArtTitle}
+                        onChange={e => setNewArtTitle(e.target.value)}
+                      />
+                    </div>
+                    <div className="col-md-4">
+                      <label className="form-label small fw-bold text-dark">Category *</label>
+                      <select
+                        className="form-select"
+                        value={newArtCatId}
+                        onChange={e => setNewArtCatId(Number(e.target.value))}
+                      >
+                        {kbCategories.map(cat => (
+                          <option key={cat.id} value={cat.id}>{cat.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold text-dark">Article Content (HTML / Markdown) *</label>
+                    <textarea
+                      className="form-control font-monospace"
+                      rows={8}
+                      required
+                      placeholder="<p>Provide step-by-step guidance, API payloads, or escalation procedures...</p>"
+                      value={newArtContent}
+                      onChange={e => setNewArtContent(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <label className="form-label small fw-bold text-dark">Publication Status</label>
+                    <div className="d-flex gap-3">
+                      <label className="form-check-label d-flex align-items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="artStatus"
+                          className="form-check-input"
+                          checked={newArtStatus === 'PUBLISHED'}
+                          onChange={() => setNewArtStatus('PUBLISHED')}
+                        />
+                        <span>Published (Live in Portal & Agent Composer)</span>
+                      </label>
+                      <label className="form-check-label d-flex align-items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="artStatus"
+                          className="form-check-input"
+                          checked={newArtStatus === 'DRAFT'}
+                          onChange={() => setNewArtStatus('DRAFT')}
+                        />
+                        <span>Draft (Internal review only)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer bg-light px-4 py-3">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowNewArticleModal(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-success btn-sm px-4 fw-bold">Publish Solution Article</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SCREEN 20: NEW CUSTOMER CONTACT MODAL */}
+      {showNewCustomerModal && (
+        <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content rounded-4 border-0 shadow-2xl">
+              <div className="modal-header bg-primary text-white py-3 px-4">
+                <div className="d-flex align-items-center gap-2">
+                  <UserPlus size={20} />
+                  <h5 className="modal-title fw-bold mb-0">Add Customer Contact (Screen 20)</h5>
+                </div>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowNewCustomerModal(false)} />
+              </div>
+              <form onSubmit={handleCreateCustomer}>
+                <div className="modal-body p-4">
+                  <div className="row g-2 mb-3">
+                    <div className="col-6">
+                      <label className="form-label small fw-bold text-dark">First Name *</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        required
+                        value={newCustFirst}
+                        onChange={e => setNewCustFirst(e.target.value)}
+                      />
+                    </div>
+                    <div className="col-6">
+                      <label className="form-label small fw-bold text-dark">Last Name</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        value={newCustLast}
+                        onChange={e => setNewCustLast(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold text-dark">Customer Email Address *</label>
+                    <input
+                      type="email"
+                      className="form-control"
+                      required
+                      placeholder="customer@domain.com"
+                      value={newCustEmail}
+                      onChange={e => setNewCustEmail(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold text-dark">Phone Number</label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="+91 98401 23456"
+                      value={newCustPhone}
+                      onChange={e => setNewCustPhone(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <label className="form-label small fw-bold text-dark">Organization / Dealership (Screen 21)</label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="e.g. Sri Vari Auto Dealership Ltd"
+                      value={newCustOrg}
+                      onChange={e => setNewCustOrg(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer bg-light px-4 py-3">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowNewCustomerModal(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary btn-sm px-4 fw-bold">Save Customer Contact</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CUSTOMER DETAIL DRAWER (Screen 20 & 21) */}
+      {selectedCustomer && (
+        <div
+          className="modal fade show d-block"
+          tabIndex={-1}
+          style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 1060 }}
+          onClick={() => setSelectedCustomer(null)}
+        >
+          <div
+            className="modal-dialog modal-dialog-end h-100 my-0 ms-auto"
+            style={{ maxWidth: '480px' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="modal-content h-100 border-0 rounded-0 shadow-2xl overflow-auto">
+              <div className="modal-header bg-dark text-white p-4">
+                <div className="d-flex align-items-center gap-3">
+                  <div
+                    className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold fs-5"
+                    style={{ width: '48px', height: '48px', backgroundColor: '#3b82f6' }}
+                  >
+                    {(selectedCustomer.displayName || selectedCustomer.firstName || 'C').charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <h5 className="modal-title fw-bold mb-0">{selectedCustomer.displayName || `${selectedCustomer.firstName} ${selectedCustomer.lastName || ''}`}</h5>
+                    <small className="text-secondary">{selectedCustomer.email}</small>
+                  </div>
+                </div>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setSelectedCustomer(null)} />
+              </div>
+
+              <div className="modal-body p-4">
+                <div className="mb-4">
+                  <h6 className="fw-bold text-dark mb-2">Customer Profile & Organization</h6>
+                  <div className="p-3 bg-light rounded-3 text-secondary small border">
+                    <div className="mb-1"><strong>Phone:</strong> {selectedCustomer.phone || 'Not registered'}</div>
+                    <div className="mb-1"><strong>Organization:</strong> {selectedCustomer.organization || 'Individual Customer'}</div>
+                    <div className="mb-1"><strong>Total Tickets:</strong> {selectedCustomer.totalTickets || 0}</div>
+                    <div><strong>Open Tickets:</strong> {selectedCustomer.openTickets || 0}</div>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <h6 className="fw-bold text-dark mb-0">Ticket History in {activeCompany.name}</h6>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline-primary py-0.5 px-2"
+                      onClick={() => {
+                        setNewRequesterEmail(selectedCustomer.email);
+                        setNewRequesterName(selectedCustomer.displayName || selectedCustomer.firstName);
+                        setSelectedCustomer(null);
+                        setShowNewTicketModal(true);
+                      }}
+                    >
+                      + Raise Ticket
+                    </button>
+                  </div>
+                  <div className="d-flex flex-column gap-2">
+                    {tickets.filter(t => t.contact?.email === selectedCustomer.email).length === 0 ? (
+                      <p className="text-muted small mb-0">No tickets currently linked to this email address.</p>
+                    ) : (
+                      tickets.filter(t => t.contact?.email === selectedCustomer.email).map(tk => (
+                        <div
+                          key={tk.id}
+                          className="p-3 rounded-3 border bg-white cursor-pointer hover-shadow transition-all"
+                          onClick={() => {
+                            setSelectedCustomer(null);
+                            setActiveTab('tickets');
+                            loadTicketDetail(tk.id);
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <span className="fw-bold text-primary font-monospace small">#{tk.ticketNumber}</span>
+                            <span className={`badge ${tk.status === 'OPEN' ? 'bg-primary' : tk.status === 'RESOLVED' ? 'bg-success' : 'bg-secondary'}`} style={{ fontSize: '0.65rem' }}>
+                              {tk.status}
+                            </span>
+                          </div>
+                          <div className="fw-semibold text-dark small text-truncate">{tk.subject}</div>
+                          <small className="text-muted" style={{ fontSize: '0.7rem' }}>
+                            Created {tk.createdAt ? new Date(tk.createdAt).toLocaleDateString() : 'Today'}
+                          </small>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer bg-light p-3">
+                <button type="button" className="btn btn-secondary btn-sm w-100" onClick={() => setSelectedCustomer(null)}>Close Drawer</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {previewAttachment && (
         <div
           className="modal show d-block modal-backdrop-blur"

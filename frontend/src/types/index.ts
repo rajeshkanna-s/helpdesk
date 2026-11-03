@@ -411,3 +411,28 @@ export interface EmailTemplate {
   bodyHtml: string;
   isActive: boolean;
 }
+
+export interface CustomerContact {
+  id: number;
+  firstName: string;
+  lastName?: string;
+  displayName: string;
+  email: string;
+  phone?: string;
+  organization?: string;
+  accountId?: number;
+  totalTickets: number;
+  openTickets: number;
+  createdAt: string;
+}
+
+export interface NotificationItem {
+  id: number;
+  companyId: number;
+  userId: number;
+  ticketId?: number;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+}
