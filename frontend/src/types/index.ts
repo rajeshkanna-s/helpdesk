@@ -200,8 +200,16 @@ export interface AdminOverview {
   totalCompanies: number;
   activeCompanies: number;
   suspendedCompanies: number;
+  trialCompanies?: number;
+  paidCompanies?: number;
   totalTickets: number;
   totalAgents: number;
+  mrr?: number;
+  arr?: number;
+  ticketsToday?: number;
+  apiErrorRate?: number;
+  avgResponseTimeMs?: number;
+  failedPaymentsCount?: number;
 }
 
 export interface CompanyDetail {
@@ -210,7 +218,8 @@ export interface CompanyDetail {
   name: string;
   subdomain: string;
   customDomain?: string;
-  status: 'ACTIVE' | 'TRIAL' | 'SUSPENDED' | 'INACTIVE';
+  status: 'ACTIVE' | 'TRIAL' | 'SUSPENDED' | 'INACTIVE' | 'PAST_DUE';
+  ownerEmail?: string;
   planName: string;
   maxAgents: number;
   primaryColor: string;
@@ -436,3 +445,5 @@ export interface NotificationItem {
   isRead: boolean;
   createdAt: string;
 }
+
+

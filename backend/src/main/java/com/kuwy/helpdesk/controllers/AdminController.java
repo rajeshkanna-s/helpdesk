@@ -123,4 +123,77 @@ public class AdminController {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         }
     }
+
+
+    // =========================================================================
+    // SECTION F: SUPER ADMIN CONTROL ENDPOINTS (SCREENS 40 TO 43)
+    // =========================================================================
+
+    @GetMapping("/plans")
+    public ResponseEntity<List<Map<String, Object>>> getPlatformPlans() {
+        assertSuperAdmin();
+        return ResponseEntity.ok(adminService.getPlatformPlans());
+    }
+
+    @GetMapping("/coupons")
+    public ResponseEntity<List<Map<String, Object>>> getCoupons() {
+        assertSuperAdmin();
+        return ResponseEntity.ok(adminService.getCoupons());
+    }
+
+    @GetMapping("/email-health")
+    public ResponseEntity<Map<String, Object>> getEmailSystemHealth() {
+        assertSuperAdmin();
+        return ResponseEntity.ok(adminService.getEmailSystemHealth());
+    }
+
+    @PostMapping("/companies/{id}/extend-trial")
+    public ResponseEntity<?> extendCompanyTrial(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body
+    ) {
+        assertSuperAdmin();
+        int days = body.get("days") != null ? Integer.parseInt(String.valueOf(body.get("days"))) : 14;
+        String reason = String.valueOf(body.getOrDefault("reason", "Extended by platform administrator"));
+        Company updated = adminService.extendCompanyTrial(id, days, reason);
+        return ResponseEntity.ok(updated);
+    }
+
+    @PostMapping("/companies/{id}/suspend")
+    public ResponseEntity<?> suspendCompany(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body
+    ) {
+        assertSuperAdmin();
+        String reason = String.valueOf(body.getOrDefault("reason", "Administrative hold"));
+        Company updated = adminService.suspendCompany(id, reason);
+        return ResponseEntity.ok(updated);
+    }
+
+    @PostMapping("/companies/{id}/impersonate")
+    public ResponseEntity<?> startSupportSession(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body
+    ) {
+        assertSuperAdmin();
+        String staff = String.valueOf(body.getOrDefault("staffName", "Super Admin Staff"));
+        String reason = String.valueOf(body.getOrDefault("reason", "Customer troubleshooting support"));
+        Map<String, Object> session = adminService.startSupportSession(id, staff, reason);
+        return ResponseEntity.ok(session);
+    }
+
+    @DeleteMapping("/companies/{id}")
+    public ResponseEntity<?> deleteCompany(
+            @PathVariable Long id,
+            @RequestParam String confirmationName
+    ) {
+        assertSuperAdmin();
+        try {
+            adminService.softDeleteCompany(id, confirmationName);
+            return ResponseEntity.ok(Map.of("message", "Company queued for deletion with 30-day grace hold."));
+        } catch (Exception ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        }
+    }
+
 }

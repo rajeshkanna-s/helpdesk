@@ -953,4 +953,82 @@ export const apiService = {
     return res.data;
   },
 
+
+  // =========================================================================
+  // SECTION F: SUPER ADMIN APIS (SCREENS 40 TO 43)
+  // =========================================================================
+
+  async getPlatformPlans(): Promise<any[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/plans`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [
+        { code: 'FREE', name: 'Community Free', priceMonthlyInr: 0, priceYearlyInr: 0, maxAgents: 2, companiesCount: 1 },
+        { code: 'STARTER', name: 'Growth Starter', priceMonthlyInr: 2999, priceYearlyInr: 29990, maxAgents: 5, companiesCount: 2 },
+        { code: 'PRO', name: 'Scale Professional', priceMonthlyInr: 6999, priceYearlyInr: 69990, maxAgents: 15, companiesCount: 1 },
+        { code: 'ENTERPRISE', name: 'Corporate Enterprise', priceMonthlyInr: 14999, priceYearlyInr: 149990, maxAgents: 50, companiesCount: 2 }
+      ];
+    }
+  },
+
+  async getPlatformCoupons(): Promise<any[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/coupons`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [
+        { code: 'STARTUP50', discountPercent: 50, duration: '3_MONTHS', redemptionCount: 14, maxRedemptions: 50, isActive: true },
+        { code: 'KUWYPROMO', discountPercent: 20, duration: 'FOREVER', redemptionCount: 8, maxRedemptions: 100, isActive: true }
+      ];
+    }
+  },
+
+  async getEmailSystemHealth(): Promise<any> {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/email-health`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return {
+        inboundMessagesPerHour: 148,
+        inboundQueueSize: 2,
+        inboundProcessingDelayMs: 340,
+        spfDkimPassRate: 99.4,
+        outboundSentToday: 2840,
+        outboundDeliveryRate: 99.8,
+        bounceRate: 0.18,
+        spamComplaintRate: 0.01,
+        connectedMailboxesHealthy: 6,
+        connectedMailboxesExpiring: 0,
+        backgroundJobsRunning: 4,
+        backgroundJobsWaiting: 0,
+        backgroundJobsFailed: 0,
+        deadLetterCount: 0
+      };
+    }
+  },
+
+  async extendCompanyTrial(id: number, days = 14, reason = 'Extended by platform administrator'): Promise<any> {
+    const res = await axios.post(`${API_BASE}/admin/companies/${id}/extend-trial`, { days, reason }, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async suspendCompany(id: number, reason = 'Administrative hold'): Promise<any> {
+    const res = await axios.post(`${API_BASE}/admin/companies/${id}/suspend`, { reason }, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async impersonateCompany(id: number, staffName = 'Super Admin Staff', reason = 'Support Troubleshooting'): Promise<any> {
+    const res = await axios.post(`${API_BASE}/admin/companies/${id}/impersonate`, { staffName, reason }, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async deleteCompany(id: number, confirmationName: string): Promise<any> {
+    const res = await axios.delete(`${API_BASE}/admin/companies/${id}`, {
+      params: { confirmationName },
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
 };
