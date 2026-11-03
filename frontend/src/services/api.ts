@@ -1,9 +1,9 @@
 import axios from 'axios';
-import type { 
+import type { TicketAttachment, 
   Company, DashboardStats, Ticket, TicketThread, CompanyMailbox, Department, User,
   LoginResponse, AdminOverview, CompanyDetail, CompanyCreateInput, UserCredentialInput,
   MisTrackItem, MisSummary, DepartmentDetail, DepartmentCreateInput,
-  SupportEngineer, SupportEngineerCreateInput
+  SupportEngineer, SupportEngineerCreateInput, KbArticle, CompanySubscription, CannedResponse
 } from '../types';
 
 const API_BASE = 'http://localhost:8080/api/v1';
@@ -324,6 +324,41 @@ export const apiService = {
     return res.data;
   },
 
+  // Attachments Upload & Retrieval
+  async uploadTicketAttachments(ticketId: number, files: File[], threadId?: number): Promise<TicketAttachment[]> {
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+    let url = `${API_BASE}/tickets/${ticketId}/attachments`;
+    if (threadId) url += `?threadId=${threadId}`;
+    const headers = {
+      ...getHeaders(),
+      'Content-Type': 'multipart/form-data',
+    };
+    const res = await axios.post(url, formData, { headers });
+    return res.data;
+  },
+
+  async getTicketAttachments(ticketId: number): Promise<TicketAttachment[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/tickets/${ticketId}/attachments`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async deleteAttachment(attachmentId: number): Promise<void> {
+    await axios.delete(`${API_BASE}/attachments/${attachmentId}`, { headers: getHeaders() });
+  },
+
+  getAttachmentDownloadUrl(attachmentId: number): string {
+    return `${API_BASE}/attachments/${attachmentId}/download`;
+  },
+
+  getAttachmentPreviewUrl(attachmentId: number): string {
+    return `${API_BASE}/attachments/${attachmentId}/preview`;
+  },
+
   // Update Status
   async updateStatus(ticketId: number, status: string): Promise<Ticket> {
     const res = await axios.patch(`${API_BASE}/tickets/${ticketId}/status?status=${status}`, {}, { headers: getHeaders() });
@@ -375,6 +410,11 @@ export const apiService = {
     inReplyTo?: string;
   }): Promise<Ticket> {
     const res = await axios.post(`${API_BASE}/mailboxes/simulate-incoming-mail`, emailData, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async verifyForwarding(mailboxId: number): Promise<CompanyMailbox> {
+    const res = await axios.post(`${API_BASE}/mailboxes/${mailboxId}/verify-forwarding`, {}, { headers: getHeaders() });
     return res.data;
   },
 
@@ -509,5 +549,136 @@ export const apiService = {
     const res = await axios.patch(`${API_BASE}/departments/engineers/${userId}/toggle-active`, {}, { headers: getHeaders() });
     return res.data;
   },
-};
 
+  // Update Priority
+  async updatePriority(ticketId: number, priority: string): Promise<Ticket> {
+    const res = await axios.patch(`${API_BASE}/tickets/${ticketId}/priority?priority=${priority}`, {}, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Update Department
+  async updateDepartment(ticketId: number, departmentId: number): Promise<Ticket> {
+    const res = await axios.patch(`${API_BASE}/tickets/${ticketId}/department?departmentId=${departmentId}`, {}, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Assign Agent
+  async assignAgent(ticketId: number, agentId: number): Promise<Ticket> {
+    const res = await axios.patch(`${API_BASE}/tickets/${ticketId}/assign?agentId=${agentId}`, {}, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Bulk Update Tickets
+  async bulkUpdateTickets(payload: { ticketIds: number[]; status?: string; priority?: string; agentId?: number; departmentId?: number }): Promise<void> {
+    await axios.post(`${API_BASE}/tickets/bulk`, payload, { headers: getHeaders() });
+  },
+
+  // Execute Scenario Macro
+  async executeScenario(ticketId: number, payload: { scenarioKey: string; customNote?: string; authorName?: string }): Promise<Ticket> {
+    const res = await axios.post(`${API_BASE}/tickets/${ticketId}/execute-scenario`, payload, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // Knowledge Base Articles
+  async getKbArticles(companyId: number): Promise<KbArticle[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-articles`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+  // -------------------------------------------------------------
+  // SUBSCRIPTIONS & BILLING
+  // -------------------------------------------------------------
+  async getCurrentSubscription(companyId?: number): Promise<CompanySubscription> {
+    const url = companyId ? `${API_BASE}/subscriptions/current?companyId=${companyId}` : `${API_BASE}/subscriptions/current`;
+    const res = await axios.get(url, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async upgradeSubscription(planTier: string, gateway: string = 'RAZORPAY'): Promise<CompanySubscription> {
+    const res = await axios.post(`${API_BASE}/subscriptions/checkout`, { planTier, gateway }, { headers: getHeaders() });
+    return res.data;
+  },
+
+  // -------------------------------------------------------------
+  // CANNED RESPONSES & MACROS
+  // -------------------------------------------------------------
+  async getCannedResponses(companyId?: number): Promise<CannedResponse[]> {
+    try {
+      const url = companyId ? `${API_BASE}/canned-responses?companyId=${companyId}` : `${API_BASE}/canned-responses`;
+      const res = await axios.get(url, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async createCannedResponse(data: { title: string; shortcut: string; content: string; departmentId?: number }): Promise<CannedResponse> {
+    const res = await axios.post(`${API_BASE}/canned-responses`, data, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async deleteCannedResponse(id: number): Promise<void> {
+    await axios.delete(`${API_BASE}/canned-responses/${id}`, { headers: getHeaders() });
+  },
+
+  // -------------------------------------------------------------
+  // PUBLIC CUSTOMER SUPPORT PORTAL
+  // -------------------------------------------------------------
+  async getPortalInfo(subdomain: string): Promise<any> {
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}`);
+    return res.data;
+  },
+
+  async requestPortalOtp(subdomain: string, email: string): Promise<any> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/request-otp`, { email });
+    return res.data;
+  },
+
+  async verifyPortalOtp(subdomain: string, email: string, otp: string): Promise<any> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/verify-otp`, { email, otp });
+    return res.data;
+  },
+
+  async submitPortalTicket(subdomain: string, ticketData: any): Promise<Ticket> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets`, ticketData);
+    return res.data;
+  },
+
+  async getCustomerPortalTickets(subdomain: string, email: string): Promise<Ticket[]> {
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets?email=${encodeURIComponent(email)}`);
+    return res.data;
+  },
+
+  async getCustomerPortalTicketDetail(subdomain: string, ticketNumber: string, email: string): Promise<Ticket> {
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}?email=${encodeURIComponent(email)}`);
+    return res.data;
+  },
+
+  async sendCustomerPortalReply(subdomain: string, ticketNumber: string, email: string, reply: string): Promise<TicketThread> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reply`, { email, reply });
+    return res.data;
+  },
+
+  async reopenCustomerPortalTicket(subdomain: string, ticketNumber: string): Promise<Ticket> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reopen`, {});
+    return res.data;
+  },
+
+  // -------------------------------------------------------------
+  // SELF-SERVE ONBOARDING
+  // -------------------------------------------------------------
+  async onboardCompany(data: {
+    companyName: string;
+    subdomain: string;
+    adminEmail: string;
+    adminPassword: string;
+    adminName: string;
+    planTier: string;
+  }): Promise<LoginResponse> {
+    const res = await axios.post(`${API_BASE}/onboarding/signup`, data);
+    return res.data;
+  },
+};

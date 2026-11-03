@@ -1,5 +1,6 @@
 package com.kuwy.helpdesk.controllers;
 
+import com.kuwy.helpdesk.dto.KbArticleDto;
 import com.kuwy.helpdesk.models.Company;
 import com.kuwy.helpdesk.models.Department;
 import com.kuwy.helpdesk.models.User;
@@ -41,5 +42,10 @@ public class CompanyController {
     @GetMapping("/{id}/agents")
     public ResponseEntity<List<User>> getAgents(@PathVariable Long id) {
         return ResponseEntity.ok(companyService.getAgents(id));
+    }
+
+    @GetMapping("/{id}/kb-articles")
+    public ResponseEntity<List<KbArticleDto>> getKbArticles(@PathVariable Long id) {
+        return ResponseEntity.ok(companyService.getKbArticles(id));
     }
 }

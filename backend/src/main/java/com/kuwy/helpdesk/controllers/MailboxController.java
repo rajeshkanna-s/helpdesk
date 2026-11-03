@@ -17,7 +17,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/mailboxes")
@@ -36,7 +35,27 @@ public class MailboxController {
         if (targetId == null) {
             targetId = 1L;
         }
-        return ResponseEntity.ok(mailboxRepository.findByCompanyId(targetId));
+        List<CompanyMailbox> list = mailboxRepository.findByCompanyId(targetId);
+        // Ensure every mailbox has a deterministic forwarding address
+        for (CompanyMailbox mb : list) {
+            if (mb.getForwardingAddress() == null || mb.getForwardingAddress().isBlank()) {
+                mb.setForwardingAddress(mb.getId() + "81753993@tickets.helpdesk.com");
+                mb.setForwardingVerified(true);
+                mailboxRepository.save(mb);
+            }
+        }
+        return ResponseEntity.ok(list);
+    }
+
+    @PostMapping("/{id}/verify-forwarding")
+    public ResponseEntity<CompanyMailbox> verifyForwarding(@PathVariable Long id) {
+        CompanyMailbox mailbox = mailboxRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Mailbox not found: " + id));
+        mailbox.setForwardingVerified(true);
+        if (mailbox.getForwardingAddress() == null || mailbox.getForwardingAddress().isBlank()) {
+            mailbox.setForwardingAddress(id + "81753993@tickets.helpdesk.com");
+        }
+        return ResponseEntity.ok(mailboxRepository.save(mailbox));
     }
 
     @PostMapping("/connect-ms365")
@@ -52,6 +71,8 @@ public class MailboxController {
         mailbox.setDepartment(department);
         mailbox.setMailboxName(dto.getMailboxName());
         mailbox.setEmailAddress(dto.getEmailAddress());
+        mailbox.setForwardingAddress(System.currentTimeMillis() + "@tickets.helpdesk.com");
+        mailbox.setForwardingVerified(false);
         mailbox.setProviderType(CompanyMailbox.MailProviderType.MICROSOFT_365);
         mailbox.setAuthType(CompanyMailbox.AuthType.OAUTH2_GRAPH_API);
         mailbox.setMsTenantId(dto.getMsTenantId());
@@ -65,7 +86,7 @@ public class MailboxController {
 
     /**
      * Endpoint to ingest incoming email (can be invoked by Microsoft Graph Webhook Notification,
-     * Azure Logic Apps, or tested directly from UI)
+     * Email Forwarding, Azure Logic Apps, or tested directly from UI)
      */
     @PostMapping("/simulate-incoming-mail")
     public ResponseEntity<Ticket> simulateIncomingEmail(@RequestBody IngestMailRequest request) {

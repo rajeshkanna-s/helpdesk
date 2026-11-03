@@ -117,7 +117,7 @@ if __name__ == '__main__':
     parser.add_argument('--host', default=os.getenv('MYSQL_HOST', 'localhost'), help="MySQL Host (default: localhost)")
     parser.add_argument('--port', default=os.getenv('MYSQL_PORT', '3306'), help="MySQL Port (default: 3306)")
     parser.add_argument('--user', default=os.getenv('MYSQL_USER', 'root'), help="MySQL User (default: root)")
-    parser.add_argument('--password', default=os.getenv('MYSQL_PASSWORD', ''), help="MySQL Password (default: empty)")
+    parser.add_argument('--password', default=os.getenv('MYSQL_PASSWORD', 'root'), help="MySQL Password (default: root)")
     parser.add_argument('--skip-seed', action='store_true', help="Do not insert sample seed data")
 
     args = parser.parse_args()

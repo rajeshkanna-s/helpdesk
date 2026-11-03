@@ -21,6 +21,9 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
 
     Optional<Ticket> findByCompanyIdAndTicketNumber(Long companyId, String ticketNumber);
 
+    @Query("SELECT t FROM Ticket t WHERE t.company.id = :companyId AND LOWER(t.contact.email) = LOWER(:email) ORDER BY t.createdAt DESC")
+    java.util.List<Ticket> findByCompanyIdAndContactEmail(@Param("companyId") Long companyId, @Param("email") String email);
+
     // Email Threading Lookups (Internet Message-ID and MS Conversation ID)
     Optional<Ticket> findByCompanyIdAndInternetMessageId(Long companyId, String internetMessageId);
 
@@ -36,4 +39,7 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
 
     @Query("SELECT MAX(t.id) FROM Ticket t WHERE t.company.id = :companyId")
     Long findMaxTicketIdForCompany(@Param("companyId") Long companyId);
+
+    @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(ticket_number, LOCATE('-', ticket_number) + 1) AS UNSIGNED)), 1000) FROM tickets WHERE company_id = :companyId", nativeQuery = true)
+    Long findMaxTicketSequenceForCompany(@Param("companyId") Long companyId);
 }

@@ -1,9 +1,10 @@
+import os
 import pymysql
 
 conn = pymysql.connect(
     host='localhost',
     user='root',
-    password='',
+    password=os.getenv('MYSQL_PASSWORD', 'root'),
     database='kuwy_helpdesk',
     charset='utf8mb4',
     autocommit=True

@@ -2,7 +2,7 @@ param(
     [string]$HostName = "localhost",
     [string]$Port = "3306",
     [string]$User = "root",
-    [string]$Password = ""
+    [string]$Password = $(if ($env:MYSQL_PASSWORD) { $env:MYSQL_PASSWORD } else { "root" })
 )
 
 Write-Host "=======================================================" -ForegroundColor Cyan

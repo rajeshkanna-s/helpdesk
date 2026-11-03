@@ -1,12 +1,13 @@
+import os
 import pymysql
 
 def update_emails():
     conn = pymysql.connect(
-        host='localhost',
-        port=3306,
-        user='root',
-        password='',
-        database='kuwy_helpdesk'
+        host=os.getenv('MYSQL_HOST', 'localhost'),
+        port=int(os.getenv('MYSQL_PORT', '3306')),
+        user=os.getenv('MYSQL_USER', 'root'),
+        password=os.getenv('MYSQL_PASSWORD', 'root'),
+        database=os.getenv('MYSQL_DATABASE', 'kuwy_helpdesk')
     )
     cur = conn.cursor()
 

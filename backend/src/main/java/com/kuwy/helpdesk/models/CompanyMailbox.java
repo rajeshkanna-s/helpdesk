@@ -36,6 +36,12 @@ public class CompanyMailbox {
     @Column(name = "email_address", nullable = false)
     private String emailAddress;
 
+    @Column(name = "forwarding_address")
+    private String forwardingAddress;
+
+    @Column(name = "forwarding_verified")
+    private Boolean forwardingVerified = false;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "provider_type", nullable = false)
     private MailProviderType providerType = MailProviderType.MICROSOFT_365;

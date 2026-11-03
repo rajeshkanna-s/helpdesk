@@ -8,6 +8,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "ticket_threads")
@@ -79,6 +81,9 @@ public class TicketThread {
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    @Transient
+    private List<TicketAttachment> attachments = new ArrayList<>();
 
     public enum ThreadType {
         REPLY, CUSTOMER_REPLY, PRIVATE_NOTE, FORWARD, SYSTEM

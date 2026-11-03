@@ -26,7 +26,7 @@ public class EmailIngestionService {
     private static final Pattern TICKET_TAG_PATTERN = Pattern.compile("\\[([A-Z0-9]+-[0-9]+)\\]");
 
     /**
-     * Ingest an incoming email received via Microsoft 365 (Graph API Webhook or Exchange)
+     * Ingest an incoming email received via Microsoft 365, Exchange, or Email Forwarding
      */
     @Transactional
     public Ticket processIncomingEmail(
@@ -40,13 +40,24 @@ public class EmailIngestionService {
             String msConversationId,
             String inReplyTo
     ) {
-        log.info("Processing incoming MS365 email from '{}' to mailbox '{}': {}", senderEmail, recipientMailboxEmail, subject);
+        log.info("Processing incoming email from '{}' to recipient '{}': {}", senderEmail, recipientMailboxEmail, subject);
 
-        // 1. Resolve Company and Mailbox
+        // 1. Resolve Company and Mailbox (Match by direct email or forwarding address)
         CompanyMailbox mailbox = mailboxRepository.findByEmailAddress(recipientMailboxEmail)
-                .orElseThrow(() -> new RuntimeException("No configured company mailbox found for: " + recipientMailboxEmail));
+                .or(() -> mailboxRepository.findByForwardingAddress(recipientMailboxEmail))
+                .orElseThrow(() -> new RuntimeException("No configured company mailbox or forwarding address found for: " + recipientMailboxEmail));
 
         Company company = mailbox.getCompany();
+
+        boolean isForwarded = mailbox.getForwardingAddress() != null &&
+                recipientMailboxEmail != null &&
+                recipientMailboxEmail.equalsIgnoreCase(mailbox.getForwardingAddress());
+
+        // Automatically verify forwarding when forwarded email or confirmation is processed
+        if (isForwarded || (subject != null && (subject.contains("Forwarding Confirmation") || subject.contains("confirmation code") || subject.contains("verification code")))) {
+            mailbox.setForwardingVerified(true);
+            mailboxRepository.save(mailbox);
+        }
 
         // 2. Thread Matching Engine (Check if this email belongs to an existing ticket)
         Optional<Ticket> existingTicketOpt = Optional.empty();
@@ -94,7 +105,7 @@ public class EmailIngestionService {
             thread.setFromEmail(senderEmail);
             thread.setFromName(senderName != null ? senderName : senderEmail);
             thread.setSubject(subject);
-            thread.setBodyHtml(bodyHtml != null ? bodyHtml : "<p>" + bodyText + "</p>");
+            thread.setBodyHtml(bodyHtml != null ? bodyHtml : "<p>" + (bodyText != null ? bodyText : "") + "</p>");
             thread.setBodyText(bodyText);
             thread.setInternetMessageId(internetMessageId);
             thread.setIsPrivate(false);
@@ -112,8 +123,8 @@ public class EmailIngestionService {
             // New Ticket Creation from Email
             log.info("Creating new ticket for incoming email from {}", senderEmail);
 
-            Long maxId = ticketRepository.findMaxTicketIdForCompany(company.getId());
-            long nextSeq = (maxId != null ? maxId : 0) + 1001;
+            Long maxSeq = ticketRepository.findMaxTicketSequenceForCompany(company.getId());
+            long nextSeq = (maxSeq != null && maxSeq >= 1000 ? maxSeq : 1000) + 1;
             String ticketNumber = company.getCompanyCode() + "-" + nextSeq;
 
             Ticket newTicket = new Ticket();
@@ -122,9 +133,9 @@ public class EmailIngestionService {
             newTicket.setDepartment(mailbox.getDepartment());
             newTicket.setContact(contact);
             newTicket.setSourceMailbox(mailbox);
-            newTicket.setChannel(Ticket.TicketChannel.MICROSOFT_365);
+            newTicket.setChannel(isForwarded ? Ticket.TicketChannel.EMAIL : Ticket.TicketChannel.MICROSOFT_365);
             newTicket.setSubject(subject != null ? subject : "Support Request from " + senderEmail);
-            newTicket.setDescriptionHtml(bodyHtml != null ? bodyHtml : "<p>" + bodyText + "</p>");
+            newTicket.setDescriptionHtml(bodyHtml != null ? bodyHtml : "<p>" + (bodyText != null ? bodyText : "") + "</p>");
             newTicket.setDescriptionText(bodyText);
             newTicket.setInternetMessageId(internetMessageId);
             newTicket.setMsConversationId(msConversationId);
@@ -145,7 +156,7 @@ public class EmailIngestionService {
             thread.setFromEmail(senderEmail);
             thread.setFromName(senderName != null ? senderName : senderEmail);
             thread.setSubject(subject);
-            thread.setBodyHtml(newTicket.getDescriptionHtml());
+            thread.setBodyHtml(savedTicket.getDescriptionHtml());
             thread.setBodyText(bodyText);
             thread.setInternetMessageId(internetMessageId);
             thread.setIsPrivate(false);

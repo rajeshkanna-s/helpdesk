@@ -1,5 +1,7 @@
 package com.kuwy.helpdesk.services;
 
+import com.kuwy.helpdesk.dto.BulkUpdateDto;
+import com.kuwy.helpdesk.dto.ScenarioExecuteDto;
 import com.kuwy.helpdesk.dto.TicketCreateDto;
 import com.kuwy.helpdesk.dto.TicketReplyDto;
 import com.kuwy.helpdesk.models.*;
@@ -23,6 +25,7 @@ public class TicketService {
     private final DepartmentRepository departmentRepository;
     private final ContactRepository contactRepository;
     private final UserRepository userRepository;
+    private final TicketAttachmentRepository attachmentRepository;
 
     @Transactional(readOnly = true)
     public Page<Ticket> getCompanyTickets(Long companyId, String status, Long agentId, Pageable pageable) {
@@ -39,14 +42,38 @@ public class TicketService {
     public Ticket getTicketById(Long id) {
         Ticket ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Ticket not found: " + id));
-        List<TicketThread> threads = threadRepository.findByTicketIdOrderByCreatedAtAsc(id);
+        List<TicketThread> threads = getTicketThreads(id);
         ticket.setThreads(threads);
         return ticket;
     }
 
     @Transactional(readOnly = true)
     public List<TicketThread> getTicketThreads(Long ticketId) {
-        return threadRepository.findByTicketIdOrderByCreatedAtAsc(ticketId);
+        List<TicketThread> threads = threadRepository.findByTicketIdOrderByCreatedAtAsc(ticketId);
+        List<TicketAttachment> ticketLevelAtts = attachmentRepository.findByTicketIdAndThreadIsNullOrderByCreatedAtAsc(ticketId);
+
+        for (int i = 0; i < threads.size(); i++) {
+            TicketThread thread = threads.get(i);
+            List<TicketAttachment> atts = attachmentRepository.findByThreadIdOrderByCreatedAtAsc(thread.getId());
+            
+            // If first thread and there are ticket-level attachments from ticket creation, include them
+            if (i == 0 && ticketLevelAtts != null && !ticketLevelAtts.isEmpty()) {
+                atts = new java.util.ArrayList<>(atts);
+                atts.addAll(ticketLevelAtts);
+            }
+
+            for (TicketAttachment att : atts) {
+                if (att.getStorageType() == TicketAttachment.StorageType.CLOUDINARY && att.getStoragePath().startsWith("http")) {
+                    att.setDownloadUrl(att.getStoragePath());
+                    att.setPreviewUrl(att.getStoragePath());
+                } else {
+                    att.setDownloadUrl("/api/v1/attachments/" + att.getId() + "/download");
+                    att.setPreviewUrl("/api/v1/attachments/" + att.getId() + "/preview");
+                }
+            }
+            thread.setAttachments(atts);
+        }
+        return threads;
     }
 
     @Transactional
@@ -67,9 +94,9 @@ public class TicketService {
                     return contactRepository.save(newContact);
                 });
 
-        // Generate Ticket Number (e.g. KUWY-1003)
-        Long maxId = ticketRepository.findMaxTicketIdForCompany(company.getId());
-        long nextSeq = (maxId != null ? maxId : 0) + 1001;
+        // Generate Ticket Number (e.g. KUWY-1009)
+        Long maxSeq = ticketRepository.findMaxTicketSequenceForCompany(company.getId());
+        long nextSeq = (maxSeq != null && maxSeq >= 1000 ? maxSeq : 1000) + 1;
         String ticketNumber = company.getCompanyCode() + "-" + nextSeq;
 
         Ticket ticket = new Ticket();
@@ -87,6 +114,12 @@ public class TicketService {
 
         if (dto.getAssignedAgentId() != null) {
             userRepository.findById(dto.getAssignedAgentId()).ifPresent(ticket::setAssignedAgent);
+        } else {
+            // Auto-assign round robin among active company agents
+            List<User> activeAgents = userRepository.findByCompanyIdAndIsActiveTrue(company.getId());
+            if (!activeAgents.isEmpty()) {
+                ticket.setAssignedAgent(activeAgents.get((int) (nextSeq % activeAgents.size())));
+            }
         }
 
         Ticket savedTicket = ticketRepository.save(ticket);
@@ -168,6 +201,24 @@ public class TicketService {
     }
 
     @Transactional
+    public Ticket updatePriority(Long ticketId, Ticket.TicketPriority newPriority) {
+        Ticket ticket = ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        ticket.setPriority(newPriority);
+        return ticketRepository.save(ticket);
+    }
+
+    @Transactional
+    public Ticket updateDepartment(Long ticketId, Long departmentId) {
+        Ticket ticket = ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        Department department = departmentRepository.findById(departmentId)
+                .orElseThrow(() -> new RuntimeException("Department not found: " + departmentId));
+        ticket.setDepartment(department);
+        return ticketRepository.save(ticket);
+    }
+
+    @Transactional
     public Ticket assignAgent(Long ticketId, Long agentId) {
         Ticket ticket = ticketRepository.findById(ticketId)
                 .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
@@ -178,5 +229,105 @@ public class TicketService {
             ticket.setStatus(Ticket.TicketStatus.IN_PROGRESS);
         }
         return ticketRepository.save(ticket);
+    }
+
+    @Transactional
+    public void bulkUpdate(BulkUpdateDto dto) {
+        if (dto.getTicketIds() == null || dto.getTicketIds().isEmpty()) return;
+        List<Ticket> tickets = ticketRepository.findAllById(dto.getTicketIds());
+        User agent = (dto.getAgentId() != null) ? userRepository.findById(dto.getAgentId()).orElse(null) : null;
+        Department dept = (dto.getDepartmentId() != null) ? departmentRepository.findById(dto.getDepartmentId()).orElse(null) : null;
+
+        for (Ticket t : tickets) {
+            if (dto.getStatus() != null && !dto.getStatus().isBlank()) {
+                t.setStatus(Ticket.TicketStatus.valueOf(dto.getStatus().toUpperCase()));
+                if (t.getStatus() == Ticket.TicketStatus.RESOLVED) {
+                    t.setResolvedAt(LocalDateTime.now());
+                }
+            }
+            if (dto.getPriority() != null && !dto.getPriority().isBlank()) {
+                t.setPriority(Ticket.TicketPriority.valueOf(dto.getPriority().toUpperCase()));
+            }
+            if (agent != null) {
+                t.setAssignedAgent(agent);
+            }
+            if (dept != null) {
+                t.setDepartment(dept);
+            }
+        }
+        ticketRepository.saveAll(tickets);
+    }
+
+    @Transactional
+    public Ticket executeScenario(Long ticketId, ScenarioExecuteDto dto) {
+        Ticket ticket = ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+
+        String noteText = "";
+        String replyText = "";
+        boolean isReply = false;
+
+        switch (dto.getScenarioKey()) {
+            case "KYC_RESUBMIT":
+                ticket.setStatus(Ticket.TicketStatus.WAITING_ON_CUSTOMER);
+                ticket.setPriority(Ticket.TicketPriority.HIGH);
+                replyText = "Hello " + ticket.getContact().getFirstName() + ",\n\nWe have reviewed your application and noticed a verification discrepancy with your submitted KYC documents. Please re-upload clear copies of your PAN and Aadhaar cards through our partner portal.\n\nThank you,\nKuwy Support Team";
+                isReply = true;
+                break;
+            case "ESCALATE_LEAD":
+                ticket.setPriority(Ticket.TicketPriority.URGENT);
+                ticket.setStatus(Ticket.TicketStatus.IN_PROGRESS);
+                noteText = "⚡ Scenario Macro Executed: Escalated to Senior Support Lead for critical review. Turnaround required within 2 hours.";
+                break;
+            case "LOAN_APPROVED":
+                ticket.setStatus(Ticket.TicketStatus.RESOLVED);
+                ticket.setResolvedAt(LocalDateTime.now());
+                replyText = "Dear " + ticket.getContact().getFirstName() + ",\n\nCongratulations! Your loan verification has been successfully approved by the underwriting team. Disbursement details have been dispatched to your registered mobile and email.\n\nRegards,\nKuwy Finance Operations";
+                isReply = true;
+                break;
+            case "CUSTOMER_INACTIVE":
+                ticket.setStatus(Ticket.TicketStatus.CLOSED);
+                ticket.setResolvedAt(LocalDateTime.now());
+                noteText = "⚡ Scenario Macro Executed: Closed ticket due to customer non-response after follow-up period.";
+                break;
+            default:
+                if (dto.getCustomNote() != null) {
+                    noteText = dto.getCustomNote();
+                }
+                break;
+        }
+
+        Ticket saved = ticketRepository.save(ticket);
+
+        if (isReply && !replyText.isBlank()) {
+            TicketThread thread = new TicketThread();
+            thread.setCompany(ticket.getCompany());
+            thread.setTicket(saved);
+            thread.setThreadType(TicketThread.ThreadType.REPLY);
+            thread.setSenderType(TicketThread.SenderType.AGENT);
+            thread.setFromEmail("testsupport@kuwy.in");
+            thread.setFromName(dto.getAuthorName() != null ? dto.getAuthorName() : "Kuwy Automation Lead");
+            thread.setToEmails(ticket.getContact().getEmail());
+            thread.setSubject("Re: [" + ticket.getTicketNumber() + "] " + ticket.getSubject());
+            thread.setBodyText(replyText);
+            thread.setBodyHtml("<p>" + replyText.replace("\n", "<br/>") + "</p>");
+            thread.setIsPrivate(false);
+            threadRepository.save(thread);
+        } else if (!noteText.isBlank()) {
+            TicketThread note = new TicketThread();
+            note.setCompany(ticket.getCompany());
+            note.setTicket(saved);
+            note.setThreadType(TicketThread.ThreadType.PRIVATE_NOTE);
+            note.setSenderType(TicketThread.SenderType.AGENT);
+            note.setFromEmail("testinternal@kuwy.in");
+            note.setFromName(dto.getAuthorName() != null ? dto.getAuthorName() : "Support System");
+            note.setSubject("Internal Note: Scenario Executed");
+            note.setBodyText(noteText);
+            note.setBodyHtml("<p>" + noteText + "</p>");
+            note.setIsPrivate(true);
+            threadRepository.save(note);
+        }
+
+        return saved;
     }
 }

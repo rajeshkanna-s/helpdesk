@@ -11,5 +11,6 @@ import java.util.Optional;
 public interface CompanyMailboxRepository extends JpaRepository<CompanyMailbox, Long> {
     List<CompanyMailbox> findByCompanyId(Long companyId);
     Optional<CompanyMailbox> findByEmailAddress(String emailAddress);
+    Optional<CompanyMailbox> findByForwardingAddress(String forwardingAddress);
     Optional<CompanyMailbox> findByGraphSubscriptionId(String graphSubscriptionId);
 }

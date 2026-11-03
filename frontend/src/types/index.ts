@@ -46,6 +46,21 @@ export interface Tag {
   colorHex: string;
 }
 
+export interface TicketAttachment {
+  id: number;
+  ticketId: number;
+  threadId?: number | null;
+  fileName: string;
+  fileSizeBytes: number;
+  contentType: string;
+  storageType: 'LOCAL_DISK' | 'CLOUDINARY' | 'S3' | 'AZURE_BLOB';
+  storagePath: string;
+  downloadUrl: string;
+  previewUrl: string;
+  isInline?: boolean;
+  createdAt?: string;
+}
+
 export interface TicketThread {
   id: number;
   threadType: 'REPLY' | 'CUSTOMER_REPLY' | 'PRIVATE_NOTE' | 'FORWARD' | 'SYSTEM';
@@ -60,6 +75,7 @@ export interface TicketThread {
   bodyText?: string;
   isPrivate: boolean;
   createdAt: string;
+  attachments?: TicketAttachment[];
 }
 
 export interface Ticket {
@@ -74,6 +90,7 @@ export interface Ticket {
   department: Department;
   contact: Contact;
   assignedAgent?: User;
+  sourceMailbox?: CompanyMailbox;
   firstResponseDueAt?: string;
   slaStatus: 'WITHIN_SLA' | 'NEARING_BREACH' | 'BREACHED' | 'EXEMPT';
   createdAt: string;
@@ -85,6 +102,8 @@ export interface CompanyMailbox {
   id: number;
   mailboxName: string;
   emailAddress: string;
+  forwardingAddress?: string;
+  forwardingVerified?: boolean;
   providerType: string;
   authType: string;
   syncStatus: 'CONNECTED' | 'AUTHENTICATING' | 'AUTH_EXPIRED' | 'ERROR';
@@ -272,3 +291,71 @@ export interface SupportEngineerCreateInput {
 }
 
 
+
+export interface KbArticle {
+  id: number;
+  categoryId: number;
+  categoryName: string;
+  title: string;
+  slug: string;
+  contentHtml: string;
+  viewCount: number;
+  helpfulVotes: number;
+}
+
+export interface ScenarioMacro {
+  id: string;
+  title: string;
+  description: string;
+  badge: string;
+  color: string;
+  targetStatus?: string;
+  targetPriority?: string;
+  cannedResponse?: string;
+}
+
+
+
+export interface CompanySubscription {
+  id: number;
+  companyId: number;
+  planTier: 'FREE' | 'STARTER' | 'PRO' | 'ENTERPRISE';
+  billingCycle: 'MONTHLY' | 'ANNUAL';
+  amount: number;
+  currency: string;
+  gatewayProvider?: string;
+  agentLimit: number;
+  ticketLimitMonthly: number;
+  status: 'ACTIVE' | 'TRIAL' | 'PAST_DUE' | 'CANCELLED' | 'LOCKED';
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  gracePeriodEndsAt?: string;
+}
+
+export interface CannedResponse {
+  id: number;
+  title: string;
+  shortcut: string;
+  content: string;
+  isShared: boolean;
+  departmentId?: number | null;
+  department?: Department;
+}
+
+export interface AutomationRule {
+  id: number;
+  name: string;
+  eventTrigger: 'TICKET_CREATED' | 'TICKET_UPDATED' | 'CUSTOMER_REPLIED' | 'SLA_BREACHED' | 'TIME_INACTIVE';
+  conditionJson?: string;
+  actionJson?: string;
+  isActive: boolean;
+  priorityOrder: number;
+}
+
+export interface EmailTemplate {
+  id: number;
+  templateType: 'TICKET_CREATED_CONFIRMATION' | 'AGENT_REPLY' | 'TICKET_RESOLVED' | 'TICKET_CLOSED' | 'CUSTOMER_OTP';
+  subjectTemplate: string;
+  bodyHtml: string;
+  isActive: boolean;
+}

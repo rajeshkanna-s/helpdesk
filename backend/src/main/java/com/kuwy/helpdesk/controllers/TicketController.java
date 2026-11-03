@@ -1,5 +1,7 @@
 package com.kuwy.helpdesk.controllers;
 
+import com.kuwy.helpdesk.dto.BulkUpdateDto;
+import com.kuwy.helpdesk.dto.ScenarioExecuteDto;
 import com.kuwy.helpdesk.dto.TicketCreateDto;
 import com.kuwy.helpdesk.dto.TicketReplyDto;
 import com.kuwy.helpdesk.models.Ticket;
@@ -12,6 +14,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/tickets")
@@ -27,18 +31,27 @@ public class TicketController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Long agentId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "15") int size
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String order
     ) {
         Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
         if (targetCompanyId == null) {
             targetCompanyId = 1L; // Fallback
         }
 
+        Sort.Direction direction = "asc".equalsIgnoreCase(order) ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String sortField = "createdAt";
+        if ("priority".equalsIgnoreCase(sortBy)) sortField = "priority";
+        else if ("status".equalsIgnoreCase(sortBy)) sortField = "status";
+        else if ("updatedAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
+        else if ("lastMessageAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
+
         Page<Ticket> tickets = ticketService.getCompanyTickets(
                 targetCompanyId,
                 status,
                 agentId,
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))
+                PageRequest.of(page, size, Sort.by(direction, sortField))
         );
         return ResponseEntity.ok(tickets);
     }
@@ -49,7 +62,7 @@ public class TicketController {
     }
 
     @GetMapping("/{id}/threads")
-    public ResponseEntity<java.util.List<TicketThread>> getTicketThreads(@PathVariable Long id) {
+    public ResponseEntity<List<TicketThread>> getTicketThreads(@PathVariable Long id) {
         return ResponseEntity.ok(ticketService.getTicketThreads(id));
     }
 
@@ -77,11 +90,41 @@ public class TicketController {
         return ResponseEntity.ok(ticketService.updateStatus(id, Ticket.TicketStatus.valueOf(status.toUpperCase())));
     }
 
+    @PatchMapping("/{id}/priority")
+    public ResponseEntity<Ticket> updatePriority(
+            @PathVariable Long id,
+            @RequestParam String priority
+    ) {
+        return ResponseEntity.ok(ticketService.updatePriority(id, Ticket.TicketPriority.valueOf(priority.toUpperCase())));
+    }
+
+    @PatchMapping("/{id}/department")
+    public ResponseEntity<Ticket> updateDepartment(
+            @PathVariable Long id,
+            @RequestParam Long departmentId
+    ) {
+        return ResponseEntity.ok(ticketService.updateDepartment(id, departmentId));
+    }
+
     @PatchMapping("/{id}/assign")
     public ResponseEntity<Ticket> assignAgent(
             @PathVariable Long id,
             @RequestParam Long agentId
     ) {
         return ResponseEntity.ok(ticketService.assignAgent(id, agentId));
+    }
+
+    @PostMapping("/bulk")
+    public ResponseEntity<String> bulkUpdateTickets(@RequestBody BulkUpdateDto dto) {
+        ticketService.bulkUpdate(dto);
+        return ResponseEntity.ok("Bulk update completed successfully");
+    }
+
+    @PostMapping("/{id}/execute-scenario")
+    public ResponseEntity<Ticket> executeScenario(
+            @PathVariable Long id,
+            @RequestBody ScenarioExecuteDto dto
+    ) {
+        return ResponseEntity.ok(ticketService.executeScenario(id, dto));
     }
 }

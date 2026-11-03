@@ -172,6 +172,8 @@ CREATE TABLE `company_mailboxes` (
   `department_id` BIGINT NOT NULL,
   `mailbox_name` VARCHAR(150) NOT NULL COMMENT 'e.g. Kuwy IT Support, Billing Desk',
   `email_address` VARCHAR(255) NOT NULL COMMENT 'e.g. support@kuwy.in',
+  `forwarding_address` VARCHAR(255) DEFAULT NULL COMMENT 'e.g. 1281753993@tickets.helpdesk.com',
+  `forwarding_verified` BOOLEAN NOT NULL DEFAULT FALSE,
   `provider_type` ENUM('MICROSOFT_365', 'EXCHANGE_ONLINE', 'GOOGLE_WORKSPACE', 'IMAP_SMTP', 'FORWARDING') NOT NULL DEFAULT 'MICROSOFT_365',
   `auth_type` ENUM('OAUTH2_GRAPH_API', 'OAUTH2_IMAP', 'BASIC_AUTH', 'FORWARD_ONLY') NOT NULL DEFAULT 'OAUTH2_GRAPH_API',
   
@@ -358,7 +360,7 @@ CREATE TABLE `ticket_attachments` (
   `file_name` VARCHAR(255) NOT NULL,
   `file_size_bytes` BIGINT NOT NULL,
   `content_type` VARCHAR(120) NOT NULL,
-  `storage_type` ENUM('LOCAL_DISK', 'S3', 'AZURE_BLOB') NOT NULL DEFAULT 'LOCAL_DISK',
+  `storage_type` ENUM('LOCAL_DISK', 'S3', 'AZURE_BLOB', 'CLOUDINARY') NOT NULL DEFAULT 'LOCAL_DISK',
   `storage_path` VARCHAR(1000) NOT NULL,
   `is_inline` BOOLEAN NOT NULL DEFAULT FALSE,
   `content_id` VARCHAR(255) DEFAULT NULL COMMENT 'CID reference for embedded HTML images',
@@ -497,4 +499,106 @@ CREATE TABLE `kb_articles` (
   INDEX `idx_kb_articles_company` (`company_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
+-- ------------------------------------------------------------------------
+-- 15. SAAS SUBSCRIPTIONS & BILLING
+-- ------------------------------------------------------------------------
+DROP TABLE IF EXISTS company_subscriptions;
+CREATE TABLE company_subscriptions (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  company_id BIGINT NOT NULL,
+  plan_tier ENUM('FREE', 'STARTER', 'PRO', 'ENTERPRISE') NOT NULL DEFAULT 'STARTER',
+  illing_cycle ENUM('MONTHLY', 'ANNUAL') NOT NULL DEFAULT 'MONTHLY',
+  mount DECIMAL(10,2) NOT NULL DEFAULT 2999.00,
+  currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+  gateway_provider VARCHAR(50) DEFAULT 'RAZORPAY',
+  gateway_subscription_id VARCHAR(100) DEFAULT NULL,
+  gent_limit INT NOT NULL DEFAULT 5,
+  	icket_limit_monthly INT NOT NULL DEFAULT 1000,
+  status ENUM('ACTIVE', 'TRIAL', 'PAST_DUE', 'CANCELLED', 'LOCKED') NOT NULL DEFAULT 'ACTIVE',
+  current_period_start TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  current_period_end TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  grace_period_ends_at TIMESTAMP NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  INDEX idx_sub_company (company_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------
+-- 16. CANNED RESPONSES & MACROS
+-- ------------------------------------------------------------------------
+DROP TABLE IF EXISTS canned_responses;
+CREATE TABLE canned_responses (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  company_id BIGINT NOT NULL,
+  department_id BIGINT DEFAULT NULL,
+  	itle VARCHAR(150) NOT NULL,
+  shortcut VARCHAR(50) NOT NULL,
+  content TEXT NOT NULL,
+  is_shared BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by_user_id BIGINT DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  INDEX idx_canned_company (company_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------
+-- 17. AUTOMATION & ROUTING RULES
+-- ------------------------------------------------------------------------
+DROP TABLE IF EXISTS utomation_rules;
+CREATE TABLE utomation_rules (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  company_id BIGINT NOT NULL,
+  
+ame VARCHAR(150) NOT NULL,
+  event_trigger ENUM('TICKET_CREATED', 'TICKET_UPDATED', 'CUSTOMER_REPLIED', 'SLA_BREACHED', 'TIME_INACTIVE') NOT NULL,
+  condition_json JSON DEFAULT NULL,
+  ction_json JSON DEFAULT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  priority_order INT NOT NULL DEFAULT 10,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  INDEX idx_auto_company (company_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------
+-- 18. EMAIL TEMPLATES
+-- ------------------------------------------------------------------------
+DROP TABLE IF EXISTS email_templates;
+CREATE TABLE email_templates (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  company_id BIGINT NOT NULL,
+  	emplate_type ENUM('TICKET_CREATED_CONFIRMATION', 'AGENT_REPLY', 'TICKET_RESOLVED', 'TICKET_CLOSED', 'CUSTOMER_OTP') NOT NULL,
+  subject_template VARCHAR(255) NOT NULL,
+  ody_html TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  INDEX idx_tpl_company (company_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------
+-- 19. CUSTOMER AUTH TOKENS (Magic Link / OTP)
+-- ------------------------------------------------------------------------
+DROP TABLE IF EXISTS customer_auth_tokens;
+CREATE TABLE customer_auth_tokens (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  company_id BIGINT NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  otp_code VARCHAR(10) NOT NULL,
+  	oken VARCHAR(255) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  is_used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  INDEX idx_auth_token (	oken),
+  INDEX idx_auth_email (company_id, email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
+
+
