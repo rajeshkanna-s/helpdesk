@@ -189,15 +189,21 @@ export const apiService = {
 
   // Tickets
   async getTickets(companyId: number, status?: string): Promise<Ticket[]> {
+    return (await apiService.getTicketPage(companyId, status)).content;
+  },
+
+  async getTicketPage(companyId: number, status?: string, page = 0, size = 25, order: 'asc' | 'desc' = 'desc'): Promise<{ content: Ticket[]; number: number; size: number; totalElements: number; totalPages: number }> {
     try {
-      const url = status && status !== 'ALL'
-        ? `${API_BASE}/tickets?companyId=${companyId}&status=${status}`
-        : `${API_BASE}/tickets?companyId=${companyId}`;
-      const res = await axios.get(url, { headers: getHeaders() });
-      return res.data.content || res.data;
+      const res = await axios.get(`${API_BASE}/tickets`, {
+        headers: getHeaders(),
+        params: { companyId, status: status && status !== 'ALL' ? status : undefined, page, size, sortBy: 'createdAt', order },
+      });
+      const data = res.data;
+      return Array.isArray(data)
+        ? { content: data, number: 0, size: data.length || size, totalElements: data.length, totalPages: data.length ? 1 : 0 }
+        : { content: data.content, number: data.number, size: data.size, totalElements: data.totalElements, totalPages: data.totalPages };
     } catch {
-      if (companyId === 1) {
-        return [
+      const tickets: Ticket[] = companyId === 1 ? [
           {
             id: 1,
             ticketNumber: 'KUWY-1001',
@@ -228,9 +234,7 @@ export const apiService = {
             createdAt: '2026-11-02T16:50:00',
             tags: [{ id: 2, name: 'Loan-Ops', colorHex: '#0d6efd' }],
           },
-        ];
-      } else {
-        return [
+        ] : [
           {
             id: 3,
             ticketNumber: 'ACME-1001',
@@ -245,7 +249,9 @@ export const apiService = {
             createdAt: '2026-11-02T15:30:00',
           },
         ];
-      }
+      const filtered = tickets.filter(ticket => !status || status === 'ALL' || ticket.status === status);
+      filtered.sort((a, b) => (order === 'asc' ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()));
+      return { content: filtered.slice(page * size, (page + 1) * size), number: page, size, totalElements: filtered.length, totalPages: Math.ceil(filtered.length / size) };
     }
   },
 

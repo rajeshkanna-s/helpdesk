@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import {
   Building2, ShieldCheck, Mail, Users, UserCheck, Layers, Tag,
   CheckSquare, Zap, Clock, MessageSquare, Star, CreditCard, Key, Search,
   Plus, Trash2, Edit3, Check, AlertTriangle, RefreshCw, Copy,
-  Download, Lock, Sliders, FileText, Send, Sparkles, AlertCircle, CheckCircle2
+  Download, Lock, Sliders, FileText, Send, Sparkles, AlertCircle, CheckCircle2, ArrowRight
 } from 'lucide-react';
 import type { Company, User } from '../types';
 import { apiService } from '../services/api';
@@ -49,6 +49,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
   onRefreshCompany,
   onShowToast,
 }) => {
+  const settingsId = useId();
   const [activeSection, setActiveSection] = useState<SettingsSection>('home');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -289,101 +290,130 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
       id: 'company',
       name: 'Company',
       items: [
-        { id: 'home', label: 'Settings Home', icon: Building2, badge: 'Overview' },
-        { id: 'branding', label: 'Profile & Branding', icon: Sliders },
-        { id: 'security', label: 'Security & Access', icon: ShieldCheck },
-        { id: 'audit-log', label: 'Audit Log & History', icon: Clock },
+        { id: 'home', label: 'Overview', icon: Building2 },
+        { id: 'branding', label: 'Profile & branding', icon: Sliders },
+        { id: 'security', label: 'Security & access', icon: ShieldCheck },
+        { id: 'audit-log', label: 'Audit log', icon: Clock },
       ],
     },
     {
       id: 'people',
       name: 'People',
       items: [
-        { id: 'agents', label: 'Agents & Seats', icon: Users, badge: `${agentsList.length}/50` },
-        { id: 'teams', label: 'Teams & Groups', icon: Layers },
-        { id: 'roles', label: 'Roles & Permissions', icon: UserCheck },
+        { id: 'agents', label: 'Agents & seats', icon: Users, badge: `${agentsList.length}` },
+        { id: 'teams', label: 'Teams & groups', icon: Layers },
+        { id: 'roles', label: 'Roles & permissions', icon: UserCheck },
       ],
     },
     {
       id: 'channels',
       name: 'Channels',
       items: [
-        { id: 'emails', label: 'Support Email Addresses', icon: Mail, badge: 'Crucial' },
+        { id: 'emails', label: 'Support email', icon: Mail, badge: `${mailboxes.length}` },
       ],
     },
     {
       id: 'ticket-setup',
-      name: 'Ticket Setup',
+      name: 'Ticket setup',
       items: [
-        { id: 'categories', label: 'Categories & Queues', icon: Layers },
-        { id: 'priorities', label: 'Priorities & SLAs', icon: AlertTriangle },
-        { id: 'statuses', label: 'Statuses & Timers', icon: CheckSquare },
-        { id: 'tags', label: 'Tags Management', icon: Tag },
-        { id: 'fields', label: 'Forms & Custom Fields', icon: FileText },
+        { id: 'categories', label: 'Categories & queues', icon: Layers },
+        { id: 'priorities', label: 'Priorities', icon: AlertTriangle },
+        { id: 'statuses', label: 'Statuses & timers', icon: CheckSquare },
+        { id: 'tags', label: 'Tags', icon: Tag },
+        { id: 'fields', label: 'Forms & custom fields', icon: FileText },
       ],
     },
     {
       id: 'productivity',
       name: 'Productivity',
       items: [
-        { id: 'canned', label: 'Canned Responses', icon: MessageSquare, badge: `${cannedResponses.length}` },
-        { id: 'macros', label: 'One-Click Macros', icon: Sparkles },
-        { id: 'automation', label: 'Automation Rules', icon: Zap, badge: 'Active' },
-        { id: 'sla', label: 'SLA & Business Hours', icon: Clock },
+        { id: 'canned', label: 'Canned responses', icon: MessageSquare, badge: `${cannedResponses.length}` },
+        { id: 'macros', label: 'One-click macros', icon: Sparkles },
+        { id: 'automation', label: 'Automation rules', icon: Zap, badge: `${automationRules.length}` },
+        { id: 'sla', label: 'SLA & business hours', icon: Clock },
       ],
     },
     {
       id: 'communication',
       name: 'Communication',
       items: [
-        { id: 'templates', label: 'Email Templates', icon: Mail },
-        { id: 'csat', label: 'CSAT Surveys', icon: Star },
+        { id: 'templates', label: 'Email templates', icon: Mail },
+        { id: 'csat', label: 'CSAT surveys', icon: Star },
       ],
     },
     {
       id: 'account',
       name: 'Account',
       items: [
-        { id: 'billing', label: 'Subscription & Billing', icon: CreditCard, badge: settings.billing.planTier },
-        { id: 'api-keys', label: 'API Keys & Webhooks', icon: Key },
+        { id: 'billing', label: 'Subscription & billing', icon: CreditCard, badge: settings.billing.planTier },
+        { id: 'api-keys', label: 'API keys & webhooks', icon: Key },
       ],
     },
   ];
 
-  // Search filtering
+  const activeSectionLabel = menuCategories.flatMap(cat => cat.items).find(item => item.id === activeSection)?.label;
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const filteredCategories = menuCategories.map(cat => ({
     ...cat,
     items: cat.items.filter(item =>
-      item.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      cat.name.toLowerCase().includes(searchQuery.toLowerCase())
+      item.label.toLowerCase().includes(normalizedSearchQuery) ||
+      cat.name.toLowerCase().includes(normalizedSearchQuery)
     ),
   })).filter(cat => cat.items.length > 0);
 
   return (
-    <div className="enterprise-card p-0 shadow-sm border overflow-hidden animate-fade-in" style={{ minHeight: '820px' }}>
-      <div className="row g-0">
-        {/* ====================================================================
-            LEFT SETTINGS NAVIGATION RAIL
-            ==================================================================== */}
-        <div className="col-12 col-lg-3 border-end bg-slate-50 p-3" style={{ backgroundColor: '#f8fafc' }}>
-          <div className="position-relative mb-3">
-            <Search size={15} className="position-absolute top-50 start-0 translate-middle-y ms-3 text-muted" />
-            <input
-              type="text"
-              className="form-control form-control-sm ps-5 bg-white shadow-xs rounded-3"
-              placeholder="Search settings..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
+    <section className="settings-console border rounded-3 bg-white" aria-label="Workspace settings">
+      <div className="settings-layout">
+        <aside className="settings-navigation p-3" aria-label="Settings navigation">
+          <label htmlFor={`${settingsId}-mobile-navigation`} className="form-label small fw-semibold d-lg-none">
+            Settings section
+          </label>
+          <select
+            id={`${settingsId}-mobile-navigation`}
+            className="settings-mobile-navigation form-select d-lg-none"
+            value={activeSection}
+            onChange={e => setActiveSection(e.target.value as SettingsSection)}
+            aria-controls={`${settingsId}-content`}
+          >
+            {menuCategories.map(cat => (
+              <optgroup key={cat.id} label={cat.name}>
+                {cat.items.map(item => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+
+          <div className="d-none d-lg-block mb-3" role="search" aria-label="Settings">
+            <label htmlFor={`${settingsId}-search`} className="visually-hidden">Search settings</label>
+            <div className="position-relative">
+              <Search size={15} className="position-absolute top-50 start-0 translate-middle-y ms-3 text-muted" aria-hidden="true" />
+              <input
+                id={`${settingsId}-search`}
+                type="search"
+                className="form-control form-control-sm ps-5 bg-white rounded-3"
+                placeholder="Search settings"
+                autoComplete="off"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                aria-controls={`${settingsId}-nav-tree`}
+                aria-describedby={`${settingsId}-search-feedback`}
+              />
+            </div>
+            <div id={`${settingsId}-search-feedback`} role="status" aria-live="polite">
+              {filteredCategories.length === 0 && (
+                <p className="small text-secondary mt-3 mb-0">No matching settings. Try a different name or category.</p>
+              )}
+            </div>
           </div>
 
-          <div className="settings-nav-tree d-flex flex-column gap-3 overflow-y-auto" style={{ maxHeight: '720px' }}>
+          <nav id={`${settingsId}-nav-tree`} className="settings-nav-tree d-none d-lg-flex flex-column gap-3" aria-label="Settings sections">
             {filteredCategories.map(cat => (
-              <div key={cat.id}>
-                <div className="text-uppercase fw-bold text-muted px-2.5 mb-1.5" style={{ fontSize: '0.68rem', letterSpacing: '0.07em' }}>
+              <div key={cat.id} role="group" aria-labelledby={`${settingsId}-${cat.id}`}>
+                <div id={`${settingsId}-${cat.id}`} className="small fw-semibold text-secondary px-2 mb-2">
                   {cat.name}
                 </div>
-                <div className="d-flex flex-column gap-0.5">
+                <div className="d-flex flex-column gap-1">
                   {cat.items.map(item => {
                     const Icon = item.icon;
                     const isActive = activeSection === item.id;
@@ -391,19 +421,21 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       <button
                         key={item.id}
                         type="button"
-                        className={`btn btn-sm text-start py-1.5 px-2.5 rounded-3 d-flex align-items-center justify-content-between transition-all ${
+                        className={`settings-nav-item btn btn-sm text-start py-2 px-2 rounded-3 d-flex align-items-center justify-content-between gap-2 ${
                           isActive
-                            ? 'btn-primary shadow-xs fw-bold'
-                            : 'btn-light border-0 text-dark hover-bg-light fw-medium'
+                            ? 'active bg-primary-subtle text-primary fw-semibold'
+                            : 'text-secondary'
                         }`}
                         onClick={() => setActiveSection(item.id)}
+                        aria-current={isActive ? 'page' : undefined}
+                        aria-controls={`${settingsId}-content`}
                       >
-                        <div className="d-flex align-items-center gap-2 text-truncate">
-                          <Icon size={15} className={isActive ? 'text-white' : 'text-secondary'} />
-                          <span style={{ fontSize: '0.82rem' }}>{item.label}</span>
-                        </div>
+                        <span className="d-flex align-items-center gap-2">
+                          <Icon size={15} className="flex-shrink-0" aria-hidden="true" />
+                          <span>{item.label}</span>
+                        </span>
                         {item.badge && (
-                          <span className={`badge ${isActive ? 'bg-white text-primary' : 'bg-light text-secondary border'}`} style={{ fontSize: '0.65rem' }}>
+                          <span className="badge bg-white text-secondary border fw-medium flex-shrink-0">
                             {item.badge}
                           </span>
                         )}
@@ -413,129 +445,68 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 </div>
               </div>
             ))}
-          </div>
+          </nav>
 
-          <div className="mt-4 pt-3 border-top px-2 text-muted" style={{ fontSize: '0.72rem' }}>
-            <div className="d-flex align-items-center gap-1.5 fw-bold text-dark mb-1">
-              <ShieldCheck size={14} className="text-success" />
-              <span>Tenant Scope Guarded</span>
-            </div>
-            <code>{activeCompany.subdomain}.yourhelpdesk.com</code>
+          <div className="d-none d-lg-block mt-4 pt-3 border-top px-2 small text-secondary">
+            <span className="d-block mb-1">Current workspace</span>
+            <span className="fw-semibold text-dark text-break">{activeCompany.name}</span>
           </div>
-        </div>
+        </aside>
 
         {/* ====================================================================
             RIGHT SETTINGS CONTENT WORKSPACE
             ==================================================================== */}
-        <div className="col-12 col-lg-9 d-flex flex-column justify-content-between bg-white" style={{ minHeight: '820px' }}>
-          <div className="p-4 p-md-5 overflow-y-auto" style={{ maxHeight: '750px' }}>
+        <div className="settings-content d-flex flex-column">
+          <div id={`${settingsId}-content`} className="settings-content-scroll p-3 p-md-4 flex-grow-1">
             {/* --------------------------------------------------------------
                 SCREEN 25: SETTINGS HOME
                 -------------------------------------------------------------- */}
             {activeSection === 'home' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-start pb-3 mb-4 border-bottom">
-                  <div>
-                    <h4 className="fw-bolder mb-1 text-dark">Workspace Administration Center</h4>
-                    <p className="text-secondary small mb-0">Overview of tenant configuration, system health, and onboarding progress</p>
-                  </div>
-                  <span className="badge bg-success-subtle text-success px-3 py-1.5 rounded-pill fw-semibold">
-                    Live Enterprise Status: Active
-                  </span>
-                </div>
+                <header className="settings-section-header pb-3 mb-4 border-bottom">
+                  <h2 className="h4 fw-semibold mb-2 text-dark">Workspace settings</h2>
+                  <p className="text-secondary small mb-0">Manage your company details, support channels, and service preferences.</p>
+                </header>
 
-                {/* Setup Progress Card */}
-                <div className="card border-0 bg-primary-subtle p-3.5 rounded-4 mb-4 shadow-xs" style={{ background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)' }}>
-                  <div className="d-flex align-items-center justify-content-between mb-2">
-                    <div className="d-flex align-items-center gap-2">
-                      <Sparkles size={18} className="text-primary" />
-                      <h6 className="fw-bold mb-0 text-dark">Setup & Deployment Progress</h6>
-                    </div>
-                    <span className="badge bg-primary text-white px-2.5 py-1 fw-bold">8 of 10 Steps Complete (80%)</span>
+                <dl className="settings-overview-summary d-flex flex-column flex-md-row gap-3 mb-4">
+                  <div className="p-3 border rounded-3 flex-fill">
+                    <dt className="small text-secondary fw-normal mb-2">Workspace</dt>
+                    <dd className="fw-semibold text-dark mb-0 text-break">{settings.branding.name || activeCompany.name}</dd>
                   </div>
-                  <div className="progress mb-3" style={{ height: '7px' }}>
-                    <div className="progress-bar bg-primary" role="progressbar" style={{ width: '80%' }} />
+                  <div className="p-3 border rounded-3 flex-fill">
+                    <dt className="small text-secondary fw-normal mb-2">Support mailboxes</dt>
+                    <dd className="fw-semibold text-dark mb-0">{mailboxes.length}</dd>
                   </div>
-                  <div className="row g-2 small">
-                    {[
-                      { text: 'Connect Support Email Address', done: true },
-                      { text: 'Customize Brand Colors & Logo', done: true },
-                      { text: 'Invite Staff & Assign Roles', done: true },
-                      { text: 'Configure Business Hours & SLA', done: true },
-                      { text: 'Deploy Customer Help Portal', done: true },
-                      { text: 'Enforce 2FA for Administrators', done: true },
-                      { text: 'Create Canned Solution Macros', done: true },
-                      { text: 'Verify Domain DNS (SPF & DKIM)', done: true },
-                      { text: 'Configure Custom Inbound Webhooks', done: false },
-                      { text: 'Review Annual Enterprise Plan', done: false },
-                    ].map((step, idx) => (
-                      <div key={idx} className="col-12 col-md-6 d-flex align-items-center gap-2">
-                        {step.done ? <CheckCircle2 size={15} className="text-success" /> : <div className="border rounded-circle" style={{ width: '15px', height: '15px' }} />}
-                        <span className={step.done ? 'text-dark' : 'text-muted'}>{step.text}</span>
-                      </div>
-                    ))}
+                  <div className="p-3 border rounded-3 flex-fill">
+                    <dt className="small text-secondary fw-normal mb-2">Workspace agents</dt>
+                    <dd className="fw-semibold text-dark mb-0">{agentsList.length}</dd>
                   </div>
-                </div>
+                </dl>
 
-                {/* Health Panel */}
-                <h6 className="fw-bold text-dark mb-3">System Health & Telemetry Diagnostic Panel</h6>
-                <div className="row g-3 mb-4">
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded-3 bg-white h-100 shadow-xs">
-                      <div className="d-flex align-items-center justify-content-between mb-1.5">
-                        <span className="text-muted small fw-semibold">Mailbox Ingestion</span>
-                        <Check size={16} className="text-success" />
-                      </div>
-                      <h6 className="fw-bolder mb-1 text-dark">Forwarding Active</h6>
-                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>Last email received 14m ago from Microsoft 365</small>
-                    </div>
-                  </div>
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded-3 bg-white h-100 shadow-xs">
-                      <div className="d-flex align-items-center justify-content-between mb-1.5">
-                        <span className="text-muted small fw-semibold">Security Enforcement</span>
-                        <ShieldCheck size={16} className="text-success" />
-                      </div>
-                      <h6 className="fw-bolder mb-1 text-dark">2FA Required for Admins</h6>
-                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>All 3 administrators verified with TOTP</small>
-                    </div>
-                  </div>
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded-3 bg-white h-100 shadow-xs">
-                      <div className="d-flex align-items-center justify-content-between mb-1.5">
-                        <span className="text-muted small fw-semibold">Domain SSL Certificate</span>
-                        <Check size={16} className="text-success" />
-                      </div>
-                      <h6 className="fw-bolder mb-1 text-dark">HTTPS Active (Let’s Encrypt)</h6>
-                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>Expires in 82 days (auto-renews)</small>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick Navigation Cards */}
-                <h6 className="fw-bold text-dark mb-3">Settings Quick Actions</h6>
+                <h3 className="h6 fw-semibold text-dark mb-3">Common settings</h3>
                 <div className="row g-3">
-                  <div className="col-md-4">
-                    <button type="button" className="btn btn-outline-secondary w-100 p-3 text-start rounded-3 h-100" onClick={() => setActiveSection('emails')}>
-                      <Mail size={18} className="text-primary mb-2" />
-                      <div className="fw-bold text-dark">Add Support Mailbox</div>
-                      <small className="text-muted">Connect Gmail, Outlook or Forwarding</small>
-                    </button>
-                  </div>
-                  <div className="col-md-4">
-                    <button type="button" className="btn btn-outline-secondary w-100 p-3 text-start rounded-3 h-100" onClick={() => setActiveSection('canned')}>
-                      <MessageSquare size={18} className="text-info mb-2" />
-                      <div className="fw-bold text-dark">New Canned Response</div>
-                      <small className="text-muted">Create /shortcuts for fast agent replies</small>
-                    </button>
-                  </div>
-                  <div className="col-md-4">
-                    <button type="button" className="btn btn-outline-secondary w-100 p-3 text-start rounded-3 h-100" onClick={() => setActiveSection('audit-log')}>
-                      <Clock size={18} className="text-warning mb-2" />
-                      <div className="fw-bold text-dark">View Security Audit Log</div>
-                      <small className="text-muted">Inspect staff logins and permission changes</small>
-                    </button>
-                  </div>
+                  {[
+                    { label: 'Profile & branding', description: 'Company details and your customer portal.', icon: Sliders, onClick: () => setActiveSection('branding') },
+                    { label: 'Support email', description: 'Add mailboxes and manage email forwarding.', icon: Mail, onClick: () => setActiveSection('emails') },
+                    { label: 'Security & access', description: 'Authentication, sessions, and data controls.', icon: ShieldCheck, onClick: () => setActiveSection('security') },
+                    { label: 'SLA & business hours', description: 'Resolution targets and assignment rules.', icon: Clock, onClick: () => setActiveSection('sla') },
+                    { label: 'Canned responses', description: 'Create reusable replies and shortcuts.', icon: MessageSquare, onClick: () => setActiveSection('canned') },
+                    { label: 'Audit log', description: 'Review and export administrator activity.', icon: FileText, onClick: () => setActiveSection('audit-log') },
+                  ].map(shortcut => {
+                    const Icon = shortcut.icon;
+                    return (
+                      <div key={shortcut.label} className="col-md-6">
+                        <button type="button" className="settings-shortcut btn border w-100 p-3 text-start rounded-3 h-100 d-flex align-items-start gap-3" onClick={shortcut.onClick} aria-controls={`${settingsId}-content`}>
+                          <Icon size={18} className="text-primary flex-shrink-0 mt-1" aria-hidden="true" />
+                          <span className="flex-grow-1">
+                            <span className="d-block fw-semibold text-dark mb-1">{shortcut.label}</span>
+                            <span className="d-block small text-secondary">{shortcut.description}</span>
+                          </span>
+                          <ArrowRight size={16} className="text-secondary flex-shrink-0 mt-1" aria-hidden="true" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -545,17 +516,16 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'branding' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Company Profile & Portal Branding</h5>
-                    <p className="text-secondary small mb-0">Configure your organization identity, support phone, portal theme, and custom domain</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Profile & branding</h2>
+                    <p className="text-secondary small mb-0">Manage your company details and customer portal.</p>
                   </div>
-                  <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">Screen 26</span>
                 </div>
 
                 <div className="row g-4 mb-4">
                   <div className="col-md-6">
-                    <label className="form-label small fw-bold text-dark">Company Display Name</label>
+                    <label className="form-label small fw-semibold text-dark">Company name</label>
                     <input
                       type="text"
                       className="form-control"
@@ -564,7 +534,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                     />
                   </div>
                   <div className="col-md-6">
-                    <label className="form-label small fw-bold text-dark">Legal Entity Name</label>
+                    <label className="form-label small fw-semibold text-dark">Legal name</label>
                     <input
                       type="text"
                       className="form-control"
@@ -591,7 +561,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                     />
                   </div>
                   <div className="col-12">
-                    <label className="form-label small fw-bold text-dark">Operating Business Hours Text</label>
+                    <label className="form-label small fw-semibold text-dark">Business hours</label>
                     <input
                       type="text"
                       className="form-control"
@@ -645,11 +615,11 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 </div>
 
                 {/* Custom Domain Setup Card */}
-                <div className="border rounded-4 p-4 bg-light mb-4 shadow-xs">
-                  <div className="d-flex align-items-center justify-content-between mb-3">
+                <div className="border rounded-3 p-3 p-md-4 bg-light mb-4">
+                  <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
                     <div>
-                      <h6 className="fw-bold mb-0 text-dark">Custom CNAME & SSL Domain Setup</h6>
-                      <small className="text-muted">Serve your customer support portal on your custom branded URL</small>
+                      <h3 className="h6 fw-semibold mb-1 text-dark">Custom domain</h3>
+                      <small className="text-muted">Use your own domain for the customer portal.</small>
                     </div>
                     <span className="badge bg-success text-white px-2.5 py-1">Auto SSL Enabled</span>
                   </div>
@@ -712,23 +682,23 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'emails' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Support Email Addresses & Mailbox Ingestion</h5>
-                    <p className="text-secondary small mb-0">Connect inbound mailboxes and configure forwarding rules so customer emails automatically become tickets</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Support email</h2>
+                    <p className="text-secondary small mb-0">Connect mailboxes so customer emails become tickets.</p>
                   </div>
                   <button
                     type="button"
-                    className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-bold shadow-xs"
+                    className="btn btn-sm btn-primary d-flex align-items-center gap-2 px-3 py-2 rounded-3 fw-semibold"
                     onClick={() => setShowAddMailboxModal(true)}
                   >
-                    <Plus size={15} />
-                    <span>+ Add Support Email</span>
+                    <Plus size={15} aria-hidden="true" />
+                    <span>Add mailbox</span>
                   </button>
                 </div>
 
                 {/* Mailboxes Directory Table */}
-                <div className="table-responsive border rounded-3 mb-4 bg-white shadow-xs">
+                <div className="table-responsive border rounded-3 mb-4 bg-white">
                   <table className="table table-hover align-middle mb-0">
                     <thead className="table-light small">
                       <tr>
@@ -785,7 +755,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                           <td className="text-end">
                             <button
                               type="button"
-                              className="btn btn-sm btn-outline-danger p-1.5 rounded-2"
+                              className="btn btn-sm btn-outline-danger p-2 rounded-3"
                               onClick={() => handleDeleteMailbox(mbox.id)}
                               title="Delete Mailbox"
                             >
@@ -799,20 +769,20 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 </div>
 
                 {/* Domain Authentication Guidance */}
-                <div className="border rounded-4 p-4 bg-light shadow-xs mb-4">
-                  <div className="d-flex justify-content-between align-items-center mb-3">
+                <div className="border rounded-3 p-3 p-md-4 bg-light mb-4">
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
                     <div>
-                      <h6 className="fw-bold mb-0 text-dark">Domain Authentication & Deliverability (SPF / DKIM / DMARC)</h6>
-                      <small className="text-muted">Ensure your outgoing support replies never land in customer spam folders</small>
+                      <h3 className="h6 fw-semibold mb-1 text-dark">Email authentication</h3>
+                      <small className="text-muted">Review SPF, DKIM, and DMARC for your support domain.</small>
                     </div>
                     <button
                       type="button"
-                      className="btn btn-sm btn-outline-success fw-bold d-flex align-items-center gap-1.5 px-3 rounded-pill"
+                      className="btn btn-sm btn-outline-secondary fw-semibold d-flex align-items-center gap-2 px-3 rounded-3"
                       onClick={handleSendTestEmail}
                       disabled={isSendingTestEmail}
                     >
                       <Send size={14} />
-                      <span>{isSendingTestEmail ? 'Sending Test...' : 'Send Live Test Email'}</span>
+                      <span>{isSendingTestEmail ? 'Sending test...' : 'Send test email'}</span>
                     </button>
                   </div>
 
@@ -857,16 +827,15 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'sla' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">SLA Policies & Business Hours</h5>
-                    <p className="text-secondary small mb-0">Set first-response targets, resolution countdowns, timer pause rules, and automatic assignment</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">SLA & business hours</h2>
+                    <p className="text-secondary small mb-0">Set resolution targets and ticket assignment rules.</p>
                   </div>
-                  <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">Screen 34</span>
                 </div>
 
-                <div className="card p-4 border rounded-4 bg-light mb-4 shadow-xs">
-                  <h6 className="fw-bold text-dark mb-3">Priority Turnaround Targets (Resolution Deadlines)</h6>
+                <div className="card p-3 p-md-4 border rounded-3 bg-light mb-4">
+                  <h3 className="h6 fw-semibold text-dark mb-3">Resolution targets</h3>
                   <div className="row g-3">
                     <div className="col-md-3">
                       <label className="form-label small fw-bold text-danger">Urgent Priority Target</label>
@@ -919,8 +888,8 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   </div>
                 </div>
 
-                <div className="card p-4 border rounded-4 bg-white mb-4 shadow-xs">
-                  <h6 className="fw-bold text-dark mb-3">Timer Automation & Escalation Safeguards</h6>
+                <div className="card p-3 p-md-4 border rounded-3 bg-white mb-4">
+                  <h3 className="h6 fw-semibold text-dark mb-3">Assignment & reminders</h3>
                   <div className="d-flex flex-column gap-3">
                     <div className="form-check form-switch">
                       <input
@@ -931,9 +900,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                         id="autoAssignCheck"
                       />
                       <label className="form-check-label fw-semibold text-dark" htmlFor="autoAssignCheck">
-                        Round-Robin Auto-Assignment across available agents
+                        Round-robin assignment
                       </label>
-                      <small className="d-block text-muted">Automatically distributes unassigned inbound tickets equally among active on-duty staff</small>
+                      <small className="d-block text-muted">Distribute new tickets among available agents.</small>
                     </div>
 
                     <div className="form-check form-switch">
@@ -945,9 +914,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                         id="pauseOnHoldCheck"
                       />
                       <label className="form-check-label fw-semibold text-dark" htmlFor="pauseOnHoldCheck">
-                        Pause SLA countdown timers when ticket status is 'Waiting on Customer' or 'On Hold'
+                        Pause timers while waiting
                       </label>
-                      <small className="d-block text-muted">Stops the SLA breach clock while waiting for additional information from the requester</small>
+                      <small className="d-block text-muted">Pause SLA timers for tickets marked 'Waiting on Customer' or 'On Hold'.</small>
                     </div>
 
                     <div className="form-check form-switch">
@@ -959,9 +928,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                         id="reminderCheck"
                       />
                       <label className="form-check-label fw-semibold text-dark" htmlFor="reminderCheck">
-                        Send early escalation alerts at 75% and 90% SLA threshold
+                        Send SLA reminders
                       </label>
-                      <small className="d-block text-muted">Notifies team leaders and assignees before an SLA threshold breach occurs</small>
+                      <small className="d-block text-muted">Notify team leaders and assignees at 75% and 90% of the SLA target.</small>
                     </div>
                   </div>
                 </div>
@@ -973,15 +942,14 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'csat' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Customer Satisfaction Survey (CSAT)</h5>
-                    <p className="text-secondary small mb-0">Automate feedback collection when tickets are resolved and track service quality</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Customer satisfaction</h2>
+                    <p className="text-secondary small mb-0">Collect feedback after tickets are resolved.</p>
                   </div>
-                  <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">Screen 36</span>
                 </div>
 
-                <div className="card p-4 border rounded-4 bg-light mb-4 shadow-xs">
+                <div className="card p-3 p-md-4 border rounded-3 bg-light mb-4">
                   <div className="form-check form-switch mb-3">
                     <input
                       className="form-check-input"
@@ -991,25 +959,25 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       id="csatToggle"
                     />
                     <label className="form-check-label fw-bold text-dark" htmlFor="csatToggle">
-                      Enable CSAT Surveys on Ticket Resolution
+                      Send surveys after resolution
                     </label>
                   </div>
 
                   <div className="row g-3">
                     <div className="col-md-6">
-                      <label className="form-label small fw-bold text-dark">Survey Scale Rating Format</label>
+                      <label className="form-label small fw-semibold text-dark">Rating format</label>
                       <select
                         className="form-select"
                         value={settings.csat.surveyType}
                         onChange={e => handleFieldChange('csat', 'surveyType', e.target.value)}
                       >
-                        <option value="STARS_5">⭐⭐⭐⭐⭐ 1 to 5 Stars Scale</option>
-                        <option value="EMOJI_5">😍 😃 😐 🙁 😡 5-Point Emoji Scale</option>
-                        <option value="THUMBS">👍 Thumbs Up / 👎 Thumbs Down (Binary)</option>
+                        <option value="STARS_5">5-star rating</option>
+                        <option value="EMOJI_5">5-point emoji rating</option>
+                        <option value="THUMBS">Thumbs up / thumbs down</option>
                       </select>
                     </div>
                     <div className="col-md-6">
-                      <label className="form-label small fw-bold text-dark">Send Delay Window</label>
+                      <label className="form-label small fw-semibold text-dark">Send survey</label>
                       <select
                         className="form-select"
                         value={settings.csat.sendTimingHours}
@@ -1021,7 +989,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       </select>
                     </div>
                     <div className="col-12">
-                      <label className="form-label small fw-bold text-dark">Primary CSAT Question Prompt</label>
+                      <label className="form-label small fw-semibold text-dark">Survey question</label>
                       <input
                         type="text"
                         className="form-control"
@@ -1030,7 +998,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       />
                     </div>
                     <div className="col-12">
-                      <label className="form-label small fw-bold text-dark">Low-Score Remediation Follow-up Question</label>
+                      <label className="form-label small fw-semibold text-dark">Follow-up question for low ratings</label>
                       <input
                         type="text"
                         className="form-control"
@@ -1048,19 +1016,18 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'security' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Security Policies & Access Controls</h5>
-                    <p className="text-secondary small mb-0">Enforce multi-factor authentication, session timeouts, IP allowlists, and GDPR/DPDPA data controls</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Security & access</h2>
+                    <p className="text-secondary small mb-0">Manage authentication, sessions, and allowed IP addresses.</p>
                   </div>
-                  <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">Screen 38a</span>
                 </div>
 
-                <div className="card p-4 border rounded-4 bg-light mb-4 shadow-xs">
-                  <h6 className="fw-bold text-dark mb-3">Authentication Policies</h6>
+                <div className="card p-3 p-md-4 border rounded-3 bg-light mb-4">
+                  <h3 className="h6 fw-semibold text-dark mb-3">Authentication</h3>
                   <div className="row g-3 mb-3">
                     <div className="col-md-6">
-                      <label className="form-label small fw-bold text-dark">Two-Factor Authentication (2FA) Requirement</label>
+                      <label className="form-label small fw-semibold text-dark">Two-factor authentication</label>
                       <select
                         className="form-select"
                         value={settings.security.twoFactorPolicy}
@@ -1072,7 +1039,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       </select>
                     </div>
                     <div className="col-md-6">
-                      <label className="form-label small fw-bold text-dark">Session Inactivity Timeout</label>
+                      <label className="form-label small fw-semibold text-dark">Session timeout</label>
                       <select
                         className="form-select"
                         value={settings.security.sessionTimeoutMinutes}
@@ -1085,7 +1052,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       </select>
                     </div>
                     <div className="col-12">
-                      <label className="form-label small fw-bold text-dark">Staff IP Address Allowlist (CIDR / Comma-separated)</label>
+                      <label className="form-label small fw-semibold text-dark">Allowed IP addresses</label>
                       <input
                         type="text"
                         className="form-control font-monospace"
@@ -1093,19 +1060,19 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                         value={settings.security.ipAllowlist}
                         onChange={e => handleFieldChange('security', 'ipAllowlist', e.target.value)}
                       />
-                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>Restricts staff workspace access exclusively to corporate office IPs or VPN tunnels</small>
+                      <small className="text-muted">Enter comma-separated IP addresses or CIDR ranges to restrict staff access.</small>
                     </div>
                   </div>
                 </div>
 
                 {/* Sensitive Operations Section */}
-                <div className="border border-danger-subtle rounded-4 p-4 bg-danger-subtle bg-opacity-10 mb-4 shadow-xs">
+                <div className="border border-danger-subtle rounded-3 p-3 p-md-4 bg-white mb-4">
                   <div className="d-flex align-items-center gap-2 mb-2 text-danger">
                     <AlertTriangle size={18} />
-                    <h6 className="fw-bold mb-0">Sensitive Actions & Workspace Governance</h6>
+                    <h3 className="h6 fw-semibold mb-0">Sensitive actions</h3>
                   </div>
                   <p className="text-muted small mb-3">
-                    High-security actions require explicit administrator re-authentication and are irrevocably written to the immutable audit log.
+                    Confirm your administrator password before exporting data or deleting this workspace.
                   </p>
                   <div className="d-flex flex-wrap gap-2">
                     <button
@@ -1114,7 +1081,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       onClick={handleExportWorkspace}
                     >
                       <Download size={14} />
-                      <span>Export All Company Data (GDPR/DPDPA)</span>
+                      <span>Export workspace data</span>
                     </button>
                     <button
                       type="button"
@@ -1124,7 +1091,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       })}
                     >
                       <Trash2 size={14} />
-                      <span>Delete Workspace & Purge Data</span>
+                      <span>Delete workspace</span>
                     </button>
                   </div>
                 </div>
@@ -1136,14 +1103,14 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'audit-log' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Security Audit Log (Append-Only)</h5>
-                    <p className="text-secondary small mb-0">Immutable compliance record of all administrative logins, permission changes, and security events</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Audit log</h2>
+                    <p className="text-secondary small mb-0">Review administrator activity and export the log.</p>
                   </div>
                   <button
                     type="button"
-                    className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1.5 px-3 rounded-pill fw-semibold"
+                    className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2 px-3 rounded-3 fw-semibold"
                     onClick={() => {
                       const csv = 'Time,Action,Email,IP,Details\n' + auditLogs.map(l => `"${l.createdAt}","${l.action}","${l.email}","${l.ipAddress}","${l.details}"`).join('\n');
                       const blob = new Blob([csv], { type: 'text/csv' });
@@ -1160,11 +1127,11 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   </button>
                 </div>
 
-                <div className="table-responsive border rounded-3 bg-white shadow-xs">
+                <div className="table-responsive border rounded-3 bg-white">
                   <table className="table table-hover align-middle mb-0 small">
                     <thead className="table-light">
                       <tr>
-                        <th>Timestamp (IST)</th>
+                        <th>Timestamp</th>
                         <th>Action</th>
                         <th>User</th>
                         <th>IP Address</th>
@@ -1198,32 +1165,32 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'canned' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Canned Responses & Quick Macros</h5>
-                    <p className="text-secondary small mb-0">Pre-approved response templates and keyboard shortcuts (/shortcut) for agents</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Canned responses</h2>
+                    <p className="text-secondary small mb-0">Reusable replies and shortcuts for your agents.</p>
                   </div>
                   <button
                     type="button"
-                    className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-bold shadow-xs"
+                    className="btn btn-sm btn-primary d-flex align-items-center gap-2 px-3 py-2 rounded-3 fw-semibold"
                     onClick={() => setShowAddCannedModal(true)}
                   >
-                    <Plus size={15} />
-                    <span>+ New Canned Response</span>
+                    <Plus size={15} aria-hidden="true" />
+                    <span>New response</span>
                   </button>
                 </div>
 
                 <div className="row g-3">
                   {cannedResponses.map((item, idx) => (
                     <div key={item.id || idx} className="col-md-6">
-                      <div className="p-3 border rounded-3 bg-white shadow-xs h-100 d-flex flex-column justify-content-between">
+                      <div className="p-3 border rounded-3 bg-white h-100 d-flex flex-column justify-content-between">
                         <div>
                           <div className="d-flex align-items-center justify-content-between mb-2">
                             <span className="badge bg-primary text-white font-monospace">{item.shortcut}</span>
                             <span className="badge bg-light text-secondary border">Shared Template</span>
                           </div>
                           <h6 className="fw-bold mb-1.5 text-dark">{item.title}</h6>
-                          <p className="text-muted small mb-3 text-truncate" style={{ maxHeight: '42px', overflow: 'hidden' }}>
+                          <p className="text-muted small mb-3 text-truncate" title={item.content}>
                             {item.content}
                           </p>
                         </div>
@@ -1232,6 +1199,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                           <button
                             type="button"
                             className="btn btn-sm btn-outline-danger p-1 border-0"
+                            aria-label={`Delete response: ${item.title}`}
                             onClick={async () => {
                               await apiService.deleteCannedResponse(item.id);
                               setCannedResponses(prev => prev.filter(c => c.id !== item.id));
@@ -1253,28 +1221,28 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'automation' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Workflow Automation Rules</h5>
-                    <p className="text-secondary small mb-0">Automate repetitive routing, tagging, auto-closing, and SLA escalations</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Automation rules</h2>
+                    <p className="text-secondary small mb-0">Review routing, tagging, and escalation rules.</p>
                   </div>
                 </div>
 
                 <div className="d-flex flex-column gap-3">
                   {automationRules.map((rule, idx) => (
-                    <div key={rule.id || idx} className="p-3.5 border rounded-3 bg-white shadow-xs d-flex align-items-center justify-content-between">
+                    <div key={rule.id || idx} className="p-3 border rounded-3 bg-white d-flex flex-wrap align-items-center justify-content-between gap-3">
                       <div className="d-flex align-items-start gap-3">
                         <div className="p-2 rounded-3 bg-primary-subtle text-primary mt-1">
                           <Zap size={18} />
                         </div>
                         <div>
-                          <div className="d-flex align-items-center gap-2 mb-1">
+                          <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
                             <h6 className="fw-bold mb-0 text-dark">{rule.name}</h6>
                             <span className="badge bg-secondary-subtle text-secondary" style={{ fontSize: '0.65rem' }}>
                               Trigger: {rule.eventTrigger}
                             </span>
                           </div>
-                          <div className="small text-muted d-flex align-items-center gap-3">
+                          <div className="small text-muted d-flex flex-wrap align-items-center gap-3 text-break">
                             <span>Condition: <code>{rule.conditionJson || 'All tickets'}</code></span>
                             <span>Action: <code>{rule.actionJson || 'Routing'}</code></span>
                           </div>
@@ -1282,7 +1250,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                       </div>
                       <div className="d-flex align-items-center gap-3">
                         <span className="badge bg-success-subtle text-success">Active</span>
-                        <button type="button" className="btn btn-sm btn-outline-secondary p-1.5 rounded-2">
+                        <button type="button" className="btn btn-sm btn-outline-secondary p-2 rounded-3" aria-label="Edit rule (unavailable)" title="Rule editing is not available in this view" disabled>
                           <Edit3 size={14} />
                         </button>
                       </div>
@@ -1297,49 +1265,48 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                 -------------------------------------------------------------- */}
             {activeSection === 'billing' && (
               <div className="animate-fade-in">
-                <div className="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+                <div className="settings-section-header d-flex flex-wrap justify-content-between align-items-start gap-3 pb-3 mb-4 border-bottom">
                   <div>
-                    <h5 className="fw-bolder mb-1 text-dark">Subscription & Billing Management</h5>
-                    <p className="text-secondary small mb-0">Manage plan tier, agent seat limits, invoices, and payment methods</p>
+                    <h2 className="h5 fw-semibold mb-1 text-dark">Subscription & billing</h2>
+                    <p className="text-secondary small mb-0">Review your plan, agent seats, and invoices.</p>
                   </div>
-                  <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">Screen 37</span>
                 </div>
 
-                <div className="card p-4 border rounded-4 bg-primary text-white mb-4 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)' }}>
-                  <div className="d-flex justify-content-between align-items-start mb-3">
+                <div className="card p-3 p-md-4 border rounded-3 bg-white mb-4">
+                  <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
                     <div>
-                      <span className="badge bg-warning text-dark fw-bold mb-2">Current Subscription</span>
-                      <h3 className="fw-bolder mb-1 text-white">{settings.billing.planTier} PLAN</h3>
-                      <p className="text-light opacity-75 small mb-0">Billed annually • Renewal scheduled for November 3, 2027</p>
+                      <span className="small text-secondary d-block mb-2">Current subscription</span>
+                      <h3 className="h4 fw-semibold mb-1 text-dark">{settings.billing.planTier}</h3>
+                      <p className="text-secondary small mb-0">Billed annually. Renews November 3, 2027.</p>
                     </div>
                     <div className="text-end">
-                      <h4 className="fw-bolder text-white mb-0">₹14,999 / mo</h4>
-                      <small className="text-light opacity-75">Billed ₹1,79,988/yr</small>
+                      <p className="h5 fw-semibold text-dark mb-0">₹14,999 / mo</p>
+                      <small className="text-secondary">Billed ₹1,79,988/yr</small>
                     </div>
                   </div>
 
-                  <div className="row g-3 pt-3 border-top border-secondary">
+                  <div className="row g-3 pt-3 border-top">
                     <div className="col-md-3">
-                      <small className="text-light opacity-75 d-block">Agent Seats Used</small>
-                      <span className="h6 fw-bold text-white mb-0">{agentsList.length} of {settings.billing.maxAgents} Seats</span>
+                      <small className="text-secondary d-block mb-1">Agent seats</small>
+                      <span className="h6 fw-semibold text-dark mb-0">{agentsList.length} of {settings.billing.maxAgents}</span>
                     </div>
                     <div className="col-md-3">
-                      <small className="text-light opacity-75 d-block">Monthly Ticket Cap</small>
-                      <span className="h6 fw-bold text-white mb-0">Unlimited / Fair Use</span>
+                      <small className="text-secondary d-block mb-1">Monthly ticket cap</small>
+                      <span className="h6 fw-semibold text-dark mb-0">Unlimited / Fair use</span>
                     </div>
                     <div className="col-md-3">
-                      <small className="text-light opacity-75 d-block">Cloud Storage</small>
-                      <span className="h6 fw-bold text-white mb-0">24.5 GB of 250 GB</span>
+                      <small className="text-secondary d-block mb-1">Cloud storage</small>
+                      <span className="h6 fw-semibold text-dark mb-0">24.5 GB of 250 GB</span>
                     </div>
                     <div className="col-md-3">
-                      <small className="text-light opacity-75 d-block">Active Automation Rules</small>
-                      <span className="h6 fw-bold text-white mb-0">{automationRules.length} Rules Active</span>
+                      <small className="text-secondary d-block mb-1">Automation rules</small>
+                      <span className="h6 fw-semibold text-dark mb-0">{automationRules.length}</span>
                     </div>
                   </div>
                 </div>
 
-                <h6 className="fw-bold text-dark mb-3">Recent Invoices & Receipts</h6>
-                <div className="table-responsive border rounded-3 bg-white shadow-xs">
+                <h3 className="h6 fw-semibold text-dark mb-3">Recent invoices</h3>
+                <div className="table-responsive border rounded-3 bg-white">
                   <table className="table table-hover align-middle mb-0 small">
                     <thead className="table-light">
                       <tr>
@@ -1373,13 +1340,13 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
             {/* Default fallback for other sections */}
             {!['home', 'branding', 'emails', 'sla', 'csat', 'security', 'audit-log', 'canned', 'automation', 'billing'].includes(activeSection) && (
               <div className="animate-fade-in p-4 text-center">
-                <div className="p-3 rounded-circle bg-light d-inline-flex mb-3">
-                  <Sliders size={28} className="text-primary" />
+                <div className="p-3 rounded-3 bg-light d-inline-flex mb-3">
+                  <Sliders size={28} className="text-primary" aria-hidden="true" />
                 </div>
-                <h5 className="fw-bold text-dark mb-1">Configuration Section: {activeSection.toUpperCase()}</h5>
-                <p className="text-secondary small mb-4">Module initialized and connected to multi-tenant policy engine.</p>
-                <button type="button" className="btn btn-sm btn-primary px-3 rounded-pill" onClick={() => setActiveSection('home')}>
-                  Return to Settings Home
+                <h2 className="h5 fw-semibold text-dark mb-2">{activeSectionLabel}</h2>
+                <p className="text-secondary small mb-4">This section does not have configurable options in this console yet.</p>
+                <button type="button" className="btn btn-sm btn-outline-secondary px-3 rounded-3" onClick={() => setActiveSection('home')}>
+                  Back to overview
                 </button>
               </div>
             )}
@@ -1388,35 +1355,35 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
           {/* ====================================================================
               UNIVERSAL STICKY FOOTER (SAVE CHANGES / DISCARD)
               ==================================================================== */}
-          <div className="p-3.5 border-top bg-light d-flex align-items-center justify-content-between px-4">
-            <div className="d-flex align-items-center gap-2">
+          <div className="settings-savebar p-3 px-md-4 border-top bg-white d-flex flex-wrap align-items-center justify-content-between gap-3">
+            <div className="d-flex align-items-center gap-2" role="status" aria-live="polite">
               {hasChanges ? (
-                <span className="badge bg-warning text-dark d-flex align-items-center gap-1">
-                  <AlertCircle size={12} /> Unsaved changes in {activeSection}
+                <span className="small text-dark d-flex align-items-center gap-2">
+                  <AlertCircle size={14} className="text-warning" aria-hidden="true" /> Unsaved changes
                 </span>
               ) : (
                 <span className="text-muted small d-flex align-items-center gap-1">
-                  <CheckCircle2 size={13} className="text-success" /> All settings synchronized
+                  <CheckCircle2 size={14} aria-hidden="true" /> No pending changes
                 </span>
               )}
             </div>
-            <div className="d-flex align-items-center gap-2">
+            <div className="d-flex flex-wrap align-items-center gap-2">
               <button
                 type="button"
                 className="btn btn-sm btn-outline-secondary px-3 rounded-3"
                 onClick={() => loadAllSettings()}
                 disabled={isSaving}
               >
-                Discard Changes
+                Discard changes
               </button>
               <button
                 type="button"
-                className="btn btn-sm btn-primary px-4 rounded-3 fw-bold d-flex align-items-center gap-1.5 shadow-xs"
+                className="btn btn-sm btn-primary px-3 rounded-3 fw-semibold d-flex align-items-center gap-2"
                 onClick={saveSettingsToServer}
                 disabled={isSaving}
               >
                 {isSaving ? <RefreshCw size={14} className="spin-anim" /> : <Check size={14} />}
-                <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
+                <span>{isSaving ? 'Saving...' : 'Save changes'}</span>
               </button>
             </div>
           </div>
@@ -1427,33 +1394,34 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
           RE-AUTHENTICATION SECURITY MODAL (SCREEN 25-39 SECURITY REQUIREMENT)
           ==================================================================== */}
       {showReauthModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', zIndex: 1080 }} tabIndex={-1}>
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(23, 43, 77, 0.4)', zIndex: 1080 }} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-reauth-title`}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '440px' }}>
-            <div className="modal-content rounded-4 border-0 shadow-lg">
+            <div className="modal-content rounded-3 border">
               <div className="modal-header border-bottom pb-2">
                 <div className="d-flex align-items-center gap-2 text-danger">
-                  <Lock size={18} />
-                  <h6 className="modal-title fw-bold text-dark">Security Re-Authentication Required</h6>
+                  <Lock size={18} aria-hidden="true" />
+                  <h2 id={`${settingsId}-reauth-title`} className="modal-title h6 fw-semibold text-dark">Confirm your password</h2>
                 </div>
-                <button type="button" className="btn-close" onClick={() => setShowReauthModal(false)} />
+                <button type="button" className="btn-close" aria-label="Cancel password confirmation" onClick={() => setShowReauthModal(false)} />
               </div>
               <div className="modal-body py-3">
                 <p className="small text-secondary mb-3">
-                  You are performing a restricted action: <strong>{sensitiveActionLabel}</strong>.
-                  <br />Please confirm your administrator password to proceed.
+                  Enter your administrator password to continue with <strong>{sensitiveActionLabel}</strong>.
                 </p>
-                {reauthError && <div className="alert alert-danger py-2 px-3 small rounded-3">{reauthError}</div>}
+                {reauthError && <div id={`${settingsId}-reauth-error`} className="alert alert-danger py-2 px-3 small rounded-3" role="alert">{reauthError}</div>}
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Administrator Password</label>
+                  <label htmlFor={`${settingsId}-reauth-password`} className="form-label small fw-semibold text-dark">Administrator password</label>
                   <input
+                    id={`${settingsId}-reauth-password`}
                     type="password"
                     className="form-control rounded-3"
-                    placeholder="Enter password..."
+                    autoComplete="current-password"
                     value={reauthPassword}
                     onChange={e => setReauthPassword(e.target.value)}
+                    aria-invalid={Boolean(reauthError)}
+                    aria-describedby={reauthError ? `${settingsId}-reauth-error` : undefined}
                     autoFocus
                   />
-                  <small className="text-muted" style={{ fontSize: '0.72rem' }}>Dev default: <code>Password@123</code></small>
                 </div>
               </div>
               <div className="modal-footer border-top pt-2">
@@ -1461,7 +1429,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   Cancel
                 </button>
                 <button type="button" className="btn btn-sm btn-danger fw-bold px-3 rounded-3" onClick={confirmReauth}>
-                  Verify & Proceed
+                  Confirm and continue
                 </button>
               </div>
             </div>
@@ -1471,20 +1439,21 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
 
       {/* Add Support Mailbox Modal */}
       {showAddMailboxModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', zIndex: 1080 }} tabIndex={-1}>
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(23, 43, 77, 0.4)', zIndex: 1080 }} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-mailbox-title`}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '480px' }}>
-            <div className="modal-content rounded-4 border-0 shadow-lg">
+            <div className="modal-content rounded-3 border">
               <div className="modal-header border-bottom pb-2">
                 <div className="d-flex align-items-center gap-2">
-                  <Mail size={18} className="text-primary" />
-                  <h6 className="modal-title fw-bold text-dark">Connect Support Email Address</h6>
+                  <Mail size={18} className="text-primary" aria-hidden="true" />
+                  <h2 id={`${settingsId}-mailbox-title`} className="modal-title h6 fw-semibold text-dark">Add support mailbox</h2>
                 </div>
-                <button type="button" className="btn-close" onClick={() => setShowAddMailboxModal(false)} />
+                <button type="button" className="btn-close" aria-label="Close mailbox form" onClick={() => setShowAddMailboxModal(false)} />
               </div>
               <div className="modal-body py-3">
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Mailbox Display Name</label>
+                  <label htmlFor={`${settingsId}-mailbox-name`} className="form-label small fw-semibold text-dark">Mailbox name</label>
                   <input
+                    id={`${settingsId}-mailbox-name`}
                     type="text"
                     className="form-control"
                     placeholder="e.g. Acme Customer Care"
@@ -1493,8 +1462,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   />
                 </div>
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Support Email Address</label>
+                  <label htmlFor={`${settingsId}-mailbox-email`} className="form-label small fw-semibold text-dark">Support email address</label>
                   <input
+                    id={`${settingsId}-mailbox-email`}
                     type="email"
                     className="form-control"
                     placeholder="support@yourcompany.com"
@@ -1503,15 +1473,16 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   />
                 </div>
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Connection Mechanism</label>
+                  <label htmlFor={`${settingsId}-mailbox-provider`} className="form-label small fw-semibold text-dark">Connection type</label>
                   <select
+                    id={`${settingsId}-mailbox-provider`}
                     className="form-select"
                     value={newMailbox.providerType}
                     onChange={e => setNewMailbox({ ...newMailbox, providerType: e.target.value })}
                   >
-                    <option value="FORWARDING">Option A: Email Forwarding (Gmail, Outlook, Zoho)</option>
-                    <option value="MICROSOFT_365">Option B: Microsoft 365 Exchange Online (OAuth Graph API)</option>
-                    <option value="GOOGLE_WORKSPACE">Option B: Google Workspace (OAuth IMAP/SMTP)</option>
+                    <option value="FORWARDING">Email forwarding (Gmail, Outlook, Zoho)</option>
+                    <option value="MICROSOFT_365">Microsoft 365</option>
+                    <option value="GOOGLE_WORKSPACE">Google Workspace</option>
                   </select>
                 </div>
               </div>
@@ -1520,7 +1491,7 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   Cancel
                 </button>
                 <button type="button" className="btn btn-sm btn-primary fw-bold px-3 rounded-3" onClick={handleCreateMailbox}>
-                  Connect Mailbox
+                  Add mailbox
                 </button>
               </div>
             </div>
@@ -1530,20 +1501,21 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
 
       {/* Add Canned Response Modal */}
       {showAddCannedModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', zIndex: 1080 }} tabIndex={-1}>
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(23, 43, 77, 0.4)', zIndex: 1080 }} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-canned-title`}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '500px' }}>
-            <div className="modal-content rounded-4 border-0 shadow-lg">
+            <div className="modal-content rounded-3 border">
               <div className="modal-header border-bottom pb-2">
                 <div className="d-flex align-items-center gap-2">
-                  <MessageSquare size={18} className="text-primary" />
-                  <h6 className="modal-title fw-bold text-dark">New Canned Response</h6>
+                  <MessageSquare size={18} className="text-primary" aria-hidden="true" />
+                  <h2 id={`${settingsId}-canned-title`} className="modal-title h6 fw-semibold text-dark">New canned response</h2>
                 </div>
-                <button type="button" className="btn-close" onClick={() => setShowAddCannedModal(false)} />
+                <button type="button" className="btn-close" aria-label="Close response form" onClick={() => setShowAddCannedModal(false)} />
               </div>
               <div className="modal-body py-3">
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Title</label>
+                  <label htmlFor={`${settingsId}-canned-name`} className="form-label small fw-semibold text-dark">Title</label>
                   <input
+                    id={`${settingsId}-canned-name`}
                     type="text"
                     className="form-control"
                     placeholder="e.g. KYC Approval Notice"
@@ -1552,8 +1524,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   />
                 </div>
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Shortcut (Type in reply box)</label>
+                  <label htmlFor={`${settingsId}-canned-shortcut`} className="form-label small fw-semibold text-dark">Reply shortcut</label>
                   <input
+                    id={`${settingsId}-canned-shortcut`}
                     type="text"
                     className="form-control font-monospace"
                     placeholder="e.g. /kyc-approved"
@@ -1562,8 +1535,9 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                   />
                 </div>
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Response Text Content</label>
+                  <label htmlFor={`${settingsId}-canned-content`} className="form-label small fw-semibold text-dark">Response</label>
                   <textarea
+                    id={`${settingsId}-canned-content`}
                     rows={4}
                     className="form-control"
                     placeholder="Hello {{customer.name}}, we have reviewed your documents..."
@@ -1588,13 +1562,13 @@ export const AdminSettingsConsole: React.FC<AdminSettingsConsoleProps> = ({
                     onShowToast('Canned response saved.');
                   }}
                 >
-                  Save Canned Macro
+                  Save response
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 };

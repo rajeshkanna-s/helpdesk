@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Inbox, Send, Lock, Mail, CheckCircle2, AlertCircle, Clock,
   Building2, RefreshCw, Plus, BarChart3, Sparkles,
   LogOut, FileSpreadsheet, Users, Search, ChevronRight, ArrowLeft,
   BookOpen, Zap, Play, Pause, RotateCcw, SlidersHorizontal,
   Paperclip, FileText, Image as ImageIcon, Download, Eye, File, X,
-  CreditCard, Globe, ExternalLink, Bell, UserPlus, Settings
+  CreditCard, Globe, ExternalLink, Bell, UserPlus, Settings,
+  Menu, Headphones, ChevronDown, ChevronLeft, MoreHorizontal, ArrowUpDown, PanelRight, MessageSquare
 } from 'lucide-react';
 import { apiService, setApiTenantId } from '../services/api';
 import type {
@@ -91,6 +92,18 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('tickets');
   const [agentPresence, setAgentPresence] = useState<'ONLINE' | 'BUSY' | 'AWAY'>('ONLINE');
+  const [isNavigationOpen, setIsNavigationOpen] = useState(false);
+  const [showMobileTicket, setShowMobileTicket] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  const toolsMenuRef = useRef<HTMLDetailsElement>(null);
+  const newTicketDialogRef = useRef<HTMLDialogElement>(null);
+  const propertiesRef = useRef<HTMLElement>(null);
+  const loadedCompanyRef = useRef<number | null>(null);
+  const workspaceRequestRef = useRef(0);
+  const ticketRequestRef = useRef(0);
 
   // Stats & Tickets
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -100,7 +113,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [viewFilter, setViewFilter] = useState<string>('ALL');
   const [ticketSearch, setTicketSearch] = useState<string>('');
   const [deptFilter, setDeptFilter] = useState<number | null>(null);
-  const [sortBy, setSortBy] = useState<'lastMessageAt' | 'createdAt' | 'priority'>('lastMessageAt');
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'priority'>('newest');
+  const [priorityFilter, setPriorityFilter] = useState<Ticket['priority'] | 'ALL'>('ALL');
+  const [ticketPage, setTicketPage] = useState(0);
+  const [ticketPageInfo, setTicketPageInfo] = useState({ number: 0, size: 25, totalElements: 0, totalPages: 0 });
+  const [ticketCounts, setTicketCounts] = useState<Record<string, number>>({});
 
   // Department & Agents
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -120,7 +137,9 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [showScenarioMenu, setShowScenarioMenu] = useState(false);
 
   // Right Context & Properties Drawer
-  const [showPropertiesDrawer, setShowPropertiesDrawer] = useState(true);
+  const [showPropertiesDrawer, setShowPropertiesDrawer] = useState(() => window.matchMedia('(min-width: 1400px)').matches);
+  const [isWideDetailsLayout, setIsWideDetailsLayout] = useState(() => window.matchMedia('(min-width: 1400px)').matches);
+  const isDetailsOverlay = showPropertiesDrawer && !isWideDetailsLayout && activeTab === 'tickets';
 
   // Time Tracker State
   const [timerRunning, setTimerRunning] = useState(false);
@@ -205,9 +224,89 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   useEffect(() => {
     if (activeCompany) {
       setApiTenantId(activeCompany.id);
-      loadCompanyData(activeCompany.id);
+      const companyChanged = loadedCompanyRef.current !== activeCompany.id;
+      loadedCompanyRef.current = activeCompany.id;
+      loadCompanyData(activeCompany.id, companyChanged, !companyChanged);
     }
-  }, [activeCompany, viewFilter, deptFilter, sortBy]);
+  }, [activeCompany, viewFilter, ticketPage, sortBy]);
+
+  useEffect(() => {
+    if (!showNewTicketModal) return;
+    const dialog = newTicketDialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, [showNewTicketModal]);
+
+  useEffect(() => {
+    if (!isDetailsOverlay) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    propertiesRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => { if (previousFocus?.isConnected) previousFocus.focus(); };
+  }, [isDetailsOverlay]);
+
+  useEffect(() => {
+    const closePopovers = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsNavigationOpen(false);
+        setShowNotifDropdown(false);
+        setShowScenarioMenu(false);
+        setShowFilters(false);
+        setShowPropertiesDrawer(false);
+        toolsMenuRef.current?.removeAttribute('open');
+      }
+    };
+    const closeNotifications = (event: PointerEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+        toolsMenuRef.current.removeAttribute('open');
+      }
+    };
+    const desktopLayout = window.matchMedia('(min-width: 1400px)');
+    const desktopNavigation = window.matchMedia('(min-width: 1100px)');
+    const closeNarrowDetails = () => {
+      setIsWideDetailsLayout(desktopLayout.matches);
+      if (!desktopLayout.matches) setShowPropertiesDrawer(false);
+    };
+    const closeMobileNavigation = () => {
+      if (desktopNavigation.matches) setIsNavigationOpen(false);
+    };
+    document.addEventListener('keydown', closePopovers);
+    document.addEventListener('pointerdown', closeNotifications);
+    desktopLayout.addEventListener('change', closeNarrowDetails);
+    desktopNavigation.addEventListener('change', closeMobileNavigation);
+    return () => {
+      document.removeEventListener('keydown', closePopovers);
+      document.removeEventListener('pointerdown', closeNotifications);
+      desktopLayout.removeEventListener('change', closeNarrowDetails);
+      desktopNavigation.removeEventListener('change', closeMobileNavigation);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isNavigationOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const focusable = sidebarRef.current?.querySelectorAll<HTMLElement>('button, a, select');
+    focusable?.[0]?.focus();
+    const trapNavigationFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', trapNavigationFocus);
+    return () => {
+      document.removeEventListener('keydown', trapNavigationFocus);
+      previousFocus?.focus();
+    };
+  }, [isNavigationOpen]);
 
   // Active Timer Tick
   useEffect(() => {
@@ -308,61 +407,87 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     setTimeout(() => setActionNotice(null), 4000);
   };
 
-  const loadCompanyData = async (companyId: number) => {
+  const loadCompanyData = async (companyId: number, resetSelection = false, queueOnly = false) => {
+    const requestId = ++workspaceRequestRef.current;
+    setIsLoadingWorkspace(true);
+    if (resetSelection) {
+      ticketRequestRef.current += 1;
+      setTickets([]);
+      setSelectedTicket(null);
+      setSelectedTicketIds([]);
+      setShowMobileTicket(false);
+      setDeptFilter(null);
+      setPriorityFilter('ALL');
+    }
     try {
-      const [
-        statsData, ticketsData, mailboxesData, deptsData,
-        agentsData, kbData, crData, subData,
-        custData, notifsData, catsData
-      ] = await Promise.all([
-        apiService.getDashboardStats(companyId).catch(() => null),
-        apiService.getTickets(companyId, viewFilter === 'ALL' ? undefined : viewFilter).catch(() => []),
-        apiService.getMailboxes(companyId).catch(() => []),
-        apiService.getDepartments(companyId).catch(() => []),
-        apiService.getAgents(companyId).catch(() => []),
-        apiService.getKbArticles(companyId).catch(() => []),
-        apiService.getCannedResponses(companyId).catch(() => []),
-        apiService.getCurrentSubscription(companyId).catch(() => null),
-        apiService.getCustomers(companyId).catch(() => []),
-        apiService.getNotifications(companyId, currentUser.userId).catch(() => []),
-        apiService.getKbCategories(companyId).catch(() => []),
+      const [pageData, workspaceData] = await Promise.all([
+        apiService.getTicketPage(companyId, viewFilter, resetSelection ? 0 : ticketPage, 25, sortBy === 'oldest' ? 'asc' : 'desc'),
+        queueOnly ? null : Promise.all([
+          apiService.getDashboardStats(companyId).catch(() => null),
+          apiService.getMailboxes(companyId).catch(() => []),
+          apiService.getDepartments(companyId).catch(() => []),
+          apiService.getAgents(companyId).catch(() => []),
+          apiService.getKbArticles(companyId).catch(() => []),
+          apiService.getCannedResponses(companyId).catch(() => []),
+          apiService.getCurrentSubscription(companyId).catch(() => null),
+          apiService.getCustomers(companyId).catch(() => []),
+          apiService.getNotifications(companyId, currentUser.userId).catch(() => []),
+          apiService.getKbCategories(companyId).catch(() => []),
+          Promise.all(['ALL', 'OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'].map(async status => {
+            const page = await apiService.getTicketPage(companyId, status, 0, 1);
+            return [status, page.totalElements] as const;
+          })),
+        ]),
       ]);
 
-      if (statsData) setStats(statsData);
-      setTickets(ticketsData || []);
-      setMailboxes(mailboxesData || []);
-      setDepartments(deptsData || []);
-      setAgents(agentsData || []);
-      setKbArticles(kbData || []);
-      setCannedResponses(crData || []);
-      if (subData) setCurrentSubscription(subData);
-      setCustomers(custData || []);
-      setNotifications(notifsData || []);
-      setKbCategories(catsData || []);
-      if (catsData && catsData.length > 0) {
-        setNewArtCatId(catsData[0].id);
+      if (requestId !== workspaceRequestRef.current) return;
+      if (workspaceData) {
+        const [statsData, mailboxesData, deptsData, agentsData, kbData, crData, subData, custData, notifsData, catsData, countsData] = workspaceData;
+        if (statsData) setStats(statsData);
+        setMailboxes(mailboxesData);
+        setDepartments(deptsData);
+        setAgents(agentsData);
+        setKbArticles(kbData);
+        setCannedResponses(crData);
+        if (subData) setCurrentSubscription(subData);
+        setCustomers(custData);
+        setNotifications(notifsData);
+        setKbCategories(catsData);
+        setTicketCounts(Object.fromEntries(countsData));
+        if (catsData.length) setNewArtCatId(catsData[0].id);
+        if (mailboxesData.length) setSimMailbox(mailboxesData[0].forwardingAddress || mailboxesData[0].emailAddress);
+        if (deptsData.length) setNewDeptId(deptsData[0].id);
       }
 
-      if (mailboxesData.length > 0) {
-        setSimMailbox(mailboxesData[0].forwardingAddress || mailboxesData[0].emailAddress);
-      }
-      if (deptsData.length > 0) {
-        setNewDeptId(deptsData[0].id);
-      }
+      const ticketsData = pageData.content;
+      setTickets(ticketsData);
+      setTicketPageInfo({ number: pageData.number, size: pageData.size, totalElements: pageData.totalElements, totalPages: pageData.totalPages });
+      setTicketCounts(previous => ({ ...previous, [viewFilter]: pageData.totalElements }));
+      setSelectedTicketIds(previous => previous.filter(id => ticketsData.some(ticket => ticket.id === id)));
+      if (resetSelection) setTicketPage(0);
+      else if (ticketPage >= pageData.totalPages && ticketPage > 0) setTicketPage(Math.max(0, pageData.totalPages - 1));
 
-      if (ticketsData.length > 0 && !selectedTicket) {
-        loadTicketDetail(ticketsData[0].id);
-      } else if (ticketsData.length === 0) {
+      const refreshedTicket = ticketsData.find(ticket => ticket.id === selectedTicket?.id);
+      if (!ticketsData.length) {
         setSelectedTicket(null);
+      } else if (resetSelection || !refreshedTicket) {
+        loadTicketDetail(ticketsData[0].id, false);
+      } else {
+        setSelectedTicket(current => current?.id === refreshedTicket.id ? { ...current, ...refreshedTicket, threads: refreshedTicket.threads ?? current.threads } : current);
       }
     } catch {
       // Fallback
+    } finally {
+      if (requestId === workspaceRequestRef.current) setIsLoadingWorkspace(false);
     }
   };
 
-  const loadTicketDetail = async (id: number) => {
+  const loadTicketDetail = async (id: number, openOnMobile = true) => {
+    const requestId = ++ticketRequestRef.current;
     const detail = await apiService.getTicketDetail(id);
+    if (requestId !== ticketRequestRef.current) return;
     setSelectedTicket(detail);
+    if (openOnMobile) setShowMobileTicket(true);
   };
 
   const handleInsertCannedResponse = (cr: CannedResponse) => {
@@ -447,7 +572,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     if (!selectedTicket) return;
     try {
       const updated = await apiService.updateStatus(selectedTicket.id, newStatus);
-      setSelectedTicket(updated);
+      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
       showNotification(`Ticket #${selectedTicket.ticketNumber} status updated to ${newStatus}`);
     } catch {
       setSelectedTicket({ ...selectedTicket, status: newStatus as any });
@@ -459,7 +584,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     if (!selectedTicket) return;
     try {
       const updated = await apiService.updatePriority(selectedTicket.id, newPriority);
-      setSelectedTicket(updated);
+      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
       showNotification(`Priority set to ${newPriority}`);
     } catch {
       setSelectedTicket({ ...selectedTicket, priority: newPriority as any });
@@ -471,7 +596,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     if (!selectedTicket) return;
     try {
       const updated = await apiService.assignAgent(selectedTicket.id, agentId);
-      setSelectedTicket(updated);
+      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
       const agent = agents.find(a => a.id === agentId);
       showNotification(`Assigned to ${agent?.displayName || 'Support Engineer'}`);
     } catch {
@@ -488,7 +613,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         scenarioKey: scenario.id,
         authorName: currentUser.displayName,
       });
-      setSelectedTicket(updated);
+      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
       showNotification(`Executed macro: "${scenario.title}"`);
       loadCompanyData(activeCompany.id);
     } catch {
@@ -580,24 +705,52 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   // Filter tickets by search and department
   const filteredTickets = tickets.filter(t => {
     if (deptFilter && t.department?.id !== deptFilter) return false;
+    if (priorityFilter !== 'ALL' && t.priority !== priorityFilter) return false;
     if (!ticketSearch.trim()) return true;
     const q = ticketSearch.toLowerCase();
     return (
-      t.ticketNumber.toLowerCase().includes(q) ||
+      t.ticketNumber.toLowerCase().includes(q.replace(/^#/, '')) ||
       t.subject.toLowerCase().includes(q) ||
       (t.contact?.firstName || '').toLowerCase().includes(q) ||
+      (t.contact?.lastName || '').toLowerCase().includes(q) ||
       (t.contact?.email || '').toLowerCase().includes(q)
     );
   });
 
-  // Sort Tickets (HelpDesk.com style: lastMessageAt default)
+  // The API paginates status views; text and attribute filters refine the current page.
   const sortedTickets = [...filteredTickets].sort((a, b) => {
     if (sortBy === 'priority') {
       const pMap: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
       return (pMap[b.priority] || 0) - (pMap[a.priority] || 0);
     }
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    const dateDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    return sortBy === 'oldest' ? -dateDifference : dateDifference;
   });
+
+  const ticketViews = [
+    { id: 'ALL', label: 'All tickets' },
+    { id: 'OPEN', label: 'Open' },
+    { id: 'IN_PROGRESS', label: 'In progress' },
+    { id: 'WAITING_ON_CUSTOMER', label: 'Waiting on customer' },
+    { id: 'RESOLVED', label: 'Resolved' },
+    { id: 'CLOSED', label: 'Closed' },
+  ];
+  const activeFilterCount = Number(deptFilter !== null) + Number(priorityFilter !== 'ALL');
+  const visibleSelectedIds = selectedTicketIds.filter(id => sortedTickets.some(ticket => ticket.id === id));
+  const formatLabel = (value: string) => value.toLowerCase().replace(/_/g, ' ').replace(/^\w/, char => char.toUpperCase());
+  const navigateToTab = (tab: WorkspaceTab) => {
+    setActiveTab(tab);
+    setIsNavigationOpen(false);
+    if (!isWideDetailsLayout) setShowPropertiesDrawer(false);
+  };
+  const resetTicketFilters = () => {
+    setViewFilter('ALL');
+    setTicketPage(0);
+    setDeptFilter(null);
+    setPriorityFilter('ALL');
+    setTicketSearch('');
+    setSelectedTicketIds([]);
+  };
 
   const formatTimer = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
@@ -607,354 +760,171 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
   const tabLabels: Record<WorkspaceTab, { title: string; subtitle: string }> = {
     tickets: {
-      title: 'Ticket Queue & Command Center',
-      subtitle: 'Triage omnichannel cases, execute scenarios, and track SLAs',
+      title: 'Tickets',
+      subtitle: 'A little clarity for every customer conversation.',
     },
     dashboard: {
-      title: 'Operational Analytics & SLA Telemetry',
-      subtitle: 'Real-time performance indicators and department turnaround targets',
+      title: 'Overview',
+      subtitle: 'Keep a pulse on your team, ticket volume, and service targets.',
     },
     customers: {
-      title: 'Customers & Client Organizations Directory',
-      subtitle: 'Screens 20 & 21 • Search customer profiles, company accounts, and ticket histories',
+      title: 'Customers',
+      subtitle: 'The people and organizations your team supports.',
     },
     engineers: {
-      title: 'Category Support Engineers',
-      subtitle: 'Manage specialized staff across IT, Finance, Operations, HR & Legal',
+      title: 'Support team',
+      subtitle: 'Manage teammates, invitations, and department assignments.',
     },
     mis: {
-      title: 'Enterprise MIS Reports & 100k Streaming',
-      subtitle: 'High-volume ticket telemetry and memory-safe streaming exports',
+      title: 'Reports',
+      subtitle: 'Explore support activity and export the details you need.',
     },
     mailboxes: {
-      title: 'Email Forwarding & Microsoft 365 Channels',
-      subtitle: 'Configure automated email forwarding and Exchange Online webhooks',
+      title: 'Email channels',
+      subtitle: 'Connect your support inboxes and manage email routing.',
     },
     solutions: {
-      title: 'Knowledge Base & Self-Service Solutions',
-      subtitle: 'Browse pre-approved resolution articles and FAQs for rapid ticket deflection',
+      title: 'Knowledge base',
+      subtitle: 'Helpful answers for your customers and your team.',
     },
     automations: {
-      title: 'Scenario Automations & 1-Click Macros',
-      subtitle: 'Standardize ticket resolution workflows with reusable business macros',
+      title: 'Automations',
+      subtitle: 'Make routine support work simpler with reusable workflows.',
     },
     billing: {
-      title: 'Subscription, Plan Limits & Invoicing',
-      subtitle: 'Manage agent seats, ticket consumption quotas, and payment gateways',
+      title: 'Plans & billing',
+      subtitle: 'Your subscription, team capacity, and workspace usage.',
     },
     settings: {
-      title: 'Company Administration & Portal Branding Settings',
-      subtitle: 'Section E • Configure company profile, custom branding, SLA thresholds, security, and automation policies',
+      title: 'Settings',
+      subtitle: 'Make this workspace work for your team.',
     },
   };
 
   return (
-    <div className="enterprise-shell">
-      {/* ====================================================================
-          1. FAR-LEFT GLOBAL APP RAIL (SLIM 56px - HelpDesk.com / Freshdesk pattern)
-          ==================================================================== */}
-      <aside className="enterprise-sidebar">
-        <div>
-          {/* Brand Header */}
-          <div className="sidebar-brand-header">
-            <div className="sidebar-brand-icon">
-              <Building2 size={22} />
-            </div>
-            <div className="overflow-hidden">
-              <div className="d-flex align-items-center gap-1.5">
-                <h6 className="mb-0 fw-bolder text-white text-truncate" style={{ fontSize: '0.96rem' }}>
-                  {activeCompany.name}
-                </h6>
-                <span className="badge bg-primary text-white fw-bold" style={{ fontSize: '0.6rem' }}>
-                  {activeCompany.companyCode}
-                </span>
-              </div>
-              <small className="d-block text-truncate" style={{ color: '#94a3b8', fontSize: '0.72rem' }}>
-                Company Admin Workspace
-              </small>
-            </div>
+    <div className={`enterprise-shell company-workspace ${isNavigationOpen ? 'navigation-open' : ''}`}>
+      {isNavigationOpen && (
+        <button type="button" className="workspace-nav-backdrop" tabIndex={-1} aria-label="Close navigation" onClick={() => setIsNavigationOpen(false)} />
+      )}
+      <aside ref={sidebarRef} id="workspace-navigation" className="enterprise-sidebar" aria-label="Workspace navigation">
+        <div className="sidebar-brand-header">
+          <div className="sidebar-brand-icon"><Headphones size={22} strokeWidth={2} /></div>
+          <div className="workspace-wordmark">
+            <strong>{activeCompany.companyCode.toLowerCase()}<span>desk</span></strong>
+            <small>Customer support, connected.</small>
           </div>
-
-          {/* Super Admin Switcher back if applicable */}
-          {currentUser.roleType === 'SUPER_ADMIN' && (
-            <div className="px-3 pt-2 pb-1">
-              <button
-                type="button"
-                className="btn btn-sm btn-warning w-100 fw-bold text-dark d-flex align-items-center justify-content-center gap-1.5 py-1.5 rounded-3 shadow-sm"
-                onClick={onSwitchToAdmin}
-              >
-                <ArrowLeft size={14} />
-                <span style={{ fontSize: '0.78rem' }}>Admin Console</span>
-              </button>
-            </div>
-          )}
-
-          {/* SECTION 1: CORE WORKSPACE */}
-          <div className="sidebar-section-label">
-            <span>Omnichannel Workspace</span>
-          </div>
-          <div className="sidebar-nav-group">
-            <button
-              id="rail-tab-tickets"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'tickets' ? 'active' : ''}`}
-              onClick={() => setActiveTab('tickets')}
-            >
-              <Inbox size={17} />
-              <span>Tickets Command</span>
-              <span className="sidebar-badge">{tickets.length}</span>
-            </button>
-
-            <button
-              id="rail-tab-dashboard"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              <BarChart3 size={17} />
-              <span>SLA Dashboard</span>
-            </button>
-
-            <button
-              id="rail-tab-solutions"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'solutions' ? 'active' : ''}`}
-              onClick={() => setActiveTab('solutions')}
-            >
-              <BookOpen size={17} />
-              <span>Solutions & KB</span>
-              <span className="sidebar-badge">{kbArticles.length}</span>
-            </button>
-
-            <button
-              id="rail-tab-customers"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'customers' ? 'active' : ''}`}
-              onClick={() => setActiveTab('customers')}
-            >
-              <Users size={17} />
-              <span>Customers & Orgs</span>
-              <span className="sidebar-badge">{customers.length}</span>
-            </button>
-          </div>
-
-          {/* SECTION 2: OPERATIONS & CHANNELS */}
-          <div className="sidebar-section-label">
-            <span>Operations & Routing</span>
-          </div>
-          <div className="sidebar-nav-group">
-            <button
-              id="rail-tab-engineers"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'engineers' ? 'active' : ''}`}
-              onClick={() => setActiveTab('engineers')}
-            >
-              <Users size={17} />
-              <span>Support Engineers</span>
-              <span className="sidebar-badge">Depts</span>
-            </button>
-
-            <button
-              id="rail-tab-mis"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'mis' ? 'active' : ''}`}
-              onClick={() => setActiveTab('mis')}
-            >
-              <FileSpreadsheet size={17} />
-              <span>Track & MIS 100k</span>
-              <span className="sidebar-badge">Export</span>
-            </button>
-
-            <button
-              id="rail-tab-mailboxes"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'mailboxes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('mailboxes')}
-            >
-              <Mail size={17} />
-              <span>M365 & Forwarding</span>
-            </button>
-
-            <button
-              id="rail-tab-automations"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'automations' ? 'active' : ''}`}
-              onClick={() => setActiveTab('automations')}
-            >
-              <Zap size={17} />
-              <span>Scenario Macros</span>
-              <span className="sidebar-badge" style={{ backgroundColor: '#8b5cf6', color: '#fff' }}>1-Click</span>
-            </button>
-
-            <button
-              id="rail-tab-billing"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'billing' ? 'active' : ''}`}
-              onClick={() => setActiveTab('billing')}
-            >
-              <CreditCard size={17} />
-              <span>Subscription & Billing</span>
-              <span className="sidebar-badge" style={{ backgroundColor: '#10b981', color: '#fff' }}>
-                {currentSubscription?.planTier || activeCompany.planName || 'ACTIVE'}
-              </span>
-            </button>
-
-            <button
-              id="rail-tab-settings"
-              type="button"
-              className={`sidebar-menu-btn ${activeTab === 'settings' ? 'active' : ''}`}
-              onClick={() => setActiveTab('settings')}
-            >
-              <Settings size={17} />
-              <span>Admin Settings</span>
-              <span className="sidebar-badge" style={{ backgroundColor: '#0284c7', color: '#fff' }}>Config</span>
-            </button>
-          </div>
-
-          {/* SECTION 3: QUEUE VIEWS (HelpDesk.com signature views) */}
-          <div className="sidebar-section-label">
-            <span>Ticket Queue Views</span>
-          </div>
-          <div className="sidebar-nav-group">
-            {[
-              { id: 'ALL', label: 'All Tickets', count: tickets.length, dot: '#3b82f6' },
-              { id: 'OPEN', label: 'Open Queue', count: tickets.filter(t => t.status === 'OPEN').length, dot: '#0ea5e9' },
-              { id: 'IN_PROGRESS', label: 'In Progress', count: tickets.filter(t => t.status === 'IN_PROGRESS').length, dot: '#f59e0b' },
-              { id: 'WAITING_ON_CUSTOMER', label: 'Waiting on User', count: tickets.filter(t => t.status === 'WAITING_ON_CUSTOMER').length, dot: '#8b5cf6' },
-              { id: 'RESOLVED', label: 'Resolved / Closed', count: tickets.filter(t => t.status === 'RESOLVED' || t.status === 'CLOSED').length, dot: '#10b981' },
-            ].map(v => (
-              <button
-                key={v.id}
-                type="button"
-                className={`sidebar-menu-btn py-1.5 ${activeTab === 'tickets' && viewFilter === v.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('tickets');
-                  setViewFilter(v.id);
-                }}
-              >
-                <span
-                  style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    backgroundColor: v.dot,
-                    display: 'inline-block',
-                    flexShrink: 0,
-                  }}
-                />
-                <span style={{ fontSize: '0.8rem' }}>{v.label}</span>
-                <span className="sidebar-badge">{v.count}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* SECTION 4: DEPARTMENT CATEGORIES */}
-          <div className="sidebar-section-label">
-            <span>Department Queues</span>
-          </div>
-          <div className="sidebar-nav-group">
-            {departments.map(d => (
-              <button
-                key={d.id}
-                type="button"
-                className={`sidebar-menu-btn py-1.5 ${deptFilter === d.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('tickets');
-                  setDeptFilter(prev => (prev === d.id ? null : d.id));
-                }}
-              >
-                <span
-                  style={{
-                    width: '7px',
-                    height: '7px',
-                    borderRadius: '50%',
-                    backgroundColor: d.code === 'IT' ? '#3b82f6' : d.code === 'FINANCE' ? '#10b981' : '#8b5cf6',
-                    display: 'inline-block',
-                    flexShrink: 0,
-                  }}
-                />
-                <span className="text-truncate" style={{ fontSize: '0.78rem' }}>{d.name}</span>
-                {deptFilter === d.id && <span className="sidebar-badge" style={{ backgroundColor: '#2563eb', color: '#fff' }}>Filtered</span>}
-              </button>
-            ))}
-          </div>
+          <button type="button" className="workspace-icon-button workspace-nav-close" aria-label="Close navigation" onClick={() => setIsNavigationOpen(false)}><X size={19} /></button>
         </div>
 
-        {/* Sidebar Footer: Agent Status & User Profile */}
-        <div className="sidebar-footer">
-          {/* Presence Dropdown */}
-          <div className="p-2 rounded-3 mb-2 bg-dark bg-opacity-50 border border-secondary border-opacity-25">
-            <div className="d-flex align-items-center justify-content-between mb-1">
-              <span className="small text-secondary" style={{ fontSize: '0.7rem' }}>Agent Status:</span>
-              <select
-                className="form-select form-select-sm py-0 ps-2 pe-4 bg-dark text-white border-0 fw-semibold"
-                style={{ width: 'auto', fontSize: '0.72rem' }}
-                value={agentPresence}
-                onChange={e => setAgentPresence(e.target.value as any)}
-              >
-                <option value="ONLINE">🟢 Available</option>
-                <option value="BUSY">🟡 Busy</option>
-                <option value="AWAY">⚪ Away</option>
-              </select>
-            </div>
-            <div className="text-truncate text-secondary" style={{ fontSize: '0.67rem' }}>
-              Forwarding: <code className="text-info">{mailboxes[0]?.forwardingAddress || '1281753993@tickets.helpdesk.com'}</code>
-            </div>
-          </div>
+        <div className="workspace-company-label" title={activeCompany.name}>
+          <Building2 size={15} />
+          <span>{activeCompany.name}</span>
+        </div>
 
-          <div className="d-flex align-items-center justify-content-between pt-1">
-            <div className="d-flex align-items-center gap-2 overflow-hidden">
-              <div
-                className="rounded-circle bg-primary text-white fw-bold d-flex align-items-center justify-content-center flex-shrink-0"
-                style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}
-              >
-                {currentUser.firstName?.charAt(0) || 'U'}
-              </div>
-              <div className="overflow-hidden" style={{ lineHeight: '1.2' }}>
-                <div className="fw-bold text-white text-truncate" style={{ fontSize: '0.78rem' }}>
-                  {currentUser.displayName}
-                </div>
-                <small className="text-info d-block text-truncate" style={{ fontSize: '0.65rem', fontWeight: 600 }}>
-                  {currentUser.roleType.replace('_', ' ')}
-                </small>
+        <nav className="workspace-sidebar-scroll" aria-label="Main">
+          {currentUser.roleType === 'SUPER_ADMIN' && (
+            <button type="button" className="workspace-admin-return" onClick={onSwitchToAdmin}>
+              <ArrowLeft size={15} /> Platform admin
+            </button>
+          )}
+          {[
+            {
+              label: 'Workspace',
+              items: [
+                { id: 'tickets' as const, label: 'Tickets', icon: Inbox },
+                { id: 'dashboard' as const, label: 'Overview', icon: BarChart3 },
+                { id: 'customers' as const, label: 'Customers', icon: Users },
+                { id: 'solutions' as const, label: 'Knowledge base', icon: BookOpen },
+              ],
+            },
+            {
+              label: 'Manage',
+              items: [
+                { id: 'engineers' as const, label: 'Support team', icon: Users },
+                { id: 'mis' as const, label: 'Reports', icon: FileSpreadsheet },
+                { id: 'mailboxes' as const, label: 'Email channels', icon: Mail },
+                { id: 'automations' as const, label: 'Automations', icon: Zap },
+              ],
+            },
+          ].map(group => (
+            <div key={group.label}>
+              <div className="sidebar-section-label">{group.label}</div>
+              <div className="sidebar-nav-group">
+                {group.items.map(item => (
+                  <button
+                    key={item.id}
+                    id={`rail-tab-${item.id}`}
+                    type="button"
+                    className={`sidebar-menu-btn ${activeTab === item.id ? 'active' : ''}`}
+                    aria-current={activeTab === item.id ? 'page' : undefined}
+                    onClick={() => navigateToTab(item.id)}
+                  >
+                    <item.icon size={18} />
+                    <span>{item.label}</span>
+                    {item.id === 'tickets' && <span className="sidebar-badge">{ticketCounts.ALL ?? 0}</span>}
+                  </button>
+                ))}
               </div>
             </div>
-            <button
-              id="btn-sign-out"
-              type="button"
-              className="btn btn-sm btn-outline-danger border-0 p-1.5 text-danger"
-              onClick={onLogout}
-              title="Sign Out"
-            >
-              <LogOut size={16} />
+          ))}
+          <div className="workspace-secondary-nav sidebar-nav-group">
+            <button id="rail-tab-settings" type="button" className={`sidebar-menu-btn ${activeTab === 'settings' ? 'active' : ''}`} aria-current={activeTab === 'settings' ? 'page' : undefined} onClick={() => navigateToTab('settings')}>
+              <Settings size={18} /><span>Settings</span>
+            </button>
+            <button id="rail-tab-billing" type="button" className={`sidebar-menu-btn ${activeTab === 'billing' ? 'active' : ''}`} aria-current={activeTab === 'billing' ? 'page' : undefined} onClick={() => navigateToTab('billing')}>
+              <CreditCard size={18} /><span>Plans & billing</span>
             </button>
           </div>
+        </nav>
+
+        <div className="workspace-plan-card">
+          <span className="workspace-eyebrow">Your workspace</span>
+          <div><strong>{formatLabel(currentSubscription?.planTier || activeCompany.planName)} plan</strong><span className="workspace-plan-dot" /></div>
+          <button type="button" onClick={() => navigateToTab('billing')}>Manage subscription <ChevronRight size={14} /></button>
+        </div>
+        <div className="sidebar-footer">
+          <div className="workspace-user">
+            <div className="workspace-avatar">
+              {currentUser.firstName?.charAt(0) || 'U'}{currentUser.lastName?.charAt(0)}
+              <span className={`presence-indicator presence-${agentPresence.toLowerCase()}`} />
+            </div>
+            <div className="workspace-user-info">
+              <strong title={currentUser.displayName}>{currentUser.displayName}</strong>
+              <span>{formatLabel(currentUser.roleType)}</span>
+            </div>
+            <button id="btn-sign-out" type="button" className="workspace-icon-button" onClick={onLogout} title="Sign out" aria-label="Sign out"><LogOut size={16} /></button>
+          </div>
+          <label className="workspace-presence">
+            <span>My availability</span>
+            <select value={agentPresence} onChange={e => setAgentPresence(e.target.value as typeof agentPresence)} aria-label="My availability">
+              <option value="ONLINE">Available</option>
+              <option value="BUSY">Busy</option>
+              <option value="AWAY">Away</option>
+            </select>
+          </label>
         </div>
       </aside>
 
       {/* ====================================================================
           2. RIGHT MAIN AREA (TOPBAR + MULTI-PANE WORKSPACE CONTENT)
           ==================================================================== */}
-      <div className="enterprise-main">
+      <div className="enterprise-main" inert={isNavigationOpen}>
         {/* Top Contextual Header Bar */}
         <header className="enterprise-topbar">
-          <div className="d-flex align-items-center gap-3">
-            <div>
-              <div className="d-flex align-items-center gap-1.5 text-muted small mb-0.5" style={{ fontSize: '0.74rem' }}>
-                <span className="fw-semibold text-primary">{activeCompany.name}</span>
-                <ChevronRight size={13} />
-                <span className="fw-semibold text-dark">{tabLabels[activeTab].title}</span>
-              </div>
-              <h5 className="fw-bolder mb-0 text-dark" style={{ fontSize: '1.12rem' }}>
-                {tabLabels[activeTab].title}
-              </h5>
+          <div className="workspace-header-context">
+            <button id="btn-workspace-menu" type="button" className="workspace-icon-button workspace-menu-toggle" aria-label="Open navigation" aria-expanded={isNavigationOpen} aria-controls="workspace-navigation" onClick={() => setIsNavigationOpen(true)}><Menu size={20} /></button>
+            <div className="workspace-breadcrumb" aria-label="Breadcrumb">
+              <span>{activeCompany.companyCode} workspace</span>
+              <ChevronRight size={14} />
+              <strong>{tabLabels[activeTab].title}</strong>
             </div>
 
             {/* Tenant Switcher if Super Admin */}
             {currentUser.roleType === 'SUPER_ADMIN' && companies.length > 1 && (
-              <div className="ms-2">
+              <div className="workspace-tenant-switcher">
                 <select
-                  className="form-select form-select-sm fw-semibold border-primary text-primary rounded-pill px-3"
+                  className="form-select form-select-sm"
+                  aria-label="Switch company"
                   value={activeCompany.id}
                   onChange={e => {
                     const found = companies.find(c => c.id === Number(e.target.value));
@@ -963,7 +933,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                 >
                   {companies.map(c => (
                     <option key={c.id} value={c.id}>
-                      Tenant: {c.name} ({c.companyCode})
+                      {c.companyCode}
                     </option>
                   ))}
                 </select>
@@ -972,74 +942,63 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           </div>
 
           {/* Action Toolbar */}
-          <div className="d-flex align-items-center gap-2 flex-wrap">
+          <div className="workspace-topbar-actions">
             {/* Customer Support Portal Direct Link */}
             <a
               href={`/${activeCompany.subdomain}`}
               target="_blank"
               rel="noreferrer"
-              className="btn btn-sm btn-outline-success d-flex align-items-center gap-1.5 rounded-3 fw-semibold bg-white shadow-xs"
+              className="workspace-portal-link"
               title="Open Public Customer Support Portal in new tab"
             >
-              <Globe size={14} />
-              <span>Customer Portal</span>
+              <Globe size={16} />
+              <span>Customer portal</span>
               <ExternalLink size={12} />
             </a>
 
-            <div className="d-none d-xl-flex align-items-center gap-1.5 px-3 py-1 bg-success-subtle text-success border border-success-subtle rounded-pill" style={{ fontSize: '0.73rem' }}>
-              <span className="pulse-dot pulse-dot-success"></span>
-              <span className="fw-semibold">MS 365 Exchange: Live Sync</span>
-            </div>
-
-            {/* Email Forwarding Wizard Shortcut */}
-            <button
-              id="btn-forwarding-topbar"
-              className="btn btn-sm btn-outline-dark d-flex align-items-center gap-1.5 rounded-3 fw-semibold bg-white shadow-xs text-dark"
-              onClick={() => setShowForwardingModal(true)}
-              title="Set up email forwarding from Gmail, Outlook or Microsoft 365"
-            >
-              <Send size={14} className="text-primary" />
-              <span>Set up email forwarding</span>
-            </button>
-
-            {/* Simulate Inbound Email */}
-            <button
-              id="btn-simulate-email"
-              className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1.5 rounded-3 fw-semibold"
-              onClick={() => setShowSimulateModal(true)}
-              title="Simulate incoming customer email to Microsoft 365 / Forwarding"
-            >
-              <Mail size={15} />
-              <span>Simulate MS 365 Email</span>
-            </button>
+            <details ref={toolsMenuRef} className="workspace-tools-menu">
+              <summary className="workspace-icon-button" aria-label="Email tools" title="Email tools"><MoreHorizontal size={20} /></summary>
+              <div className="workspace-tools-popover">
+                <span className="workspace-eyebrow">Email tools</span>
+                <button id="btn-forwarding-topbar" type="button" onClick={e => { setShowForwardingModal(true); e.currentTarget.closest('details')?.removeAttribute('open'); }}>
+                  <Send size={16} /><span>Set up email forwarding</span>
+                </button>
+                <button id="btn-simulate-email" type="button" onClick={e => { setShowSimulateModal(true); e.currentTarget.closest('details')?.removeAttribute('open'); }}>
+                  <Mail size={16} /><span>Simulate incoming email</span>
+                </button>
+              </div>
+            </details>
 
             {/* Notification Center Bell (Screen 24) */}
-            <div className="position-relative">
+            <div className="position-relative" ref={notificationsRef}>
               <button
                 id="btn-notifications-center"
                 type="button"
-                className="btn btn-sm btn-outline-secondary position-relative p-2 rounded-3 bg-white shadow-xs d-flex align-items-center justify-content-center"
+                className="workspace-icon-button workspace-notification-toggle"
                 onClick={() => setShowNotifDropdown(prev => !prev)}
-                title="Notifications Center (Screen 24)"
+                title="Notifications"
+                aria-label={`Notifications${notifications.some(n => !n.isRead) ? `, ${notifications.filter(n => !n.isRead).length} unread` : ''}`}
+                aria-expanded={showNotifDropdown}
+                aria-controls="workspace-notifications"
               >
                 <Bell size={16} className="text-secondary" />
                 {notifications.filter(n => !n.isRead).length > 0 && (
-                  <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-white" style={{ fontSize: '0.62rem' }}>
-                    {notifications.filter(n => !n.isRead).length}
-                  </span>
+                  <span className="workspace-unread-dot" />
                 )}
               </button>
 
               {showNotifDropdown && (
                 <div
-                  className="position-absolute end-0 mt-2 bg-white rounded-4 shadow-2xl border overflow-hidden animate-fade-in"
-                  style={{ width: '380px', zIndex: 1070 }}
+                  id="workspace-notifications"
+                  className="workspace-notifications bg-white border overflow-hidden"
+                  role="region"
+                  aria-label="Notifications"
                 >
                   <div className="p-3 bg-light border-bottom d-flex justify-content-between align-items-center">
                     <div>
-                      <h6 className="fw-bold mb-0 text-dark">Notifications Center</h6>
+                      <h6 className="fw-bold mb-0 text-dark">Notifications</h6>
                       <small className="text-muted" style={{ fontSize: '0.72rem' }}>
-                        Screen 24 • Operational alerts & inbound events
+                        Your latest workspace activity
                       </small>
                     </div>
                     {notifications.some(n => !n.isRead) && (
@@ -1059,9 +1018,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       </div>
                     ) : (
                       notifications.map(notif => (
-                        <div
+                        <button
+                          type="button"
                           key={notif.id}
-                          className={`p-3 border-bottom cursor-pointer hover-bg-light transition-all ${!notif.isRead ? 'bg-primary-subtle bg-opacity-25' : ''}`}
+                          className={`workspace-notification-row p-3 border-bottom ${!notif.isRead ? 'is-unread' : ''}`}
                           onClick={() => handleMarkNotifRead(notif)}
                           style={{ cursor: 'pointer' }}
                         >
@@ -1084,7 +1044,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                               View Ticket #{notif.ticketId} →
                             </span>
                           )}
-                        </div>
+                        </button>
                       ))
                     )}
                   </div>
@@ -1095,101 +1055,135 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
             {/* New Ticket (Screen 19) */}
             <button
               id="btn-new-ticket"
-              className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 rounded-3 fw-bold shadow-sm px-3"
+              type="button"
+              aria-label="New ticket"
+              className="btn btn-primary workspace-new-ticket"
               onClick={() => setShowNewTicketModal(true)}
             >
               <Plus size={15} />
-              <span>New Ticket</span>
+              <span>New ticket</span>
             </button>
           </div>
         </header>
 
         {/* Global Toast Notification */}
         {actionNotice && (
-          <div className="px-4 pt-2">
+          <div className="workspace-toast" role="status" aria-live="polite">
             <div className={`alert alert-${actionNotice.type} py-2 px-3 mb-0 rounded-3 shadow-xs small d-flex align-items-center justify-content-between`}>
               <span className="fw-semibold">{actionNotice.text}</span>
-              <button type="button" className="btn-close btn-sm" onClick={() => setActionNotice(null)}></button>
+              <button type="button" className="btn-close btn-sm" aria-label="Dismiss notification" onClick={() => setActionNotice(null)}></button>
             </div>
           </div>
         )}
 
         {/* Main Workspace Content Area */}
-        <main className="enterprise-content">
+        <main className={`enterprise-content ${activeTab === 'tickets' ? 'is-ticket-workspace' : ''}`}>
+          {activeTab !== 'tickets' && (
+            <div className="workspace-page-heading">
+              <div>
+                <span className="workspace-eyebrow">Workspace</span>
+                <h1>{tabLabels[activeTab].title}</h1>
+                <p>{tabLabels[activeTab].subtitle}</p>
+              </div>
+            </div>
+          )}
           {/* ==============================================================
               TAB 1: TICKETS COMMAND CENTER (FRESHDESK /a/tickets/1 LAYOUT)
               ============================================================== */}
           {activeTab === 'tickets' && (
-            <div className="row g-3 h-100">
-              {/* MIDDLE COLUMN: TICKET QUEUE (HelpDesk.com style virtual list) */}
-              <div className="col-12 col-lg-5 col-xl-4 d-flex flex-column h-100">
-                <div className="d-flex justify-content-between align-items-center mb-2">
-                  <div className="d-flex align-items-center gap-2">
-                    <h6 className="fw-bold mb-0 text-dark">
-                      Queue
-                    </h6>
-                    <span className="badge bg-primary-subtle text-primary rounded-pill">
-                      {sortedTickets.length}
-                    </span>
-                  </div>
-
-                  {/* Sort By Dropdown (HelpDesk.com signature: sortBy=lastMessageAt) */}
-                  <div className="d-flex align-items-center gap-1.5">
-                    <small className="text-muted fw-semibold" style={{ fontSize: '0.72rem' }}>Sort:</small>
-                    <select
-                      className="form-select form-select-sm py-0.5 ps-2 pe-4 bg-light border-0 fw-semibold text-dark rounded-2"
-                      style={{ fontSize: '0.74rem', width: 'auto' }}
-                      value={sortBy}
-                      onChange={e => setSortBy(e.target.value as any)}
-                    >
-                      <option value="lastMessageAt">Last message (Newest)</option>
-                      <option value="createdAt">Created date</option>
-                      <option value="priority">Priority level</option>
-                    </select>
-
-                    <button
-                      className="btn btn-sm btn-light border p-1 text-muted"
-                      onClick={() => loadCompanyData(activeCompany.id)}
-                      title="Sync queue"
-                    >
-                      <RefreshCw size={13} />
-                    </button>
-                  </div>
+            <div className={`tickets-workspace ${showMobileTicket ? 'mobile-ticket-open' : ''}`}>
+              <div className="workspace-page-heading tickets-heading">
+                <div>
+                  <span className="workspace-eyebrow">Team inbox</span>
+                  <h1>Tickets <span className="workspace-heading-count">{ticketCounts.ALL ?? 0}</span></h1>
+                  <p>{tabLabels.tickets.subtitle}</p>
                 </div>
+                <div className="workspace-queue-summary">
+                  <span><span className="queue-summary-dot" />{tickets.filter(t => !t.assignedAgent && !['RESOLVED', 'CLOSED', 'SPAM'].includes(t.status)).length} unassigned on page</span>
+                  <span><span className="queue-summary-dot is-overdue" />{stats?.breachedSlaTickets ?? 0} SLA overdue</span>
+                  <button type="button" className="workspace-icon-button" onClick={() => loadCompanyData(activeCompany.id)} disabled={isLoadingWorkspace} title="Refresh tickets" aria-label="Refresh tickets">
+                    <RefreshCw size={16} className={isLoadingWorkspace ? 'spin' : ''} />
+                  </button>
+                </div>
+              </div>
 
-                {/* Queue Search Input */}
-                <div className="input-group input-group-sm mb-2 shadow-xs">
-                  <span className="input-group-text bg-white border-end-0">
-                    <Search size={14} className="text-muted" />
-                  </span>
-                  <input
-                    type="text"
-                    className="form-control border-start-0"
-                    placeholder="Search #ticket, subject, requester..."
-                    value={ticketSearch}
-                    onChange={e => setTicketSearch(e.target.value)}
-                  />
-                  {deptFilter && (
-                    <button
-                      className="btn btn-outline-secondary btn-sm"
-                      onClick={() => setDeptFilter(null)}
-                      title="Clear department filter"
-                    >
-                      Clear Dept
-                    </button>
-                  )}
+              <nav className="ticket-view-tabs" aria-label="Ticket views">
+                {ticketViews.map(view => (
+                  <button key={view.id} type="button" className={viewFilter === view.id ? 'active' : ''} aria-pressed={viewFilter === view.id} onClick={() => { setViewFilter(view.id); setTicketPage(0); setSelectedTicketIds([]); setShowMobileTicket(false); }}>
+                    {view.label}<span>{ticketCounts[view.id] ?? 0}</span>
+                  </button>
+                ))}
+              </nav>
+
+              <div className="ticket-workbench-controls">
+                <div className="workspace-search ticket-search">
+                  <Search size={17} />
+                  <input id="workspace-ticket-search" type="search" aria-label="Search tickets" placeholder="Search this page by subject, ID, or customer..." value={ticketSearch} onChange={e => { setTicketSearch(e.target.value); setSelectedTicketIds([]); }} />
+                  {ticketSearch && <button type="button" className="workspace-icon-button" aria-label="Clear ticket search" onClick={() => setTicketSearch('')}><X size={15} /></button>}
+                </div>
+                <div className="ticket-control-actions">
+                  <button type="button" className={`workspace-filter-button ${showFilters || activeFilterCount ? 'active' : ''}`} onClick={() => setShowFilters(prev => !prev)} aria-expanded={showFilters} aria-controls="ticket-filters">
+                    <SlidersHorizontal size={15} /><span>Filters</span>{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}<ChevronDown size={13} />
+                  </button>
+                  <label className="ticket-sort-control">
+                    <ArrowUpDown size={15} />
+                    <select aria-label="Sort tickets" value={sortBy} onChange={e => { setSortBy(e.target.value as typeof sortBy); setTicketPage(0); }}>
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                      <option value="priority">Priority on page</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              {showFilters && (
+                <div id="ticket-filters" className="ticket-filter-panel">
+                  <label>Department
+                    <select className="form-select form-select-sm" aria-label="Department" value={deptFilter ?? ''} onChange={e => { setDeptFilter(e.target.value ? Number(e.target.value) : null); setSelectedTicketIds([]); }}>
+                      <option value="">All departments</option>
+                      {departments.map(dept => <option key={dept.id} value={dept.id}>{dept.name}</option>)}
+                    </select>
+                  </label>
+                  <label>Priority
+                    <select className="form-select form-select-sm" aria-label="Priority" value={priorityFilter} onChange={e => { setPriorityFilter(e.target.value as typeof priorityFilter); setSelectedTicketIds([]); }}>
+                      <option value="ALL">All priorities</option>
+                      {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map(priority => <option key={priority} value={priority}>{formatLabel(priority)}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" className="btn btn-sm btn-link text-decoration-none" onClick={() => { setDeptFilter(null); setPriorityFilter('ALL'); setSelectedTicketIds([]); }} disabled={!activeFilterCount}>Reset filters</button>
+                  <small className="ticket-filter-scope">Filters apply to this page.</small>
+                </div>
+              )}
+
+              <div className={`ticket-workbench ${showMobileTicket ? 'is-detail-open' : ''}`}>
+              <section className="ticket-queue" aria-label="Ticket queue" aria-busy={isLoadingWorkspace}>
+                <div className="ticket-queue-heading">
+                  <label>
+                    <input
+                      type="checkbox"
+                      className="form-check-input"
+                      aria-label="Select all visible tickets"
+                      disabled={sortedTickets.length === 0}
+                      checked={sortedTickets.length > 0 && visibleSelectedIds.length === sortedTickets.length}
+                      ref={element => { if (element) element.indeterminate = visibleSelectedIds.length > 0 && visibleSelectedIds.length < sortedTickets.length; }}
+                      onChange={e => setSelectedTicketIds(e.target.checked ? sortedTickets.map(ticket => ticket.id) : [])}
+                    />
+                    <span>{sortedTickets.length} conversation{sortedTickets.length === 1 ? '' : 's'}</span>
+                  </label>
+                  {activeFilterCount > 0 && <span className="ticket-filtered-label">Filtered</span>}
                 </div>
 
                 {/* Bulk Operations Toolbar when tickets selected */}
                 {selectedTicketIds.length > 0 && (
-                  <div className="p-2 mb-2 rounded-3 bg-primary text-white d-flex align-items-center justify-content-between shadow-sm animate-fade-in">
-                    <span className="small fw-bold">{selectedTicketIds.length} tickets selected</span>
-                    <div className="d-flex align-items-center gap-1.5">
+                  <div className="ticket-bulk-actions">
+                    <span className="small fw-bold">{selectedTicketIds.length} selected</span>
+                    <div className="ticket-bulk-controls">
                       <select
                         className="form-select form-select-sm py-0 text-dark bg-white border-0 fw-semibold"
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkStatus(e.target.value)}
                         defaultValue=""
+                        aria-label="Bulk update status"
                       >
                         <option value="" disabled>Status...</option>
                         <option value="OPEN">Set Open</option>
@@ -1203,6 +1197,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkPriority(e.target.value)}
                         defaultValue=""
+                        aria-label="Bulk update priority"
                       >
                         <option value="" disabled>Priority...</option>
                         <option value="LOW">Low</option>
@@ -1216,6 +1211,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkAssign(Number(e.target.value))}
                         defaultValue=""
+                        aria-label="Bulk assign agent"
                       >
                         <option value="" disabled>Assign...</option>
                         {agents.map(a => (
@@ -1235,134 +1231,100 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                 )}
 
                 {/* Tickets Scroll List */}
-                <div className="ticket-list-scroll overflow-auto pe-1 flex-grow-1" style={{ maxHeight: 'calc(100vh - 220px)' }}>
-                  {sortedTickets.length === 0 ? (
-                    <div className="text-center py-5 bg-white rounded-4 border">
-                      <Inbox size={32} className="text-muted mb-2" />
-                      <p className="text-muted mb-0 small">No tickets matching this view.</p>
+                <div className="ticket-list-scroll">
+                  {isLoadingWorkspace && tickets.length === 0 ? (
+                    <div className="ticket-queue-loading" role="status">
+                      <span className="visually-hidden">Loading tickets...</span>
+                      {[1, 2, 3].map(item => <div key={item} className="ticket-skeleton" aria-hidden="true"><span /><span /><span /></div>)}
+                    </div>
+                  ) : sortedTickets.length === 0 ? (
+                    <div className="workspace-empty-state">
+                      <span className="workspace-empty-icon"><Inbox size={26} /></span>
+                      <h2>{tickets.length ? 'No matching tickets' : 'Your inbox is clear'}</h2>
+                      <p>{tickets.length ? 'Try a different search or adjust your filters.' : 'New customer conversations will appear here.'}</p>
+                      {tickets.length > 0 ? (
+                        <button type="button" className="btn btn-sm btn-outline-primary" onClick={resetTicketFilters}>View all tickets</button>
+                      ) : (
+                        <button type="button" className="btn btn-sm btn-primary" onClick={() => setShowNewTicketModal(true)}><Plus size={14} /> Create a ticket</button>
+                      )}
                     </div>
                   ) : (
                     sortedTickets.map(t => (
-                      <div
+                      <article
                         key={t.id}
                         className={`ticket-row ${selectedTicket?.id === t.id ? 'selected' : ''}`}
-                        onClick={() => loadTicketDetail(t.id)}
                       >
-                        <div className="d-flex justify-content-between align-items-center mb-1">
-                          <div className="d-flex align-items-center gap-2">
-                            <input
-                              type="checkbox"
-                              className="form-check-input mt-0"
-                              checked={selectedTicketIds.includes(t.id)}
-                              onChange={e => {
-                                e.stopPropagation();
-                                if (e.target.checked) {
-                                  setSelectedTicketIds(prev => [...prev, t.id]);
-                                } else {
-                                  setSelectedTicketIds(prev => prev.filter(id => id !== t.id));
-                                }
-                              }}
-                            />
+                        <input
+                          type="checkbox"
+                          className="form-check-input ticket-row-checkbox"
+                          aria-label={`Select ticket ${t.ticketNumber}`}
+                          checked={selectedTicketIds.includes(t.id)}
+                          onChange={e => setSelectedTicketIds(prev => e.target.checked ? [...prev, t.id] : prev.filter(id => id !== t.id))}
+                        />
+                        <button type="button" className="ticket-open-button" onClick={() => loadTicketDetail(t.id)} aria-pressed={selectedTicket?.id === t.id} aria-label={`Open ticket ${t.ticketNumber}: ${t.subject}`}>
+                          <span className="ticket-row-topline">
                             <span className="ticket-code">#{t.ticketNumber}</span>
-                            <span className="badge bg-light text-secondary border py-0 px-1.5" style={{ fontSize: '0.65rem' }}>
-                              {t.channel === 'EMAIL' ? '✉️ Forwarded' : '🌐 M365'}
-                            </span>
-                          </div>
-                          <span className={`badge-status badge-${t.status.toLowerCase()}`}>
-                            {t.status.replace(/_/g, ' ')}
+                            <time dateTime={t.createdAt} title={new Date(t.createdAt).toLocaleString()}>{new Date(t.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</time>
                           </span>
-                        </div>
-
-                        <h6 className="fw-bold text-dark mb-1 text-truncate" title={t.subject} style={{ fontSize: '0.88rem' }}>
-                          {t.subject}
-                        </h6>
-
-                        <div className="text-muted mb-2 text-truncate" style={{ fontSize: '0.78rem' }}>
-                          {t.descriptionText || 'No message preview'}
-                        </div>
-
-                        <div className="d-flex justify-content-between align-items-center pt-1 border-top" style={{ fontSize: '0.72rem' }}>
-                          <span className="text-secondary fw-medium text-truncate" style={{ maxWidth: '170px' }}>
-                            {t.contact?.firstName || 'Requester'} • <span className="text-primary">{t.department?.code || 'IT'}</span>
+                          <span className="ticket-row-subject" title={t.subject}>{t.subject}</span>
+                          <span className="ticket-row-preview">{t.descriptionText || 'No message preview'}</span>
+                          <span className="ticket-row-requester">
+                            <span className={`ticket-requester-avatar avatar-tone-${t.id % 4}`}>{t.contact?.firstName?.charAt(0) || 'C'}</span>
+                            <span className="text-truncate">{[t.contact?.firstName, t.contact?.lastName].filter(Boolean).join(' ') || 'Customer'}</span>
+                            <span className="ticket-channel" title={formatLabel(t.channel)} aria-label={formatLabel(t.channel)}>{['EMAIL', 'MICROSOFT_365'].includes(t.channel) ? <Mail size={13} /> : <Globe size={13} />}</span>
                           </span>
-                          <div className="d-flex align-items-center gap-1.5">
-                            <span className={`badge-status badge-${t.priority.toLowerCase()}`}>
-                              {t.priority}
-                            </span>
-                            <span className="pulse-dot pulse-dot-success" title="Within SLA"></span>
-                          </div>
-                        </div>
-                      </div>
+                          <span className="ticket-row-bottom">
+                            <span className={`badge-status badge-${t.status.toLowerCase()}`}>{formatLabel(t.status)}</span>
+                            <span className={`ticket-priority priority-${t.priority.toLowerCase()}`}>{formatLabel(t.priority)}</span>
+                          </span>
+                        </button>
+                      </article>
                     ))
                   )}
                 </div>
-              </div>
+                <div className="ticket-queue-footer">
+                  <span>{sortedTickets.length} shown / {ticketPageInfo.totalElements} total</span>
+                  <div className="ticket-pagination" aria-label="Ticket pagination">
+                    <button type="button" className="workspace-icon-button" aria-label="Previous ticket page" disabled={ticketPage === 0 || isLoadingWorkspace} onClick={() => { setTicketPage(previous => previous - 1); setSelectedTicketIds([]); }}><ChevronLeft size={14} /></button>
+                    <span>{ticketPageInfo.number + 1} / {Math.max(1, ticketPageInfo.totalPages)}</span>
+                    <button type="button" className="workspace-icon-button" aria-label="Next ticket page" disabled={ticketPage + 1 >= ticketPageInfo.totalPages || isLoadingWorkspace} onClick={() => { setTicketPage(previous => previous + 1); setSelectedTicketIds([]); }}><ChevronRight size={14} /></button>
+                  </div>
+                </div>
+              </section>
 
               {/* RIGHT MAIN PANE: FRESHDESK /a/tickets/1 COMMAND CENTER */}
-              <div className="col-12 col-lg-7 col-xl-8 h-100">
+              <section className="ticket-detail-pane" aria-label="Ticket conversation">
                 {selectedTicket ? (
-                  <div className="enterprise-card h-100 d-flex flex-column overflow-hidden">
-                    {/* FRESHDESK SLA BANNER */}
-                    <div
-                      className="px-4 py-2 border-bottom d-flex align-items-center justify-content-between"
-                      style={{
-                        background: selectedTicket.priority === 'URGENT' ? '#fef2f2' : '#f0fdf4',
-                        borderLeft: `4px solid ${selectedTicket.priority === 'URGENT' ? '#ef4444' : '#10b981'}`
-                      }}
-                    >
-                      <div className="d-flex align-items-center gap-2">
-                        <Clock size={16} className={selectedTicket.priority === 'URGENT' ? 'text-danger' : 'text-success'} />
-                        <span className="small fw-bold text-dark" style={{ fontSize: '0.8rem' }}>
-                          {selectedTicket.priority === 'URGENT' ? 'Urgent SLA Target: First response overdue / critical' : 'Enterprise SLA Target: First response expected within 4 hours'}
-                        </span>
-                      </div>
-                      <div className="d-flex align-items-center gap-2">
-                        <span className={`badge ${selectedTicket.priority === 'URGENT' ? 'bg-danger text-white' : 'bg-success text-white'} rounded-pill fw-semibold`} style={{ fontSize: '0.68rem' }}>
-                          {selectedTicket.priority === 'URGENT' ? 'ESCALATION ACTIVE' : 'WITHIN SLA'}
-                        </span>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-link p-0 text-decoration-none small text-muted"
-                          onClick={() => setShowPropertiesDrawer(!showPropertiesDrawer)}
-                          title="Toggle Properties & Context Drawer"
-                        >
-                          <SlidersHorizontal size={14} className="me-1 inline" />
-                          {showPropertiesDrawer ? 'Hide Context' : 'Show Context'}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* TOP ACTION TOOLBAR (Freshdesk /a/tickets/1 signature command bar) */}
-                    <div className="bg-white border-bottom px-4 py-2.5 d-flex flex-wrap align-items-center justify-content-between gap-2">
-                      <div className="d-flex align-items-center gap-2">
-                        <span className="ticket-code fw-bolder">#{selectedTicket.ticketNumber}</span>
+                  <div className="ticket-detail-card">
+                    <div className="ticket-detail-toolbar">
+                      <div className="ticket-toolbar-title">
+                        <button type="button" className="workspace-icon-button ticket-back-button" aria-label="Back to ticket list" onClick={() => { setShowMobileTicket(false); setShowPropertiesDrawer(false); }}><ArrowLeft size={18} /></button>
+                        <span className="ticket-code">#{selectedTicket.ticketNumber}</span>
                         <span className={`badge-status badge-${selectedTicket.status.toLowerCase()}`}>
-                          {selectedTicket.status.replace(/_/g, ' ')}
-                        </span>
-                        <span className={`badge-status badge-${selectedTicket.priority.toLowerCase()}`}>
-                          {selectedTicket.priority} Priority
+                          {formatLabel(selectedTicket.status)}
                         </span>
                       </div>
 
-                      {/* Freshdesk Quick Action Dropdowns */}
-                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                      <div className="ticket-toolbar-actions">
                         {/* Scenario Macros Dropdown */}
                         <div className="position-relative">
                           <button
                             type="button"
-                            className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1.5 rounded-3 fw-semibold shadow-xs"
+                            className="workspace-filter-button"
                             onClick={() => setShowScenarioMenu(!showScenarioMenu)}
+                            aria-expanded={showScenarioMenu}
+                            aria-controls="ticket-scenario-menu"
                           >
                             <Zap size={14} />
-                            <span>1-Click Scenario</span>
+                            <span>Run macro</span><ChevronDown size={12} />
                           </button>
 
                           {showScenarioMenu && (
                             <div
-                              className="position-absolute end-0 mt-1 shadow-lg bg-white rounded-3 border p-2 z-3"
-                              style={{ width: '280px', zIndex: 1050 }}
+                              id="ticket-scenario-menu"
+                              className="ticket-scenario-menu bg-white rounded-3 border p-2"
                             >
-                              <div className="small fw-bold text-secondary mb-2 px-1">Execute Scenario Macro</div>
+                              <div className="workspace-eyebrow p-2">Choose a workflow</div>
                               <div className="d-flex flex-column gap-1">
                                 {PRESET_SCENARIOS.map(sc => (
                                   <button
@@ -1387,101 +1349,77 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           )}
                         </div>
 
-                        {/* Status Select */}
-                        <select
-                          className="form-select form-select-sm fw-semibold"
-                          value={selectedTicket.status}
-                          onChange={e => handleStatusChange(e.target.value)}
-                          style={{ width: '150px' }}
-                        >
-                          <option value="OPEN">OPEN</option>
-                          <option value="IN_PROGRESS">IN PROGRESS</option>
-                          <option value="WAITING_ON_CUSTOMER">WAITING ON USER</option>
-                          <option value="RESOLVED">RESOLVED</option>
-                          <option value="CLOSED">CLOSED</option>
-                        </select>
-
-                        {/* Priority Select */}
-                        <select
-                          className="form-select form-select-sm fw-semibold"
-                          value={selectedTicket.priority}
-                          onChange={e => handlePriorityChange(e.target.value)}
-                          style={{ width: '120px' }}
-                        >
-                          <option value="LOW">Low</option>
-                          <option value="MEDIUM">Medium</option>
-                          <option value="HIGH">High</option>
-                          <option value="URGENT">Urgent</option>
-                        </select>
-
-                        {/* Assign Agent Select */}
-                        <select
-                          className="form-select form-select-sm fw-semibold"
-                          value={selectedTicket.assignedAgent?.id || ''}
-                          onChange={e => handleAssignAgent(Number(e.target.value))}
-                          style={{ width: '160px' }}
-                        >
-                          <option value="">Assign Engineer...</option>
-                          {agents.map(ag => (
-                            <option key={ag.id} value={ag.id}>
-                              {ag.displayName} ({ag.role?.name || 'Agent'})
-                            </option>
-                          ))}
-                        </select>
+                        <button type="button" className={`workspace-filter-button ${showPropertiesDrawer ? 'active' : ''}`} aria-label="Toggle ticket details" aria-expanded={showPropertiesDrawer} aria-controls="ticket-properties" onClick={() => setShowPropertiesDrawer(prev => !prev)}><PanelRight size={15} /><span>Details</span></button>
                       </div>
                     </div>
 
+                    <div className={`ticket-sla-notice sla-${selectedTicket.slaStatus?.toLowerCase()}`}>
+                      <Clock size={14} />
+                      <span>{selectedTicket.slaStatus === 'WITHIN_SLA' ? 'Within SLA' : selectedTicket.slaStatus === 'NEARING_BREACH' ? 'Response due soon' : selectedTicket.slaStatus === 'BREACHED' ? 'SLA overdue' : 'No active SLA target'}</span>
+                      {selectedTicket.firstResponseDueAt && <time dateTime={selectedTicket.firstResponseDueAt}>First response due {new Date(selectedTicket.firstResponseDueAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}
+                    </div>
+
                     {/* Main Split: Conversation Thread (Left) + Properties Drawer (Right) */}
-                    <div className="d-flex flex-grow-1 overflow-hidden">
+                    <div className="ticket-detail-layout">
                       {/* Thread & Composer Container */}
-                      <div className="d-flex flex-column flex-grow-1 overflow-hidden bg-white">
+                      <div className="ticket-conversation" inert={isDetailsOverlay}>
                         {/* Ticket Subject Header */}
-                        <div className="p-3 px-4 border-bottom bg-light bg-opacity-50">
-                          <h5 className="fw-bold text-dark mb-1">{selectedTicket.subject}</h5>
-                          <div className="d-flex align-items-center gap-3 text-muted small" style={{ fontSize: '0.78rem' }}>
-                            <span><strong>Requester:</strong> {selectedTicket.contact?.firstName} ({selectedTicket.contact?.email})</span>
-                            <span>•</span>
-                            <span><strong>Department:</strong> {selectedTicket.department?.name}</span>
-                            <span>•</span>
-                            <span><strong>Channel:</strong> <code className="text-primary">{selectedTicket.channel}</code></span>
+                        <div className="ticket-subject-header">
+                          <h2>{selectedTicket.subject}</h2>
+                          <div className="ticket-subject-meta">
+                            <span><Mail size={13} />{selectedTicket.contact?.email || 'Customer conversation'}</span>
+                            <span>{selectedTicket.department?.name}</span>
                           </div>
+                        </div>
+                        <div className="ticket-routing-bar">
+                          <label>Status
+                            <select className="form-select form-select-sm" aria-label="Ticket status" value={selectedTicket.status} onChange={e => handleStatusChange(e.target.value)}>
+                              <option value="OPEN">Open</option>
+                              <option value="IN_PROGRESS">In progress</option>
+                              <option value="WAITING_ON_CUSTOMER">Waiting on customer</option>
+                              <option value="WAITING_ON_THIRD_PARTY">Waiting on third party</option>
+                              <option value="RESOLVED">Resolved</option>
+                              <option value="CLOSED">Closed</option>
+                              <option value="SPAM">Spam</option>
+                            </select>
+                          </label>
+                          <label>Priority
+                            <select className="form-select form-select-sm" aria-label="Ticket priority" value={selectedTicket.priority} onChange={e => handlePriorityChange(e.target.value)}>
+                              <option value="LOW">Low</option>
+                              <option value="MEDIUM">Medium</option>
+                              <option value="HIGH">High</option>
+                              <option value="URGENT">Urgent</option>
+                            </select>
+                          </label>
+                          <label>Assigned to
+                            <select className="form-select form-select-sm" aria-label="Assigned agent" value={selectedTicket.assignedAgent?.id || ''} onChange={e => handleAssignAgent(Number(e.target.value))}>
+                              <option value="" disabled>Unassigned</option>
+                              {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}
+                            </select>
+                          </label>
                         </div>
 
                         {/* Conversation Threads Stream */}
-                        <div className="p-4 overflow-auto flex-grow-1" style={{ backgroundColor: '#f8fafc' }}>
+                        <div className="ticket-thread-stream" aria-label="Conversation messages" tabIndex={0}>
+                          <div className="ticket-conversation-label"><MessageSquare size={14} />Conversation<span>{selectedTicket.threads?.length || 0}</span></div>
+                          {!selectedTicket.threads?.length && <p className="ticket-no-messages">{selectedTicket.descriptionText || 'No messages yet. Start the conversation below.'}</p>}
                           {(selectedTicket.threads || []).map((th, idx) => (
                             <div
                               key={th.id || idx}
                               className={`thread-card ${th.isPrivate ? 'thread-private' : th.senderType === 'CUSTOMER' ? 'thread-customer' : 'thread-agent'}`}
                             >
-                              <div className="d-flex justify-content-between align-items-center mb-2">
-                                <div className="d-flex align-items-center gap-2">
-                                  {th.isPrivate ? (
-                                    <span className="badge bg-warning text-dark d-flex align-items-center gap-1">
-                                      <Lock size={12} /> Internal Private Note
-                                    </span>
-                                  ) : th.senderType === 'CUSTOMER' ? (
-                                    <span className="badge bg-primary-subtle text-primary">
-                                      Inbound Customer ({th.fromEmail})
-                                    </span>
-                                  ) : (
-                                    <span className="badge bg-success-subtle text-success">
-                                      Engineer Reply ({th.fromEmail})
-                                    </span>
-                                  )}
-                                  <span className="fw-bold text-dark" style={{ fontSize: '0.85rem' }}>
-                                    {th.fromName}
-                                  </span>
+                              <div className="ticket-message-header">
+                                <div className="ticket-message-author">
+                                  <span className={`ticket-message-avatar ${th.senderType === 'CUSTOMER' ? 'is-customer' : ''}`}>{th.fromName?.charAt(0) || 'S'}</span>
+                                  <div>
+                                    <strong>{th.fromName || th.fromEmail}</strong>
+                                    <span>{th.isPrivate ? <><Lock size={11} /> Private note</> : th.senderType === 'CUSTOMER' ? 'Customer' : 'Support team'}</span>
+                                  </div>
                                 </div>
-                                <small className="text-muted">
-                                  {th.createdAt ? new Date(th.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Recent'}
-                                </small>
+                                <time dateTime={th.createdAt} title={th.fromEmail}>{th.createdAt ? new Date(th.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</time>
                               </div>
 
-                              <div
-                                className="thread-body text-dark"
-                                dangerouslySetInnerHTML={{ __html: th.bodyHtml || `<p>${th.bodyText}</p>` }}
-                              />
+                              {th.bodyHtml ? <div className="thread-body" dangerouslySetInnerHTML={{ __html: th.bodyHtml }} /> : <div className="thread-body ticket-plain-message">{th.bodyText}</div>}
 
                               {/* Thread Attachments View */}
                               {th.attachments && th.attachments.length > 0 && (
@@ -1554,39 +1492,41 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         </div>
 
                         {/* Composer & Quick Knowledge Base Insertion Box */}
-                        <div className="bg-white p-3.5 px-4 border-top">
-                          <div className="d-flex align-items-center justify-content-between mb-2">
-                            <div className="d-flex align-items-center gap-2">
+                        <div className={`ticket-composer ${isPrivateNote ? 'is-private-note' : ''}`}>
+                          <div className="ticket-composer-toolbar">
+                            <div className="ticket-composer-tabs" aria-label="Reply visibility">
                               <button
                                 type="button"
-                                className={`btn btn-sm rounded-3 ${!isPrivateNote ? 'btn-primary' : 'btn-outline-secondary'}`}
+                                className={`ticket-composer-tab ${!isPrivateNote ? 'active' : ''}`}
+                                aria-pressed={!isPrivateNote}
                                 onClick={() => setIsPrivateNote(false)}
                               >
-                                <Send size={13} className="me-1 inline" /> Public Email Reply
+                                <Send size={14} /> Reply
                               </button>
                               <button
                                 type="button"
-                                className={`btn btn-sm rounded-3 ${isPrivateNote ? 'btn-warning text-dark fw-bold' : 'btn-outline-secondary'}`}
+                                className={`ticket-composer-tab ${isPrivateNote ? 'active' : ''}`}
+                                aria-pressed={isPrivateNote}
                                 onClick={() => setIsPrivateNote(true)}
                               >
-                                <Lock size={13} className="me-1 inline" /> Private Internal Note
+                                <Lock size={14} /> Private note
                               </button>
                             </div>
 
                             {/* Toolbar Buttons: Attachments & Knowledge Base */}
-                            <div className="d-flex align-items-center gap-1.5">
+                            <div className="ticket-composer-tools">
                               <label
-                                className="btn btn-sm btn-light border px-2 py-1 text-secondary fw-semibold d-flex align-items-center gap-1 cursor-pointer mb-0"
-                                style={{ cursor: 'pointer' }}
+                                className="ticket-composer-tool"
                                 title="Attach Documents (PNG, PDF, JPG, JPEG, TXT)"
                               >
-                                <Paperclip size={13} className="text-primary" />
-                                <span style={{ fontSize: '0.72rem' }}>Attach Files</span>
+                                <Paperclip size={16} />
+                                <span className="composer-tool-label">Attach</span>
                                 <input
                                   type="file"
                                   multiple
                                   accept=".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv"
-                                  className="d-none"
+                                  className="visually-hidden"
+                                  aria-label="Attach files to reply"
                                   onChange={(e) => {
                                     if (e.target.files) {
                                       setReplyAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
@@ -1597,32 +1537,36 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                               <button
                                 type="button"
-                                className="btn btn-sm btn-light border px-2 py-1 text-primary fw-semibold d-flex align-items-center gap-1"
-                                onClick={() => setShowKbPicker(!showKbPicker)}
+                                className="ticket-composer-tool"
+                                onClick={() => { setShowKbPicker(!showKbPicker); setShowCannedPicker(false); }}
                                 title="Insert Knowledge Base Solution"
+                                aria-label="Insert knowledge base article"
+                                aria-expanded={showKbPicker}
                               >
-                                <BookOpen size={13} />
-                                <span style={{ fontSize: '0.72rem' }}>Insert Solution Article</span>
+                                <BookOpen size={16} />
+                                <span className="composer-tool-label">Article</span>
                               </button>
 
                               <button
                                 type="button"
-                                className="btn btn-sm btn-light border px-2 py-1 text-primary fw-semibold d-flex align-items-center gap-1"
-                                onClick={() => setShowCannedPicker(!showCannedPicker)}
+                                className="ticket-composer-tool"
+                                onClick={() => { setShowCannedPicker(!showCannedPicker); setShowKbPicker(false); }}
                                 title="Insert Canned Response Template (#)"
+                                aria-label="Insert reply template"
+                                aria-expanded={showCannedPicker}
                               >
-                                <Sparkles size={13} className="text-warning" />
-                                <span style={{ fontSize: '0.72rem' }}>Canned Templates (#)</span>
+                                <Sparkles size={16} />
+                                <span className="composer-tool-label">Template</span>
                               </button>
                             </div>
                           </div>
 
                           {/* Canned Responses Template Picker */}
                           {showCannedPicker && (
-                            <div className="p-3 mb-2 bg-light rounded-3 border animate-fade-in">
+                            <div className="ticket-composer-picker p-3 bg-white rounded-3 border">
                               <div className="d-flex justify-content-between align-items-center mb-2">
-                                <span className="small fw-bold text-dark">Select Canned Response Template:</span>
-                                <button type="button" className="btn-close btn-sm" onClick={() => setShowCannedPicker(false)}></button>
+                                <span className="small fw-bold text-dark">Reply templates</span>
+                                <button type="button" className="btn-close btn-sm" aria-label="Close reply templates" onClick={() => setShowCannedPicker(false)}></button>
                               </div>
                               <div className="d-flex flex-column gap-1.5" style={{ maxHeight: '190px', overflowY: 'auto' }}>
                                 {cannedResponses.map(cr => (
@@ -1652,10 +1596,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                           {/* Knowledge Base Solutions Modal Picker */}
                           {showKbPicker && (
-                            <div className="p-3 mb-2 bg-light rounded-3 border animate-fade-in">
+                            <div className="ticket-composer-picker p-3 bg-white rounded-3 border">
                               <div className="d-flex justify-content-between align-items-center mb-2">
-                                <span className="small fw-bold text-dark">Select Knowledge Base Article to Insert:</span>
-                                <button type="button" className="btn-close btn-sm" onClick={() => setShowKbPicker(false)}></button>
+                                <span className="small fw-bold text-dark">Knowledge base articles</span>
+                                <button type="button" className="btn-close btn-sm" aria-label="Close knowledge base articles" onClick={() => setShowKbPicker(false)}></button>
                               </div>
                               <div className="d-flex flex-column gap-1.5" style={{ maxHeight: '180px', overflowY: 'auto' }}>
                                 {kbArticles.map(art => (
@@ -1682,10 +1626,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             </div>
                           )}
 
+                          <div className="ticket-composer-recipient">
+                            {isPrivateNote ? <><Lock size={12} />Visible only to your support team</> : <>To: <span>{selectedTicket.contact?.email || 'Customer'}</span></>}
+                          </div>
                           <textarea
-                            className={`form-control rounded-3 ${isPrivateNote ? 'border-warning bg-warning-subtle' : ''}`}
+                            className="form-control ticket-reply-input"
                             rows={3}
-                            placeholder={isPrivateNote ? "Add an internal note visible only to support engineers..." : "Type your official response to send to the customer..."}
+                            aria-label={isPrivateNote ? 'Private note' : 'Reply message'}
+                            placeholder={isPrivateNote ? 'Add context for your teammates...' : `Write a reply to ${selectedTicket.contact?.firstName || 'your customer'}...`}
                             value={replyText}
                             onChange={(e) => setReplyText(e.target.value)}
                           />
@@ -1719,26 +1667,27 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             </div>
                           )}
 
-                          <div className="d-flex justify-content-between align-items-center mt-2.5">
-                            <small className="text-muted">
-                              {isPrivateNote ? "🔒 Internal note is private to Kuwy team." : "📧 Reply is dispatched to customer via Microsoft 365 Exchange."}
-                            </small>
+                          <div className="ticket-composer-footer">
+                            <small>{isPrivateNote ? 'Not shared with the customer' : 'Your reply will be sent by email'}</small>
                             <div className="d-flex align-items-center gap-2">
                               <button
                                 type="button"
-                                className="btn btn-sm btn-outline-secondary px-3"
+                                className="btn btn-sm btn-light"
+                                disabled={!replyText && !replyAttachments.length}
                                 onClick={() => {
                                   setReplyText('');
+                                  setReplyAttachments([]);
                                 }}
                               >
-                                Clear
+                                Discard
                               </button>
                               <button
-                                className="btn btn-sm btn-primary px-4 py-1.5 rounded-3 fw-bold shadow-sm"
+                                type="button"
+                                className="btn btn-sm btn-primary ticket-send-button"
                                 disabled={isSending || !replyText.trim()}
                                 onClick={handleSendReply}
                               >
-                                {isSending ? 'Sending...' : isPrivateNote ? 'Save Internal Note' : 'Send Official Reply'}
+                                <Send size={14} />{isSending ? 'Sending...' : isPrivateNote ? 'Add note' : 'Send reply'}
                               </button>
                             </div>
                           </div>
@@ -1747,41 +1696,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                       {/* FRESHDESK PROPERTIES & CUSTOMER 360° DRAWER (Right 280px) */}
                       {showPropertiesDrawer && (
-                        <div
-                          className="border-start bg-light overflow-auto p-3"
-                          style={{ width: '310px', minWidth: '310px', fontSize: '0.82rem' }}
-                        >
-                          {/* Live Time Tracker Widget */}
-                          <div className="enterprise-card p-3 mb-3 bg-white shadow-xs">
-                            <div className="d-flex justify-content-between align-items-center mb-2">
-                              <span className="fw-bold text-dark small">Time Tracking</span>
-                              <span className="font-monospace text-primary fw-bolder" style={{ fontSize: '1rem' }}>
-                                {formatTimer(timerSeconds)}
-                              </span>
-                            </div>
-                            <div className="d-flex align-items-center gap-1.5">
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${timerRunning ? 'btn-warning' : 'btn-success'} w-100 fw-bold d-flex align-items-center justify-content-center gap-1`}
-                                onClick={() => setTimerRunning(!timerRunning)}
-                              >
-                                {timerRunning ? <Pause size={13} /> : <Play size={13} />}
-                                <span>{timerRunning ? 'Pause Timer' : 'Start Timer'}</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-outline-secondary p-1.5"
-                                onClick={() => { setTimerRunning(false); setTimerSeconds(0); }}
-                                title="Reset timer"
-                              >
-                                <RotateCcw size={13} />
-                              </button>
-                            </div>
-                          </div>
-
+                        <>
+                        <button type="button" className="ticket-properties-backdrop" aria-label="Close ticket details" tabIndex={-1} onClick={() => setShowPropertiesDrawer(false)} />
+                        <aside ref={propertiesRef} id="ticket-properties" className="ticket-properties" aria-label="Ticket details">
+                          <div className="ticket-properties-heading"><strong>Ticket details</strong><button type="button" className="workspace-icon-button" aria-label="Close ticket details" onClick={() => setShowPropertiesDrawer(false)}><X size={16} /></button></div>
                           {/* Customer 360° Profile */}
                           <div className="enterprise-card p-3 mb-3 bg-white shadow-xs">
-                            <span className="fw-bold text-dark small d-block mb-2">Requester Profile (360°)</span>
+                            <span className="fw-bold text-dark small d-block mb-3">Customer</span>
                             <div className="d-flex align-items-center gap-2 mb-2">
                               <div
                                 className="rounded-circle bg-primary-subtle text-primary fw-bold d-flex align-items-center justify-content-center flex-shrink-0"
@@ -1790,23 +1711,23 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 {selectedTicket.contact?.firstName?.charAt(0) || 'C'}
                               </div>
                               <div className="overflow-hidden">
-                                <div className="fw-bold text-dark text-truncate">{selectedTicket.contact?.firstName}</div>
-                                <code className="text-muted d-block text-truncate" style={{ fontSize: '0.74rem' }}>
+                                <div className="fw-bold text-dark text-truncate">{selectedTicket.contact?.firstName} {selectedTicket.contact?.lastName}</div>
+                                <span className="text-muted d-block text-truncate" style={{ fontSize: '0.74rem' }} title={selectedTicket.contact?.email}>
                                   {selectedTicket.contact?.email}
-                                </code>
+                                </span>
                               </div>
                             </div>
-                            <div className="pt-2 border-top text-secondary small">
-                              <div><strong>Company:</strong> {activeCompany.name}</div>
-                              <div><strong>Channel:</strong> {selectedTicket.channel}</div>
-                              <div><strong>Forwarded Target:</strong> <code className="text-primary">{selectedTicket.sourceMailbox?.forwardingAddress || '1281753993@tickets.helpdesk.com'}</code></div>
+                            <div className="ticket-customer-meta">
+                              <span>Channel <strong>{formatLabel(selectedTicket.channel)}</strong></span>
+                              {selectedTicket.contact?.phone && <span>Phone <strong>{selectedTicket.contact.phone}</strong></span>}
+                              {selectedTicket.sourceMailbox?.forwardingAddress && <span>Support inbox <strong>{selectedTicket.sourceMailbox.forwardingAddress}</strong></span>}
                             </div>
                           </div>
 
                           {/* Ticket Properties */}
                           <div className="enterprise-card p-3 mb-3 bg-white shadow-xs">
-                            <span className="fw-bold text-dark small d-block mb-2">Ticket Properties</span>
-                            <div className="d-flex flex-column gap-2 text-secondary small">
+                            <span className="fw-bold text-dark small d-block mb-3">Properties</span>
+                            <div className="ticket-property-list d-flex flex-column gap-2 text-secondary small">
                               <div className="d-flex justify-content-between">
                                 <span>Ticket Number:</span>
                                 <strong className="text-dark">#{selectedTicket.ticketNumber}</strong>
@@ -1818,13 +1739,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                               <div className="d-flex justify-content-between">
                                 <span>Status:</span>
                                 <span className={`badge-status badge-${selectedTicket.status.toLowerCase()}`}>
-                                  {selectedTicket.status}
+                                  {formatLabel(selectedTicket.status)}
                                 </span>
                               </div>
                               <div className="d-flex justify-content-between">
                                 <span>Priority:</span>
                                 <span className={`badge-status badge-${selectedTicket.priority.toLowerCase()}`}>
-                                  {selectedTicket.priority}
+                                  {formatLabel(selectedTicket.priority)}
                                 </span>
                               </div>
                               <div className="d-flex justify-content-between">
@@ -1835,6 +1756,19 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 <span>Created:</span>
                                 <span>{new Date(selectedTicket.createdAt).toLocaleDateString()}</span>
                               </div>
+                            </div>
+                          </div>
+
+                          <div className="enterprise-card p-3 mb-3 bg-white">
+                            <div className="d-flex justify-content-between align-items-center mb-2">
+                              <span className="fw-bold text-dark small">Session timer</span>
+                              <span className="font-monospace text-primary fw-bolder" style={{ fontSize: '1rem' }}>{formatTimer(timerSeconds)}</span>
+                            </div>
+                            <div className="d-flex align-items-center gap-1.5">
+                              <button type="button" className={`btn btn-sm ${timerRunning ? 'btn-outline-warning' : 'btn-outline-secondary'} w-100 d-flex align-items-center justify-content-center gap-1`} onClick={() => setTimerRunning(!timerRunning)}>
+                                {timerRunning ? <Pause size={13} /> : <Play size={13} />}<span>{timerRunning ? 'Pause' : 'Start timer'}</span>
+                              </button>
+                              <button type="button" className="btn btn-sm btn-outline-secondary p-1.5" onClick={() => { setTimerRunning(false); setTimerSeconds(0); }} title="Reset timer" aria-label="Reset timer"><RotateCcw size={13} /></button>
                             </div>
                           </div>
 
@@ -1930,17 +1864,19 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                               </div>
                             );
                           })()}
-                        </div>
+                        </aside>
+                        </>
                       )}
                     </div>
                   </div>
                 ) : (
-                  <div className="h-100 d-flex flex-column align-items-center justify-content-center enterprise-card text-center p-5">
-                    <Inbox size={48} className="text-muted mb-3" />
-                    <h5 className="fw-bold">No Ticket Selected</h5>
-                    <p className="text-muted mb-0">Select an inquiry from the queue on the left to triage and respond.</p>
+                  <div className="workspace-empty-state ticket-detail-empty">
+                    <span className="workspace-empty-icon"><MessageSquare size={30} /></span>
+                    <h2>A space for better conversations</h2>
+                    <p>Select a ticket to read the conversation and help your customer.</p>
                   </div>
                 )}
+              </section>
               </div>
             </div>
           )}
@@ -2037,7 +1973,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {activeTab === 'customers' && (
             <div className="animate-fade-in">
               {/* Header banner */}
-              <div className="enterprise-card p-4 mb-4 border border-primary-subtle" style={{ background: 'linear-gradient(135deg, #ffffff, #eff6ff)' }}>
+              <div className="enterprise-card workspace-section-banner p-4 mb-4">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
                   <div className="d-flex align-items-center gap-3">
                     <div className="p-3 rounded-4 bg-primary text-white shadow-sm">
@@ -2045,10 +1981,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     </div>
                     <div>
                       <h4 className="fw-bolder mb-1 text-dark">
-                        Customers & Client Organizations
+                        Customer directory
                       </h4>
                       <p className="text-secondary small mb-0">
-                        Screens 20 & 21 • Manage verified customer contacts, dealership organizations, and ticket histories
+                        Manage contacts, organizations, and conversation history.
                       </p>
                     </div>
                   </div>
@@ -2059,7 +1995,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       onClick={() => setShowNewCustomerModal(true)}
                     >
                       <UserPlus size={16} />
-                      <span>Add Customer Contact</span>
+                      <span>Add customer</span>
                     </button>
                   </div>
                 </div>
@@ -2131,7 +2067,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <tr>
                         <th className="ps-4">Customer Name</th>
                         <th>Email & Contact</th>
-                        <th>Organization (Screen 21)</th>
+                        <th>Organization</th>
                         <th>Total Inquiries</th>
                         <th>Open Status</th>
                         <th>Joined</th>
@@ -2209,7 +2145,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                     setNewRequesterName(cust.displayName || cust.firstName);
                                     setShowNewTicketModal(true);
                                   }}
-                                  title="Create Ticket on behalf of this customer (Screen 19)"
+                                  title="Create a ticket for this customer"
                                 >
                                   + Ticket
                                 </button>
@@ -2230,16 +2166,16 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               ============================================================== */}
           {activeTab === 'solutions' && (
             <div>
-              <div className="enterprise-card p-4 mb-4 border border-info-subtle" style={{ background: 'linear-gradient(135deg, #ffffff, #f0fdf4)' }}>
+              <div className="enterprise-card workspace-section-banner p-4 mb-4">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
                   <div className="d-flex align-items-center gap-3">
                     <div className="p-3 rounded-4 bg-success text-white shadow-sm">
                       <BookOpen size={24} />
                     </div>
                     <div>
-                      <h5 className="fw-bolder mb-1 text-dark">Knowledge Base & Solution Repository</h5>
+                      <h5 className="fw-bolder mb-1 text-dark">Shared knowledge</h5>
                       <p className="text-muted small mb-0">
-                        Pre-approved solutions and troubleshooting documentation for <strong>{activeCompany.name}</strong>. Agents can insert these directly into replies.
+                        Keep useful answers in one place and add them directly to customer replies.
                       </p>
                     </div>
                   </div>
@@ -2248,7 +2184,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     onClick={() => setShowNewArticleModal(true)}
                   >
                     <Plus size={15} />
-                    <span>New Solution Article</span>
+                    <span>New article</span>
                   </button>
                 </div>
               </div>
@@ -2263,7 +2199,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             {art.categoryName}
                           </span>
                           <span className="text-muted small" style={{ fontSize: '0.72rem' }}>
-                            👀 {art.viewCount} views
+                            {art.viewCount} views
                           </span>
                         </div>
                         <h6 className="fw-bold text-dark mb-2" style={{ fontSize: '0.94rem' }}>
@@ -2276,7 +2212,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         />
                       </div>
                       <div className="pt-2 border-top d-flex justify-content-between align-items-center">
-                        <small className="text-success fw-semibold">👍 {art.helpfulVotes} helpful votes</small>
+                        <small className="text-success fw-semibold">{art.helpfulVotes} helpful votes</small>
                         <button
                           type="button"
                           className="btn btn-sm btn-outline-primary py-1 px-2.5 rounded-2 fw-semibold"
@@ -2302,25 +2238,26 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               ============================================================== */}
           {activeTab === 'automations' && (
             <div>
-              <div className="enterprise-card p-4 mb-4 border border-primary-subtle" style={{ background: 'linear-gradient(135deg, #ffffff, #f5f3ff)' }}>
+              <div className="enterprise-card workspace-section-banner p-4 mb-4">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
                   <div className="d-flex align-items-center gap-3">
                     <div className="p-3 rounded-4 text-white shadow-sm" style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)' }}>
                       <Zap size={24} />
                     </div>
                     <div>
-                      <h5 className="fw-bolder mb-1 text-dark">Scenario Automations & 1-Click Macros</h5>
+                      <h5 className="fw-bolder mb-1 text-dark">Ready-to-use workflows</h5>
                       <p className="text-muted small mb-0">
-                        Standardize multi-step support actions for <strong>{activeCompany.name}</strong>. Apply pre-approved tags, status updates, and customer responses in 1 click.
+                        Apply consistent status updates and customer responses with a single action.
                       </p>
                     </div>
                   </div>
                   <button
                     className="btn btn-sm btn-primary fw-bold d-flex align-items-center gap-1.5 px-3 py-2 rounded-3 shadow-sm"
-                    onClick={() => showNotification('Scenario macro created')}
+                    disabled
+                    title="Custom macro creation is not available yet"
                   >
                     <Plus size={15} />
-                    <span>Add New Macro</span>
+                    <span>New macro</span>
                   </button>
                 </div>
               </div>
@@ -2353,7 +2290,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           }
                         }}
                       >
-                        ⚡ Test Run on Selected Ticket
+                        Apply to selected ticket
                       </button>
                     </div>
                   </div>
@@ -2383,11 +2320,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
             <div>
               {/* Email Forwarding Feature Banner */}
               <div
-                className="enterprise-card p-4 mb-4"
-                style={{
-                  background: 'linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)',
-                  border: '1.5px solid #bfdbfe'
-                }}
+                className="enterprise-card workspace-section-banner p-4 mb-4"
               >
                 <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
                   <div className="d-flex align-items-start gap-3">
@@ -2400,7 +2333,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     <div>
                       <div className="d-flex align-items-center gap-2 mb-1 flex-wrap">
                         <h5 className="fw-bolder mb-0 text-dark" style={{ fontSize: '1.15rem' }}>
-                          Forward your messages to HelpDesk
+                          Connect a support inbox
                         </h5>
                         <span className="badge bg-success-subtle text-success border border-success-subtle px-2.5 py-1 rounded-pill fw-bold" style={{ fontSize: '0.72rem' }}>
                           <CheckCircle2 size={12} className="inline me-1" />
@@ -2501,7 +2434,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {activeTab === 'billing' && (
             <div className="animate-fade-in">
               {/* Header Banner */}
-              <div className="enterprise-card p-4 mb-4 border border-primary-subtle" style={{ background: 'linear-gradient(135deg, #ffffff, #eff6ff)' }}>
+              <div className="enterprise-card workspace-section-banner p-4 mb-4">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
                   <div className="d-flex align-items-center gap-3">
                     <div className="p-3 rounded-4 bg-primary text-white shadow-sm">
@@ -2509,7 +2442,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     </div>
                     <div>
                       <h4 className="fw-bolder mb-1 text-dark">
-                        {activeCompany.name} • Subscription & Quota
+                        Workspace subscription
                       </h4>
                       <p className="text-secondary small mb-0">
                         Manage agent seat allocations, monthly ticket limits, and payment methods
@@ -2518,7 +2451,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                   <div className="d-flex align-items-center gap-2">
                     <span className="badge bg-success-subtle text-success fs-6 px-3 py-2 border border-success-subtle rounded-pill">
-                      ● Active Subscription
+                      {formatLabel(currentSubscription?.status || activeCompany.status)}
                     </span>
                   </div>
                 </div>
@@ -2743,8 +2676,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           MODAL 1: NEW TICKET CREATION
           ============================================================== */}
       {showNewTicketModal && (
-        <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
-          <div className="modal-dialog modal-dialog-centered">
+        <dialog ref={newTicketDialogRef} className="workspace-ticket-dialog" aria-labelledby="new-ticket-title" onCancel={() => setShowNewTicketModal(false)} onClick={e => { if (e.target === e.currentTarget) setShowNewTicketModal(false); }}>
+          <div className="modal-dialog">
             <div className="modal-content border-0 shadow-lg" style={{ borderRadius: '16px', overflow: 'hidden' }}>
               <div className="modal-header bg-white border-bottom py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
@@ -2752,83 +2685,90 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     <Plus size={20} />
                   </div>
                   <div>
-                    <h5 className="modal-title fw-bold mb-0">Create New Ticket</h5>
-                    <small className="text-muted">Tenant: {activeCompany.name} ({activeCompany.companyCode})</small>
+                    <h2 id="new-ticket-title" className="modal-title fw-bold mb-1">New ticket</h2>
+                    <small className="text-muted">Start a conversation on behalf of a customer.</small>
                   </div>
                 </div>
-                <button type="button" className="btn-close" onClick={() => setShowNewTicketModal(false)}></button>
+                <button type="button" className="btn-close" aria-label="Close new ticket" onClick={() => setShowNewTicketModal(false)}></button>
               </div>
               <form onSubmit={handleCreateTicket}>
                 <div className="modal-body p-4">
                   <div className="mb-3">
-                    <label className="form-label fw-bold small">Ticket Subject *</label>
+                    <label htmlFor="new-ticket-subject" className="form-label fw-semibold small">Subject *</label>
                     <input
+                      id="new-ticket-subject"
                       type="text"
+                      autoFocus
                       className="form-control"
                       required
-                      placeholder="e.g. KYC Verification Delay for Loan Application"
+                      placeholder="A short summary of the request"
                       value={newSubject}
                       onChange={e => setNewSubject(e.target.value)}
                     />
                   </div>
                   <div className="row g-2 mb-3">
-                    <div className="col">
-                      <label className="form-label fw-bold small">Requester Name *</label>
+                    <div className="col-12 col-sm-6">
+                      <label htmlFor="new-ticket-requester" className="form-label fw-semibold small">Customer name *</label>
                       <input
+                        id="new-ticket-requester"
                         type="text"
                         className="form-control"
                         required
-                        placeholder="e.g. Rajesh S"
+                        placeholder="Full name"
                         value={newRequesterName}
                         onChange={e => setNewRequesterName(e.target.value)}
                       />
                     </div>
-                    <div className="col">
-                      <label className="form-label fw-bold small">Requester Email *</label>
+                    <div className="col-12 col-sm-6">
+                      <label htmlFor="new-ticket-email" className="form-label fw-semibold small">Customer email *</label>
                       <input
+                        id="new-ticket-email"
                         type="email"
                         className="form-control"
                         required
-                        placeholder="testdealer@kuwy.in"
+                        placeholder="name@company.com"
                         value={newRequesterEmail}
                         onChange={e => setNewRequesterEmail(e.target.value)}
                       />
                     </div>
                   </div>
                   <div className="row g-2 mb-3">
-                    <div className="col">
-                      <label className="form-label fw-bold small">Department Category</label>
+                    <div className="col-12 col-sm-6">
+                      <label htmlFor="new-ticket-department" className="form-label fw-semibold small">Department</label>
                       <select
+                        id="new-ticket-department"
                         className="form-select"
                         value={newDeptId}
                         onChange={e => setNewDeptId(Number(e.target.value))}
                       >
                         {departments.map(d => (
-                          <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
+                          <option key={d.id} value={d.id}>{d.name}</option>
                         ))}
                       </select>
                     </div>
-                    <div className="col">
-                      <label className="form-label fw-bold small">Priority Level</label>
+                    <div className="col-12 col-sm-6">
+                      <label htmlFor="new-ticket-priority" className="form-label fw-semibold small">Priority</label>
                       <select
+                        id="new-ticket-priority"
                         className="form-select"
                         value={newPriority}
                         onChange={e => setNewPriority(e.target.value as any)}
                       >
-                        <option value="LOW">LOW</option>
-                        <option value="MEDIUM">MEDIUM (Standard)</option>
-                        <option value="HIGH">HIGH (Escalated)</option>
-                        <option value="URGENT">URGENT (Critical)</option>
+                        <option value="LOW">Low</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="HIGH">High</option>
+                        <option value="URGENT">Urgent</option>
                       </select>
                     </div>
                   </div>
                   <div className="mb-3">
-                    <label className="form-label fw-bold small">Description / Query *</label>
+                    <label htmlFor="new-ticket-description" className="form-label fw-semibold small">Description *</label>
                     <textarea
+                      id="new-ticket-description"
                       className="form-control"
                       rows={3}
                       required
-                      placeholder="Provide comprehensive details of the issue..."
+                      placeholder="Describe the issue and how we can help..."
                       value={newDesc}
                       onChange={e => setNewDesc(e.target.value)}
                     />
@@ -2836,41 +2776,41 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                   {/* Attach Documents & Files (PNG, PDF, JPG, JPEG, TXT) */}
                   <div className="mb-2">
-                    <label className="form-label fw-bold small d-flex align-items-center justify-content-between mb-1.5">
+                    <div className="form-label fw-semibold small d-flex align-items-center justify-content-between mb-1.5">
                       <span className="d-flex align-items-center gap-1.5">
                         <Paperclip size={14} className="text-primary" />
-                        <span>Attach Documents & Files</span>
+                        <span>Attachments</span>
                       </span>
                       <span className="text-muted fw-normal" style={{ fontSize: '0.72rem' }}>
-                        PNG, PDF, JPG, JPEG, TXT (up to 25MB)
+                        Optional
                       </span>
-                    </label>
+                    </div>
 
-                    <div
-                      className="border border-dashed rounded-3 p-3 text-center bg-light cursor-pointer hover-bg-light transition-all"
-                      onClick={() => document.getElementById('new-ticket-file-input')?.click()}
-                      style={{ cursor: 'pointer', borderColor: '#cbd5e1' }}
+                    <label
+                      className="workspace-upload-area"
+                      htmlFor="new-ticket-file-input"
                     >
                       <Paperclip size={20} className="text-primary mb-1 inline" />
                       <div className="small fw-semibold text-dark">
-                        Click to browse or drop documents here
+                        Browse files
                       </div>
                       <div className="text-muted" style={{ fontSize: '0.72rem' }}>
-                        Attach loan contracts, sanction letters, ID cards, error logs
+                        Add images, documents, or spreadsheets for context.
                       </div>
                       <input
                         id="new-ticket-file-input"
                         type="file"
                         multiple
                         accept=".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv"
-                        className="d-none"
+                        className="visually-hidden"
+                        aria-label="Ticket attachments"
                         onChange={(e) => {
                           if (e.target.files) {
                             setNewTicketAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
                           }
                         }}
                       />
-                    </div>
+                    </label>
 
                     {newTicketAttachments.length > 0 && (
                       <div className="d-flex flex-wrap gap-2 mt-2.5">
@@ -2905,13 +2845,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                 </div>
                 <div className="modal-footer bg-light px-4 py-2.5">
-                  <button type="button" className="btn btn-secondary btn-sm px-3" onClick={() => setShowNewTicketModal(false)}>Cancel</button>
-                  <button type="submit" className="btn btn-primary btn-sm px-4 fw-semibold shadow-sm">Submit Ticket</button>
+                  <button type="button" className="btn btn-light btn-sm px-3" onClick={() => setShowNewTicketModal(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary btn-sm px-4 fw-semibold">Create ticket</button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </dialog>
       )}
 
       {/* ==============================================================
@@ -3035,7 +2975,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <div className="modal-header bg-success text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <BookOpen size={20} />
-                  <h5 className="modal-title fw-bold mb-0">Create Knowledge Base Article (Screen 23)</h5>
+                  <h5 className="modal-title fw-bold mb-0">New knowledge base article</h5>
                 </div>
                 <button type="button" className="btn-close btn-close-white" onClick={() => setShowNewArticleModal(false)} />
               </div>
@@ -3123,7 +3063,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <div className="modal-header bg-primary text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <UserPlus size={20} />
-                  <h5 className="modal-title fw-bold mb-0">Add Customer Contact (Screen 20)</h5>
+                  <h5 className="modal-title fw-bold mb-0">Add customer</h5>
                 </div>
                 <button type="button" className="btn-close btn-close-white" onClick={() => setShowNewCustomerModal(false)} />
               </div>
@@ -3175,7 +3115,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="form-label small fw-bold text-dark">Organization / Dealership (Screen 21)</label>
+                    <label className="form-label small fw-bold text-dark">Organization / Dealership</label>
                     <input
                       type="text"
                       className="form-control"

@@ -78,10 +78,13 @@ export default function App() {
   const companyAdminMatch = normalizedPath.match(/^\/([^/]+)\/admin$/);
   const companyAdminSlug = companyAdminMatch ? companyAdminMatch[1] : null;
 
-  // Check customer portal route match: e.g. /kuwy or /kuwy/portal or /acme
+  // Check customer portal route match: e.g. /kuwy, /kuwy/ticket, /kuwy/ticketstatus, /kuwy/portal
   const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !isPricingRoute && !companyAdminSlug && normalizedPath !== '/';
-  const customerPortalMatch = isCustomerPortalRoute ? normalizedPath.match(/^\/([^/]+)(\/portal)?$/) : null;
+  const customerPortalMatch = isCustomerPortalRoute
+    ? normalizedPath.match(/^\/([^/]+)(?:\/(ticketstatus|ticket|portal))?$/)
+    : null;
   const customerPortalSlug = customerPortalMatch ? customerPortalMatch[1] : null;
+  const customerPortalSubView = (customerPortalMatch && customerPortalMatch[2]) || 'home';
 
   // Sync activeCompany based on URL or current user
   useEffect(() => {
@@ -118,7 +121,13 @@ export default function App() {
       document.title = `${compName} — Staff Workspace`;
     } else if (isCustomerPortalRoute && customerPortalSlug) {
       const compName = activeCompany?.name || (customerPortalSlug.toUpperCase() + ' Support');
-      document.title = `${compName} — Customer Portal`;
+      if (customerPortalSubView === 'ticket') {
+        document.title = `${compName} — Submit Support Ticket`;
+      } else if (customerPortalSubView === 'ticketstatus') {
+        document.title = `${compName} — Track Tickets & Status`;
+      } else {
+        document.title = `${compName} — Customer Portal`;
+      }
     } else if (isPricingRoute) {
       document.title = 'Plans & Pricing — Kuwy HelpDesk SaaS';
     } else if (isSignupRoute) {
@@ -238,6 +247,8 @@ export default function App() {
     return (
       <CustomerPortal
         companySlug={customerPortalSlug}
+        subView={customerPortalSubView === 'portal' ? 'home' : (customerPortalSubView as 'home' | 'ticket' | 'ticketstatus')}
+        onNavigate={navigate}
         onNavigateToAdmin={(slug) => navigate(`/${slug}/admin`)}
         onNavigateToSuperAdmin={() => navigate('/adminconsole')}
       />

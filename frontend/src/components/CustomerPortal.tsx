@@ -4,25 +4,30 @@ import {
   Paperclip, FileText, Download,
   ArrowLeft, Clock, LogOut, Sparkles, Building2,
   RotateCcw, ThumbsUp, ThumbsDown, Star, Printer, Copy,
-  ChevronRight, AlertCircle, Phone, Mail
+  ChevronRight, AlertCircle, Phone, Mail, Lock, User
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { Company, Department, Ticket, TicketThread, KbArticle } from '../types';
 
 interface CustomerPortalProps {
   companySlug: string;
+  subView?: 'home' | 'ticket' | 'ticketstatus';
+  onNavigate?: (path: string) => void;
   onNavigateToAdmin?: (slug: string) => void;
   onNavigateToSuperAdmin?: () => void;
 }
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   companySlug,
+  subView,
+  onNavigate,
   onNavigateToAdmin,
   onNavigateToSuperAdmin,
 }) => {
   const [company, setCompany] = useState<Company | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
+  const [logoFailed, setLogoFailed] = useState(false);
   const [portalMetadata, setPortalMetadata] = useState<{
     supportEmail?: string;
     supportPhone?: string;
@@ -32,10 +37,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   // Customer Authentication State (Screen 10)
   const [customerEmail, setCustomerEmail] = useState<string>(() => {
-    return localStorage.getItem('kuwy_cust_email') || 'loan.applicant@gmail.com';
+    return localStorage.getItem('kuwy_cust_email') || '';
   });
   const [customerName, setCustomerName] = useState<string>(() => {
-    return localStorage.getItem('kuwy_cust_name') || 'Rajesh Kannan';
+    return localStorage.getItem('kuwy_cust_name') || '';
   });
   const [customerPhone, setCustomerPhone] = useState<string>('+91 98765 43210');
   const [customerOrg, setCustomerOrg] = useState<string>('Apex Auto Dealers Ltd');
@@ -45,6 +50,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   });
 
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [authStep, setAuthStep] = useState<'input' | 'otp'>('input');
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -53,7 +59,28 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [isRequestingOtp, setIsRequestingOtp] = useState<boolean>(false);
 
   // Active View Tab: 'home' | 'submit' | 'tickets' | 'ticket-detail' | 'kb' | 'article' | 'profile'
-  const [activeTab, setActiveTab] = useState<'home' | 'submit' | 'tickets' | 'ticket-detail' | 'kb' | 'article' | 'profile'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'submit' | 'tickets' | 'ticket-detail' | 'kb' | 'article' | 'profile'>(() => {
+    if (subView === 'ticket') return 'submit';
+    if (subView === 'ticketstatus') return 'tickets';
+    return 'home';
+  });
+
+  // Sync activeTab with incoming subView prop
+  useEffect(() => {
+    if (subView === 'ticket') {
+      setActiveTab('submit');
+      setSubmitSuccess(null);
+    } else if (subView === 'ticketstatus') {
+      setActiveTab('tickets');
+    } else if (subView === 'home') {
+      setActiveTab('home');
+    }
+  }, [subView]);
+
+  // Reset logo failure on company change
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [companySlug, company?.logoUrl]);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Knowledge Base State (Screen 14)
@@ -196,19 +223,34 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     }
   };
 
+  const handleQuickCustomerLogin = (email: string, name: string) => {
+    localStorage.setItem('kuwy_cust_email', email);
+    localStorage.setItem('kuwy_cust_name', name);
+    localStorage.setItem('kuwy_cust_token', 'cust_quick_' + Date.now());
+    setCustomerEmail(email);
+    setCustomerName(name);
+    setIsAuthenticated(true);
+    setShowAuthModal(false);
+    loadCustomerTickets();
+  };
+
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const res = await apiService.verifyPortalOtp(companySlug, authEmailInput.trim(), otpCode.trim());
-      localStorage.setItem('kuwy_cust_email', res.email || authEmailInput.trim());
-      localStorage.setItem('kuwy_cust_name', customerName || authEmailInput.split('@')[0]);
+      const verifiedEmail = res.email || authEmailInput.trim();
+      const verifiedName = customerName || authEmailInput.split('@')[0];
+      localStorage.setItem('kuwy_cust_email', verifiedEmail);
+      localStorage.setItem('kuwy_cust_name', verifiedName);
       localStorage.setItem('kuwy_cust_token', res.token || 'cust_token');
 
-      setCustomerEmail(res.email || authEmailInput.trim());
+      setCustomerEmail(verifiedEmail);
+      setCustomerName(verifiedName);
       setIsAuthenticated(true);
       setShowAuthModal(false);
       setAuthStep('input');
       setOtpCode('');
+      setOtpNotice(null);
       loadCustomerTickets();
     } catch (err: any) {
       setOtpNotice(err.response?.data?.error || 'Invalid OTP code. Use test code 123456');
@@ -233,7 +275,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     localStorage.removeItem('kuwy_cust_name');
     localStorage.removeItem('kuwy_cust_token');
     setIsAuthenticated(false);
-    setActiveTab('home');
+    setCustomerEmail('');
+    setCustomerName('');
+    setMyTickets([]);
+    setShowUserMenu(false);
   };
 
   // Submit Ticket Handler (Screen 11)
@@ -403,6 +448,200 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   const primaryColor = company?.primaryColor || '#0d6efd';
 
+  // Dedicated Authentication Barrier for /ticket and /ticketstatus
+  const renderAuthBarrier = (target: 'ticket' | 'ticketstatus') => {
+    const isTicket = target === 'ticket';
+    return (
+      <div className="card border-0 shadow-sm rounded-4 p-4 p-md-5 bg-white mx-auto animate-fade-in my-3" style={{ maxWidth: '580px' }}>
+        <div className="text-center mb-4">
+          <div
+            className="p-3 rounded-circle d-inline-flex align-items-center justify-content-center mb-3 shadow-xs"
+            style={{ backgroundColor: `${primaryColor}15`, color: primaryColor }}
+          >
+            <Lock size={32} />
+          </div>
+          <div>
+            <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-1 mb-2 fw-semibold">
+              Authentication Required • Access Protected
+            </span>
+          </div>
+          <h4 className="fw-bolder text-dark mb-1">
+            {isTicket ? 'Sign In to Submit Support Ticket' : 'Sign In to Track Tickets & Status'}
+          </h4>
+          <p className="text-muted small mb-0" style={{ maxWidth: '460px', margin: '0 auto' }}>
+            {isTicket
+              ? 'Without sign-in, ticket creation cannot be granted. Whichever email ID you sign in with becomes the locked default "from" email for SLA tracking and notifications.'
+              : 'Without sign-in, access cannot be granted. Sign in with your customer email to view your open requests, SLA countdowns, and engineer replies.'}
+          </p>
+        </div>
+
+        {/* 1. Quick One-Click Demo Logins */}
+        <div className="p-3 rounded-3 bg-light border mb-4">
+          <div className="d-flex align-items-center justify-content-between mb-2">
+            <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.68rem', letterSpacing: '0.04em' }}>
+              One-Click Demo Customer Access
+            </small>
+            <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.65rem' }}>Instant Sign-in</span>
+          </div>
+          <div className="d-grid gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-3 rounded-3 hover-shadow transition-all"
+              onClick={() => handleQuickCustomerLogin('loan.applicant@gmail.com', 'Rajesh Kannan')}
+            >
+              <div>
+                <div className="fw-bold text-dark small">Rajesh Kannan</div>
+                <div className="text-muted" style={{ fontSize: '0.74rem' }}>loan.applicant@gmail.com • Loan Customer</div>
+              </div>
+              <span className="btn btn-xs btn-primary rounded-pill px-2.5 py-1 fw-bold" style={{ fontSize: '0.7rem' }}>
+                Sign In →
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-3 rounded-3 hover-shadow transition-all"
+              onClick={() => handleQuickCustomerLogin('priya.customer@gmail.com', 'Priya Sharma')}
+            >
+              <div>
+                <div className="fw-bold text-dark small">Priya Sharma</div>
+                <div className="text-muted" style={{ fontSize: '0.74rem' }}>priya.customer@gmail.com • KYC Applicant</div>
+              </div>
+              <span className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-bold" style={{ fontSize: '0.7rem' }}>
+                Sign In →
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="position-relative text-center my-3">
+          <hr className="border-secondary-subtle" />
+          <span className="position-absolute top-50 start-50 translate-middle bg-white px-3 small text-muted">
+            OR VERIFY YOUR EMAIL
+          </span>
+        </div>
+
+        {/* 2. Email OTP Verification */}
+        {authStep === 'input' ? (
+          <form onSubmit={handleRequestOtp} className="mb-3">
+            <label className="form-label small fw-bold text-dark">Your Email Address *</label>
+            <div className="input-group mb-1">
+              <span className="input-group-text bg-light text-muted">
+                <Mail size={16} />
+              </span>
+              <input
+                type="email"
+                className="form-control"
+                placeholder="name@example.com"
+                required
+                value={authEmailInput}
+                onChange={e => setAuthEmailInput(e.target.value)}
+              />
+              <button
+                type="submit"
+                className="btn btn-primary fw-semibold px-3"
+                disabled={isRequestingOtp || !authEmailInput.trim()}
+              >
+                {isRequestingOtp ? 'Sending...' : 'Send OTP'}
+              </button>
+            </div>
+            {otpNotice && (
+              <div className="small text-danger mt-1">{otpNotice}</div>
+            )}
+            <small className="text-muted d-block" style={{ fontSize: '0.74rem' }}>
+              We'll send a 6-digit verification code. Test OTP: <code>123456</code>
+            </small>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyOtp} className="p-3 bg-light rounded-3 border mb-3">
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <span className="small fw-bold text-dark">Enter OTP Code sent to:</span>
+              <button
+                type="button"
+                className="btn btn-link btn-xs p-0 text-primary text-decoration-none"
+                onClick={() => setAuthStep('input')}
+              >
+                Change Email
+              </button>
+            </div>
+            <div className="badge bg-info-subtle text-info mb-2 text-wrap text-start">
+              {authEmailInput}
+            </div>
+            <div className="input-group mb-2">
+              <input
+                type="text"
+                className="form-control text-center fw-bold fs-5"
+                maxLength={6}
+                placeholder="123456"
+                required
+                value={otpCode}
+                onChange={e => setOtpCode(e.target.value)}
+              />
+              <button type="submit" className="btn btn-success fw-bold px-3">
+                Verify & Sign In
+              </button>
+            </div>
+            {otpNotice && (
+              <div className="small text-danger mb-1">{otpNotice}</div>
+            )}
+            <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>
+              For test verification, enter default OTP: <strong>123456</strong>
+            </small>
+          </form>
+        )}
+
+        {/* 3. Social SSO */}
+        <div className="row g-2 mb-3">
+          <div className="col-6">
+            <button
+              type="button"
+              className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
+              onClick={() => handleOAuthLogin('Google')}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3.03h3.88c2.27-2.09 3.665-5.17 3.665-9.12z" />
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.03c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.13C3.27 21.43 7.33 24 12 24z" />
+                <path fill="#FBBC05" d="M5.28 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.13z" />
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.27 2.57 1.25 6.58l4.03 3.13c.95-2.83 3.6-4.96 6.72-4.96z" />
+              </svg>
+              <span>Google SSO</span>
+            </button>
+          </div>
+          <div className="col-6">
+            <button
+              type="button"
+              className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
+              onClick={() => handleOAuthLogin('Microsoft')}
+            >
+              <svg width="15" height="15" viewBox="0 0 23 23">
+                <path fill="#f35325" d="M1 1h10v10H1z" />
+                <path fill="#81bc06" d="M12 1h10v10H12z" />
+                <path fill="#05a6f0" d="M1 12h10v10H1z" />
+                <path fill="#ffba08" d="M12 12h10v10H12z" />
+              </svg>
+              <span>Microsoft SSO</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Back Link */}
+        <div className="text-center pt-2 border-top">
+          <button
+            type="button"
+            className="btn btn-link btn-sm text-secondary text-decoration-none"
+            onClick={() => {
+              setActiveTab('home');
+              onNavigate?.('/' + companySlug);
+            }}
+          >
+            ← Back to Help Center Home
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-vh-100 d-flex flex-column bg-slate-50" style={{ backgroundColor: '#f8fafc' }}>
       {/* 0. Top Operational Announcement Banner (Screen 9) */}
@@ -422,11 +661,19 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           {/* Company Brand */}
           <div
             className="d-flex align-items-center gap-2.5 cursor-pointer"
-            onClick={() => setActiveTab('home')}
+            onClick={() => {
+              setActiveTab('home');
+              onNavigate?.('/' + companySlug);
+            }}
             style={{ cursor: 'pointer' }}
           >
-            {company?.logoUrl ? (
-              <img src={company.logoUrl} alt={company.name} style={{ height: '32px' }} />
+            {company?.logoUrl && !logoFailed ? (
+              <img
+                src={company.logoUrl}
+                alt=""
+                onError={() => setLogoFailed(true)}
+                style={{ height: '32px', maxWidth: '140px', objectFit: 'contain' }}
+              />
             ) : (
               <div
                 className="p-2 rounded-3 text-white d-flex align-items-center justify-content-center shadow-xs"
@@ -450,7 +697,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             <button
               type="button"
               className={`btn btn-sm rounded-3 fw-semibold ${activeTab === 'home' ? 'btn-light text-primary fw-bold' : 'btn-link text-secondary text-decoration-none'}`}
-              onClick={() => setActiveTab('home')}
+              onClick={() => {
+                setActiveTab('home');
+                onNavigate?.('/' + companySlug);
+              }}
             >
               Home
             </button>
@@ -464,7 +714,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             <button
               type="button"
               className={`btn btn-sm rounded-3 fw-semibold ${activeTab === 'submit' ? 'btn-primary shadow-xs' : 'btn-outline-primary'}`}
-              onClick={() => { setActiveTab('submit'); setSubmitSuccess(null); }}
+              onClick={() => {
+                setActiveTab('submit');
+                setSubmitSuccess(null);
+                onNavigate?.('/' + companySlug + '/ticket');
+              }}
             >
               Submit Ticket
             </button>
@@ -472,8 +726,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               type="button"
               className={`btn btn-sm rounded-3 fw-semibold position-relative ${activeTab === 'tickets' ? 'btn-light text-primary fw-bold' : 'btn-link text-secondary text-decoration-none'}`}
               onClick={() => {
-                if (!isAuthenticated) setShowAuthModal(true);
-                else setActiveTab('tickets');
+                setActiveTab('tickets');
+                onNavigate?.('/' + companySlug + '/ticketstatus');
               }}
             >
               My Tickets
@@ -486,23 +740,81 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
             {/* Customer Account / Sign In Dropdown */}
             {isAuthenticated ? (
-              <div className="dropdown ms-2">
+              <div className="position-relative ms-2">
                 <button
                   type="button"
-                  className="btn btn-sm btn-light border rounded-pill d-flex align-items-center gap-2 py-1 px-2.5"
-                  data-bs-toggle="dropdown"
-                  onClick={() => setActiveTab('profile')}
+                  className="btn btn-sm btn-light border rounded-pill d-flex align-items-center gap-2 py-1 px-2.5 shadow-xs"
+                  onClick={() => setShowUserMenu(!showUserMenu)}
                 >
                   <div
                     className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold"
                     style={{ width: '24px', height: '24px', backgroundColor: primaryColor, fontSize: '0.75rem' }}
                   >
-                    {customerName.charAt(0).toUpperCase()}
+                    {customerName ? customerName.charAt(0).toUpperCase() : (customerEmail ? customerEmail.charAt(0).toUpperCase() : 'C')}
                   </div>
-                  <span className="small fw-semibold text-dark text-truncate" style={{ maxWidth: '110px' }}>
-                    {customerName}
+                  <span className="small fw-semibold text-dark text-truncate" style={{ maxWidth: '120px' }}>
+                    {customerName || customerEmail.split('@')[0]}
                   </span>
                 </button>
+
+                {showUserMenu && (
+                  <div
+                    className="position-absolute end-0 mt-2 bg-white rounded-3 shadow-lg border p-2 animate-fade-in"
+                    style={{ minWidth: '230px', zIndex: 1070 }}
+                  >
+                    <div className="px-3 py-2 border-bottom">
+                      <div className="fw-bold small text-dark text-truncate">{customerName || 'Verified Customer'}</div>
+                      <div className="text-muted text-truncate" style={{ fontSize: '0.72rem' }}>{customerEmail}</div>
+                      <span className="badge bg-success-subtle text-success border border-success-subtle mt-1" style={{ fontSize: '0.65rem' }}>
+                        Authenticated
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-light w-100 text-start mt-1 d-flex align-items-center gap-2"
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        setActiveTab('tickets');
+                        onNavigate?.('/' + companySlug + '/ticketstatus');
+                      }}
+                    >
+                      <Clock size={14} /> My Tickets ({myTickets.length})
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-light w-100 text-start d-flex align-items-center gap-2"
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        setActiveTab('submit');
+                        setSubmitSuccess(null);
+                        onNavigate?.('/' + companySlug + '/ticket');
+                      }}
+                    >
+                      <Send size={14} /> Submit New Ticket
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-light w-100 text-start d-flex align-items-center gap-2"
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        setActiveTab('profile');
+                      }}
+                    >
+                      <User size={14} /> Profile & Settings
+                    </button>
+                    <hr className="my-1" />
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline-danger w-100 text-start d-flex align-items-center gap-2 text-danger"
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        handleSignOut();
+                      }}
+                    >
+                      <LogOut size={14} /> Sign Out
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <button
@@ -621,7 +933,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </span>
                     <button
                       className="btn btn-sm btn-outline-primary fw-semibold rounded-pill ms-2"
-                      onClick={() => setActiveTab('tickets')}
+                      onClick={() => {
+                        setActiveTab('tickets');
+                        onNavigate?.('/' + companySlug + '/ticketstatus');
+                      }}
                     >
                       View All Tickets →
                     </button>
@@ -635,7 +950,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <div className="col-md-6">
                 <div
                   className="card border-0 shadow-sm rounded-4 p-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
-                  onClick={() => { setActiveTab('submit'); setSubmitSuccess(null); }}
+                  onClick={() => {
+                    setActiveTab('submit');
+                    setSubmitSuccess(null);
+                    onNavigate?.('/' + companySlug + '/ticket');
+                  }}
                   style={{ cursor: 'pointer' }}
                 >
                   <div className="d-flex align-items-center gap-3 mb-3">
@@ -660,8 +979,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <div
                   className="card border-0 shadow-sm rounded-4 p-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
                   onClick={() => {
-                    if (!isAuthenticated) setShowAuthModal(true);
-                    else setActiveTab('tickets');
+                    setActiveTab('tickets');
+                    onNavigate?.('/' + companySlug + '/ticketstatus');
                   }}
                   style={{ cursor: 'pointer' }}
                 >
@@ -807,14 +1126,20 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
-                onClick={() => { setActiveTab('home'); setSubmitSuccess(null); }}
+                onClick={() => {
+                  setActiveTab('home');
+                  setSubmitSuccess(null);
+                  onNavigate?.('/' + companySlug);
+                }}
               >
                 <ArrowLeft size={15} /> Back to Home
               </button>
-              <span className="small text-muted">Screen 11 • Public Ticket Submission</span>
+              <span className="small text-muted">Screen 11 • Protected Ticket Submission</span>
             </div>
 
-            {submitSuccess ? (
+            {!isAuthenticated ? (
+              renderAuthBarrier('ticket')
+            ) : submitSuccess ? (
               <div className="card border-0 shadow-sm rounded-4 p-5 text-center bg-white animate-fade-in mx-auto" style={{ maxWidth: '640px' }}>
                 <div className="rounded-circle bg-success-subtle text-success mx-auto d-flex align-items-center justify-content-center mb-3" style={{ width: '64px', height: '64px' }}>
                   <CheckCircle2 size={36} />
@@ -835,14 +1160,21 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <button
                     type="button"
                     className="btn btn-primary px-4 fw-semibold rounded-3 shadow-sm"
-                    onClick={() => handleOpenTicketDetail(submitSuccess)}
+                    onClick={() => {
+                      handleOpenTicketDetail(submitSuccess);
+                      onNavigate?.('/' + companySlug + '/ticketstatus');
+                    }}
                   >
                     View Ticket & Conversation
                   </button>
                   <button
                     type="button"
                     className="btn btn-outline-secondary px-4 fw-semibold rounded-3"
-                    onClick={() => { setSubmitSuccess(null); setActiveTab('submit'); }}
+                    onClick={() => {
+                      setSubmitSuccess(null);
+                      setActiveTab('submit');
+                      onNavigate?.('/' + companySlug + '/ticket');
+                    }}
                   >
                     Submit Another Request
                   </button>
@@ -854,7 +1186,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <div className={suggestedArticles.length > 0 ? "col-lg-8" : "col-12 mx-auto"} style={{ maxWidth: suggestedArticles.length > 0 ? undefined : '780px' }}>
                   <div className="card border-0 shadow-sm rounded-4 p-4 bg-white">
                     <div className="border-bottom pb-3 mb-4">
-                      <h5 className="fw-bolder text-dark mb-1">Create Support Ticket</h5>
+                      <div className="d-flex align-items-center justify-content-between">
+                        <h5 className="fw-bolder text-dark mb-1">Create Support Ticket</h5>
+                        <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.72rem' }}>
+                          <CheckCircle2 size={12} /> Verified Customer
+                        </span>
+                      </div>
                       <p className="text-muted small mb-0">
                         Fill in details below. Our support agents respond in accordance with your category SLA.
                       </p>
@@ -887,16 +1224,28 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                           />
                         </div>
                         <div className="col-md-6">
-                          <label className="form-label small fw-bold text-dark">Your Email Address *</label>
-                          <input
-                            type="email"
-                            className="form-control"
-                            required
-                            placeholder="name@example.com"
-                            value={customerEmail}
-                            onChange={e => setCustomerEmail(e.target.value)}
-                            readOnly={isAuthenticated}
-                          />
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <label className="form-label small fw-bold text-dark mb-0">Your Email Address *</label>
+                            <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.68rem' }}>
+                              <CheckCircle2 size={11} /> Verified Sign-in Email
+                            </span>
+                          </div>
+                          <div className="input-group">
+                            <span className="input-group-text bg-light text-muted">
+                              <Lock size={15} />
+                            </span>
+                            <input
+                              type="email"
+                              className="form-control bg-light text-dark fw-semibold"
+                              required
+                              value={customerEmail}
+                              readOnly
+                              title="Locked to signed-in customer email"
+                            />
+                          </div>
+                          <small className="text-muted d-block mt-1" style={{ fontSize: '0.72rem' }}>
+                            Default from email: <strong>{customerEmail}</strong>. SLA responses will be delivered here.
+                          </small>
                         </div>
                       </div>
 
@@ -1086,25 +1435,33 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             ============================================================== */}
         {activeTab === 'tickets' && (
           <div>
-            <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            {!isAuthenticated ? (
+              renderAuthBarrier('ticketstatus')
+            ) : (
               <div>
-                <h4 className="fw-bold text-dark mb-1">My Support Tickets</h4>
-                <p className="text-muted small mb-0">
-                  Showing inquiries associated with <strong>{customerEmail}</strong> in {company?.name}.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm fw-semibold d-flex align-items-center gap-1.5 px-3 py-2 shadow-xs"
-                onClick={() => { setActiveTab('submit'); setSubmitSuccess(null); }}
-              >
-                <Send size={15} />
-                <span>Submit a New Ticket</span>
-              </button>
-            </div>
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                  <div>
+                    <h4 className="fw-bold text-dark mb-1">My Support Tickets</h4>
+                    <p className="text-muted small mb-0">
+                      Showing inquiries associated with <strong>{customerEmail}</strong> in {company?.name}.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm fw-semibold d-flex align-items-center gap-1.5 px-3 py-2 shadow-xs"
+                    onClick={() => {
+                      setActiveTab('submit');
+                      setSubmitSuccess(null);
+                      onNavigate?.('/' + companySlug + '/ticket');
+                    }}
+                  >
+                    <Send size={15} />
+                    <span>Submit a New Ticket</span>
+                  </button>
+                </div>
 
-            {/* Filter Chips & Search Bar */}
-            <div className="card border-0 shadow-sm rounded-4 p-3 mb-4 bg-white">
+                {/* Filter Chips & Search Bar */}
+                <div className="card border-0 shadow-sm rounded-4 p-3 mb-4 bg-white">
               <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
                 <div className="d-flex flex-wrap gap-1.5">
                   {(['ALL', 'OPEN', 'WAITING', 'RESOLVED', 'CLOSED'] as const).map(f => (
@@ -1207,21 +1564,31 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               </div>
             </div>
           </div>
+            )}
+          </div>
         )}
 
         {/* ==============================================================
             SCREEN 13: TICKET DETAIL & REPLY CONVERSATION VIEW
             ============================================================== */}
-        {activeTab === 'ticket-detail' && selectedTicket && (
+        {activeTab === 'ticket-detail' && (
           <div>
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <button
-                type="button"
-                className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
-                onClick={() => setActiveTab('tickets')}
-              >
-                <ArrowLeft size={15} /> Back to My Tickets
-              </button>
+            {!isAuthenticated ? (
+              renderAuthBarrier('ticketstatus')
+            ) : selectedTicket ? (
+              <div>
+                <div className="d-flex align-items-center justify-content-between mb-3">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
+                    onClick={() => {
+                      setSelectedTicket(null);
+                      setActiveTab('tickets');
+                      onNavigate?.('/' + companySlug + '/ticketstatus');
+                    }}
+                  >
+                    <ArrowLeft size={15} /> Back to My Tickets
+                  </button>
               <div className="d-flex align-items-center gap-2">
                 {selectedTicket.status === 'OPEN' && (
                   <button
@@ -1397,6 +1764,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 </div>
               </form>
             </div>
+          </div>
+            ) : null}
           </div>
         )}
 
@@ -1796,6 +2165,34 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               </div>
 
               <div className="modal-body p-4">
+                {/* Quick 1-Click Demo Logins */}
+                <div className="p-2.5 rounded-3 bg-light border mb-3">
+                  <div className="d-flex align-items-center justify-content-between mb-2">
+                    <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.66rem' }}>
+                      One-Click Demo Customer
+                    </small>
+                    <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.62rem' }}>Instant</span>
+                  </div>
+                  <div className="d-grid gap-1.5">
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-white bg-white border text-start d-flex align-items-center justify-content-between py-1.5 px-2.5 rounded-2"
+                      onClick={() => handleQuickCustomerLogin('loan.applicant@gmail.com', 'Rajesh Kannan')}
+                    >
+                      <div className="small fw-semibold text-dark text-truncate">Rajesh Kannan (loan.applicant@gmail.com)</div>
+                      <span className="text-primary fw-bold small">Sign In →</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-white bg-white border text-start d-flex align-items-center justify-content-between py-1.5 px-2.5 rounded-2"
+                      onClick={() => handleQuickCustomerLogin('priya.customer@gmail.com', 'Priya Sharma')}
+                    >
+                      <div className="small fw-semibold text-dark text-truncate">Priya Sharma (priya.customer@gmail.com)</div>
+                      <span className="text-primary fw-bold small">Sign In →</span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Social OAuth Buttons */}
                 <div className="row g-2 mb-3">
                   <div className="col-6">
