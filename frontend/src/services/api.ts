@@ -3,8 +3,8 @@ import type { TicketAttachment,
   Company, DashboardStats, Ticket, TicketThread, CompanyMailbox, Department, User,
   LoginResponse, AdminOverview, CompanyDetail, CompanyCreateInput, UserCredentialInput,
   MisTrackItem, MisSummary, DepartmentDetail, DepartmentCreateInput,
-  SupportEngineer, SupportEngineerCreateInput, KbArticle, CompanySubscription, CannedResponse
-} from '../types';
+  SupportEngineer, SupportEngineerCreateInput, KbArticle, CompanySubscription, CannedResponse,
+  Verify2FaRequest, ForgotPasswordRequest, ResetPasswordRequest, InvitationValidationResponse, AcceptInvitationRequest, AgentInvitation } from '../types';
 
 const API_BASE = 'http://localhost:8080/api/v1';
 
@@ -681,4 +681,114 @@ export const apiService = {
     const res = await axios.post(`${API_BASE}/onboarding/signup`, data);
     return res.data;
   },
+
+  // ==========================================
+  // SECTION B: LOGIN, 2FA, RESET & INVITATIONS
+  // ==========================================
+
+  async verify2Fa(data: Verify2FaRequest): Promise<LoginResponse> {
+    const res = await axios.post(`${API_BASE}/auth/verify-2fa`, data);
+    if (res.data?.token) {
+      setAuthToken(res.data.token);
+    }
+    return res.data;
+  },
+
+  async forgotPassword(data: ForgotPasswordRequest): Promise<{ success: boolean; message: string; devResetUrl?: string }> {
+    const res = await axios.post(`${API_BASE}/auth/forgot-password`, data);
+    return res.data;
+  },
+
+  async validateResetToken(token: string): Promise<{ valid: boolean; status?: string; message?: string; email?: string }> {
+    const res = await axios.get(`${API_BASE}/auth/validate-reset-token`, {
+      params: { token }
+    });
+    return res.data;
+  },
+
+  async resetPassword(data: ResetPasswordRequest): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/auth/reset-password`, data);
+    return res.data;
+  },
+
+  async lookupWorkspace(email: string): Promise<{ found: boolean; subdomain: string; companyName?: string; companyCode?: string }> {
+    const res = await axios.get(`${API_BASE}/auth/lookup-workspace`, {
+      params: { email }
+    });
+    return res.data;
+  },
+
+  async validateInvitation(token: string): Promise<InvitationValidationResponse> {
+    const res = await axios.get(`${API_BASE}/invitations/validate`, {
+      params: { token }
+    });
+    return res.data;
+  },
+
+  async acceptInvitation(data: AcceptInvitationRequest): Promise<LoginResponse> {
+    const res = await axios.post(`${API_BASE}/invitations/accept`, data);
+    if (res.data?.token) {
+      setAuthToken(res.data.token);
+    }
+    return res.data;
+  },
+
+  async getPendingInvitations(companyId: number): Promise<AgentInvitation[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/invitations`, {
+        params: { companyId },
+        headers: getHeaders()
+      });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async inviteAgent(data: { email: string; name: string; roleId?: number }, adminUserId: number, companyId: number): Promise<{ success: boolean; message: string; inviteUrl?: string }> {
+    const res = await axios.post(`${API_BASE}/invitations/invite`, data, {
+      params: { adminUserId, companyId },
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
+  async resendInvitation(id: number, adminUserId: number): Promise<{ success: boolean; message: string; inviteUrl?: string }> {
+    const res = await axios.post(`${API_BASE}/invitations/${id}/resend`, {}, {
+      params: { adminUserId },
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
+  async revokeInvitation(id: number, adminUserId: number): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/invitations/${id}/revoke`, {}, {
+      params: { adminUserId },
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
+  async setup2Fa(userId: number): Promise<{ secret: string; otpAuthUrl: string; qrCodeUrl: string; backupCodes: string[] }> {
+    const res = await axios.get(`${API_BASE}/auth/2fa/setup`, {
+      params: { userId },
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
+  async enable2Fa(payload: { userId: number; secret: string; code: string; backupCodes: string[] }): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/auth/2fa/enable`, payload, {
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
+  async disable2Fa(userId: number): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/auth/2fa/disable`, { userId }, {
+      headers: getHeaders()
+    });
+    return res.data;
+  },
+
 };

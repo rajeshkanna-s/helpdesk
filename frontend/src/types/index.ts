@@ -140,8 +140,60 @@ export interface AuthUser {
   };
 }
 
-export interface LoginResponse extends AuthUser {
+export interface LoginResponse extends Partial<AuthUser> {
+  token?: string;
+  twoFactorRequired?: boolean;
+  tempToken?: string;
+  maskedEmail?: string;
+}
+
+export interface Verify2FaRequest {
+  tempToken: string;
+  code: string;
+  isBackupCode?: boolean;
+  trustDevice30Days?: boolean;
+}
+
+export interface ForgotPasswordRequest {
+  email: string;
+  companyCode?: string;
+}
+
+export interface ResetPasswordRequest {
   token: string;
+  newPassword: string;
+}
+
+export interface InvitationValidationResponse {
+  valid: boolean;
+  status: 'VALID' | 'EXPIRED' | 'USED' | 'REVOKED' | 'NOT_FOUND' | 'LIMIT_REACHED';
+  message: string;
+  email?: string;
+  name?: string;
+  companyName?: string;
+  companySubdomain?: string;
+  companyLogo?: string;
+  roleName?: string;
+  inviterName?: string;
+}
+
+export interface AcceptInvitationRequest {
+  token: string;
+  name: string;
+  password: string;
+  agreedToTerms: boolean;
+}
+
+export interface AgentInvitation {
+  id: number;
+  email: string;
+  name: string;
+  roleId: number;
+  roleName: string;
+  inviterName: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED';
+  expiresAt: string;
+  createdAt: string;
 }
 
 export interface AdminOverview {

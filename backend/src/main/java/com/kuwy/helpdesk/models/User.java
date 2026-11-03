@@ -59,6 +59,24 @@ public class User {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
+    @Column(name = "status", length = 20)
+    private String status = "ACTIVE";
+
+    @Column(name = "is_two_factor_enabled")
+    private Boolean isTwoFactorEnabled = false;
+
+    @Column(name = "two_factor_secret", length = 64)
+    private String twoFactorSecret;
+
+    @Column(name = "backup_codes", columnDefinition = "TEXT")
+    private String backupCodes;
+
+    @Column(name = "failed_login_attempts")
+    private Integer failedLoginAttempts = 0;
+
+    @Column(name = "lockout_until")
+    private LocalDateTime lockoutUntil;
+
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 

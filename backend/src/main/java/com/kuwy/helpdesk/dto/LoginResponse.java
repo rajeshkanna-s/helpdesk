@@ -1,7 +1,5 @@
 package com.kuwy.helpdesk.dto;
 
-import com.kuwy.helpdesk.models.Company;
-import com.kuwy.helpdesk.models.Role;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
@@ -19,6 +17,11 @@ public class LoginResponse {
     private String roleType;
     private String roleName;
     private CompanyInfo company;
+
+    // 2FA Challenge fields
+    private Boolean twoFactorRequired;
+    private String tempToken;
+    private String maskedEmail;
 
     @Getter
     @Setter
