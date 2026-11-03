@@ -15,3 +15,4 @@ public interface AgentInvitationRepository extends JpaRepository<AgentInvitation
     Optional<AgentInvitation> findByCompanyIdAndEmailAndStatus(Long companyId, String email, AgentInvitation.InvitationStatus status);
     long countByCompanyIdAndStatus(Long companyId, AgentInvitation.InvitationStatus status);
 }
+

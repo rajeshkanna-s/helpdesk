@@ -13,3 +13,4 @@ public class Verify2FaRequest {
     private Boolean isBackupCode = false;
     private Boolean trustDevice30Days = false;
 }
+

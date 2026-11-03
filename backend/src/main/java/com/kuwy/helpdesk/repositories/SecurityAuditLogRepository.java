@@ -11,3 +11,4 @@ public interface SecurityAuditLogRepository extends JpaRepository<SecurityAuditL
     List<SecurityAuditLog> findTop50ByCompanyIdOrderByCreatedAtDesc(Long companyId);
     List<SecurityAuditLog> findTop50ByUserIdOrderByCreatedAtDesc(Long userId);
 }
+

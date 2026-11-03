@@ -19,3 +19,4 @@ public class InvitationValidationResponse {
     private String roleName;
     private String inviterName;
 }
+

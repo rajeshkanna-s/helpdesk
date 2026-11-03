@@ -1,6 +1,8 @@
 package com.kuwy.helpdesk.controllers;
 
 import com.kuwy.helpdesk.dto.TicketCreateDto;
+import com.kuwy.helpdesk.dto.KbArticleDto;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.kuwy.helpdesk.models.*;
 import com.kuwy.helpdesk.repositories.*;
 import com.kuwy.helpdesk.services.RateLimiterService;
@@ -39,6 +41,7 @@ public class PublicPortalController {
     private final TicketService ticketService;
     private final RateLimiterService rateLimiterService;
     private final SubscriptionService subscriptionService;
+    private final JdbcTemplate jdbcTemplate;
 
     @GetMapping("/{subdomain}")
     public ResponseEntity<Map<String, Object>> getPortalInfo(@PathVariable String subdomain) {
@@ -56,6 +59,10 @@ public class PublicPortalController {
         resp.put("logoUrl", company.getLogoUrl());
         resp.put("departments", departments);
         resp.put("isLocked", subscriptionService.isWorkspaceLocked(company.getId()));
+        resp.put("supportEmail", "support@" + company.getSubdomain() + ".kuwy.in");
+        resp.put("supportPhone", "+91 44 6612 8000");
+        resp.put("businessHours", "Mon - Sat: 09:00 AM - 07:00 PM IST");
+        resp.put("announcementBanner", "Helpdesk Operational Advisory: All systems operating normally. Average first response time is under 15 minutes.");
         return ResponseEntity.ok(resp);
     }
 
@@ -294,4 +301,144 @@ public class PublicPortalController {
         private String websiteUrl;
         private String hpToken;
     }
+
+    @GetMapping("/{subdomain}/kb/articles")
+    public ResponseEntity<List<KbArticleDto>> getPublicKbArticles(
+            @PathVariable String subdomain,
+            @RequestParam(required = false) String query
+    ) {
+        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
+                .orElseThrow(() -> new RuntimeException("Company not found: " + subdomain));
+
+        String sql;
+        List<Object> params = new ArrayList<>();
+        params.add(company.getId());
+
+        if (query != null && !query.isBlank()) {
+            sql = "SELECT a.id, a.category_id, c.name as category_name, a.title, a.slug, a.content_html, a.view_count, a.helpful_votes " +
+                  "FROM kb_articles a " +
+                  "JOIN kb_categories c ON a.category_id = c.id " +
+                  "WHERE a.company_id = ? AND a.status = 'PUBLISHED' " +
+                  "AND (LOWER(a.title) LIKE ? OR LOWER(a.content_html) LIKE ? OR LOWER(c.name) LIKE ?) " +
+                  "ORDER BY c.display_order ASC, a.view_count DESC";
+            String qLike = "%" + query.trim().toLowerCase() + "%";
+            params.add(qLike);
+            params.add(qLike);
+            params.add(qLike);
+        } else {
+            sql = "SELECT a.id, a.category_id, c.name as category_name, a.title, a.slug, a.content_html, a.view_count, a.helpful_votes " +
+                  "FROM kb_articles a " +
+                  "JOIN kb_categories c ON a.category_id = c.id " +
+                  "WHERE a.company_id = ? AND a.status = 'PUBLISHED' " +
+                  "ORDER BY c.display_order ASC, a.view_count DESC";
+        }
+
+        List<KbArticleDto> articles = jdbcTemplate.query(sql, (rs, rowNum) -> {
+            KbArticleDto dto = new KbArticleDto();
+            dto.setId(rs.getLong("id"));
+            dto.setCategoryId(rs.getLong("category_id"));
+            dto.setCategoryName(rs.getString("category_name"));
+            dto.setTitle(rs.getString("title"));
+            dto.setSlug(rs.getString("slug"));
+            dto.setContentHtml(rs.getString("content_html"));
+            dto.setViewCount(rs.getInt("view_count"));
+            dto.setHelpfulVotes(rs.getInt("helpful_votes"));
+            return dto;
+        }, params.toArray());
+
+        return ResponseEntity.ok(articles);
+    }
+
+    @PostMapping("/{subdomain}/kb/articles/{id}/vote")
+    public ResponseEntity<Map<String, Object>> voteKbArticle(
+            @PathVariable String subdomain,
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "true") boolean helpful
+    ) {
+        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
+                .orElseThrow(() -> new RuntimeException("Company not found: " + subdomain));
+
+        if (helpful) {
+            jdbcTemplate.update("UPDATE kb_articles SET helpful_votes = helpful_votes + 1, view_count = view_count + 1 WHERE id = ? AND company_id = ?", id, company.getId());
+        } else {
+            jdbcTemplate.update("UPDATE kb_articles SET unhelpful_votes = unhelpful_votes + 1, view_count = view_count + 1 WHERE id = ? AND company_id = ?", id, company.getId());
+        }
+
+        return ResponseEntity.ok(Map.of("success", true, "message", "Feedback recorded. Thank you!"));
+    }
+
+    @PostMapping("/{subdomain}/tickets/{ticketNumber}/csat")
+    public ResponseEntity<Map<String, Object>> submitCsat(
+            @PathVariable String subdomain,
+            @PathVariable String ticketNumber,
+            @RequestBody Map<String, Object> body
+    ) {
+        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
+                .orElseThrow(() -> new RuntimeException("Company not found: " + subdomain));
+
+        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketNumber));
+
+        int rating = body.get("rating") != null ? Integer.parseInt(body.get("rating").toString()) : 5;
+        String comment = body.get("comment") != null ? body.get("comment").toString().trim() : "";
+
+        TicketThread csatThread = new TicketThread();
+        csatThread.setCompany(company);
+        csatThread.setTicket(ticket);
+        csatThread.setThreadType(TicketThread.ThreadType.SYSTEM);
+        csatThread.setSenderType(TicketThread.SenderType.CUSTOMER);
+        csatThread.setFromEmail(ticket.getContact().getEmail());
+        csatThread.setFromName(ticket.getContact().getFirstName());
+        csatThread.setSubject("Customer CSAT Satisfaction Rating: " + rating + "/5 Stars");
+        csatThread.setBodyText("Customer gave rating: " + rating + "/5 Stars. Feedback: " + (comment.isEmpty() ? "No comment" : comment));
+        csatThread.setBodyHtml("<div class='csat-rating'><strong>CSAT Rating: " + rating + "/5 Stars</strong><p>" + (comment.isEmpty() ? "No comment provided." : comment) + "</p></div>");
+        csatThread.setIsPrivate(false);
+        threadRepository.save(csatThread);
+
+        return ResponseEntity.ok(Map.of("success", true, "message", "Thank you for your feedback!"));
+    }
+
+    @PostMapping("/{subdomain}/tickets/{ticketNumber}/close")
+    public ResponseEntity<Ticket> closeTicketByCustomer(
+            @PathVariable String subdomain,
+            @PathVariable String ticketNumber,
+            @RequestParam(required = false) String email
+    ) {
+        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
+                .orElseThrow(() -> new RuntimeException("Company not found: " + subdomain));
+
+        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
+                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketNumber));
+
+        if (email != null && !email.trim().equalsIgnoreCase(ticket.getContact().getEmail().trim())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        ticket.setStatus(Ticket.TicketStatus.RESOLVED);
+        ticket.setResolvedAt(java.time.LocalDateTime.now());
+        Ticket saved = ticketRepository.save(ticket);
+
+        return ResponseEntity.ok(saved);
+    }
+
+    @GetMapping("/{subdomain}/export-data")
+    public ResponseEntity<Map<String, Object>> exportCustomerData(
+            @PathVariable String subdomain,
+            @RequestParam String email
+    ) {
+        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
+                .orElseThrow(() -> new RuntimeException("Company not found: " + subdomain));
+
+        List<Ticket> tickets = ticketRepository.findByCompanyIdAndContactEmail(company.getId(), email.trim());
+
+        Map<String, Object> export = new LinkedHashMap<>();
+        export.put("customerEmail", email);
+        export.put("companyName", company.getName());
+        export.put("exportedAt", java.time.LocalDateTime.now().toString());
+        export.put("totalTickets", tickets.size());
+        export.put("tickets", tickets);
+
+        return ResponseEntity.ok(export);
+    }
+
 }

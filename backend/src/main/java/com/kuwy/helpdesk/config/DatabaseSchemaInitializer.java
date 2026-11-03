@@ -106,3 +106,4 @@ public class DatabaseSchemaInitializer implements ApplicationRunner {
         }
     }
 }
+

@@ -20,3 +20,4 @@ public class AgentInvitationDto {
     private LocalDateTime expiresAt;
     private LocalDateTime createdAt;
 }
+

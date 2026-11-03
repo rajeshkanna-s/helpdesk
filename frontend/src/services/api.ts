@@ -791,4 +791,49 @@ export const apiService = {
     return res.data;
   },
 
+
+  // ==========================================
+  // SECTION C: CUSTOMER PORTAL ENHANCEMENTS
+  // ==========================================
+
+  async getPublicKbArticles(subdomain: string, query?: string): Promise<KbArticle[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/portal/${subdomain}/kb/articles`, {
+        params: query ? { query } : undefined
+      });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async voteKbArticle(subdomain: string, articleId: number, helpful: boolean): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/kb/articles/${articleId}/vote`, {}, {
+      params: { helpful }
+    });
+    return res.data;
+  },
+
+  async submitCsat(subdomain: string, ticketNumber: string, rating: number, comment?: string): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${ticketNumber}/csat`, {
+      rating,
+      comment
+    });
+    return res.data;
+  },
+
+  async closeTicketByCustomer(subdomain: string, ticketNumber: string, email?: string): Promise<Ticket> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${ticketNumber}/close`, {}, {
+      params: email ? { email } : undefined
+    });
+    return res.data;
+  },
+
+  async exportCustomerData(subdomain: string, email: string): Promise<any> {
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/export-data`, {
+      params: { email }
+    });
+    return res.data;
+  },
+
 };

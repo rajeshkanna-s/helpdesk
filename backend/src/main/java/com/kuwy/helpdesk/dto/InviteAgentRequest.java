@@ -13,3 +13,4 @@ public class InviteAgentRequest {
     private Long roleId;
     private Long primaryDepartmentId;
 }
+

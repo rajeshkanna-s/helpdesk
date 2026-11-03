@@ -250,3 +250,4 @@ public class PasswordResetService {
         return namePart.charAt(0) + "***" + namePart.charAt(namePart.length() - 1) + domainPart;
     }
 }
+

@@ -13,3 +13,4 @@ public class AcceptInvitationRequest {
     private String password;
     private Boolean agreedToTerms = false;
 }
+
