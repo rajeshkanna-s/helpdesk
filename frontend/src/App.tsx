@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { apiService, setApiTenantId, setAuthToken } from './services/api';
 import type { Company, AuthUser, LoginResponse } from './types';
 import { LoginPage } from './components/LoginPage';
-import { ResetPasswordPage } from './components/ResetPasswordPage';
-import { AcceptInvitationPage } from './components/AcceptInvitationPage';
 import { SuperAdminPortal } from './components/SuperAdminPortal';
 import { CompanyWorkspace } from './components/CompanyWorkspace';
 import { CustomerPortal } from './components/CustomerPortal';
@@ -75,24 +73,13 @@ export default function App() {
   const isAdminConsoleRoute = normalizedPath === '/adminconsole';
   const isSignupRoute = normalizedPath === '/signup';
   const isPricingRoute = normalizedPath === '/pricing';
-  const isGenericLoginRoute = normalizedPath === '/login';
-  const isResetPasswordRoute = normalizedPath === '/reset-password';
-  const isAcceptInvitationRoute = normalizedPath === '/accept-invitation';
 
-  // Check company admin route match: e.g. /kuwy/admin or /kuwy/login or /acme/admin
-  const companyAdminMatch = normalizedPath.match(/^\/([^/]+)\/(admin|login)$/);
+  // Check company admin route match: e.g. /kuwy/admin or /acme/admin
+  const companyAdminMatch = normalizedPath.match(/^\/([^/]+)\/admin$/);
   const companyAdminSlug = companyAdminMatch ? companyAdminMatch[1] : null;
 
   // Check customer portal route match: e.g. /kuwy or /kuwy/portal or /acme
-  const isCustomerPortalRoute =
-    !isAdminConsoleRoute &&
-    !isSignupRoute &&
-    !isPricingRoute &&
-    !isGenericLoginRoute &&
-    !isResetPasswordRoute &&
-    !isAcceptInvitationRoute &&
-    !companyAdminSlug &&
-    normalizedPath !== '/';
+  const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !isPricingRoute && !companyAdminSlug && normalizedPath !== '/';
   const customerPortalMatch = isCustomerPortalRoute ? normalizedPath.match(/^\/([^/]+)(\/portal)?$/) : null;
   const customerPortalSlug = customerPortalMatch ? customerPortalMatch[1] : null;
 
@@ -184,39 +171,6 @@ export default function App() {
     status: 'ACTIVE',
     planName: 'ENTERPRISE',
   };
-
-  
-  // =========================================================================
-  // SECTION B ROUTE: http://localhost:5174/reset-password?token=... (Screen 7b)
-  // =========================================================================
-  if (isResetPasswordRoute) {
-    return <ResetPasswordPage onNavigate={navigate} />;
-  }
-
-  // =========================================================================
-  // SECTION B ROUTE: http://localhost:5174/accept-invitation?token=... (Screen 8)
-  // =========================================================================
-  if (isAcceptInvitationRoute) {
-    return (
-      <AcceptInvitationPage
-        onLoginSuccess={handleLoginSuccess}
-        onNavigate={navigate}
-      />
-    );
-  }
-
-  // =========================================================================
-  // SECTION B ROUTE: http://localhost:5174/login (Generic Login with Workspace Lookup)
-  // =========================================================================
-  if (isGenericLoginRoute) {
-    return (
-      <LoginPage
-        onLoginSuccess={handleLoginSuccess}
-        targetMode="generic"
-        onNavigate={navigate}
-      />
-    );
-  }
 
   // =========================================================================
   // 1. DEDICATED ROUTE: http://localhost:5174/adminconsole (Admin Console)

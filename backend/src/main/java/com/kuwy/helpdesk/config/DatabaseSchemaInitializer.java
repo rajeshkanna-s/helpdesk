@@ -83,9 +83,39 @@ public class DatabaseSchemaInitializer implements ApplicationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             """);
 
+            // 5. Ensure company configuration columns for Section E Settings
+            ensureCompanyColumn("settings_json", "LONGTEXT DEFAULT NULL");
+            ensureCompanyColumn("support_email", "VARCHAR(255) DEFAULT NULL");
+            ensureCompanyColumn("support_phone", "VARCHAR(100) DEFAULT NULL");
+            ensureCompanyColumn("support_address", "VARCHAR(300) DEFAULT NULL");
+            ensureCompanyColumn("legal_name", "VARCHAR(255) DEFAULT NULL");
+            ensureCompanyColumn("business_hours_text", "VARCHAR(255) DEFAULT 'Mon - Fri, 9:00 AM - 6:00 PM IST'");
+            ensureCompanyColumn("portal_name", "VARCHAR(255) DEFAULT NULL");
+            ensureCompanyColumn("portal_welcome_message", "TEXT DEFAULT NULL");
+            ensureCompanyColumn("accent_color", "VARCHAR(30) DEFAULT '#6366f1'");
+            ensureCompanyColumn("powered_by_badge", "BOOLEAN DEFAULT TRUE");
+            ensureCompanyColumn("custom_domain_status", "VARCHAR(40) DEFAULT 'ACTIVE'");
+
             log.info("Database schema check and updates completed successfully.");
         } catch (Exception e) {
             log.error("Failed to run database schema initializer: {}", e.getMessage(), e);
+        }
+    }
+
+    private void ensureCompanyColumn(String columnName, String definition) {
+        try {
+            List<String> columns = jdbcTemplate.query(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'companies' AND column_name = ?",
+                    (rs, rowNum) -> rs.getString("column_name"),
+                    columnName
+            );
+            if (columns.isEmpty()) {
+                log.info("Adding column '{}' to 'companies' table...", columnName);
+                jdbcTemplate.execute("ALTER TABLE `companies` ADD COLUMN `" + columnName + "` " + definition);
+                log.info("Column '{}' added to 'companies' successfully.", columnName);
+            }
+        } catch (Exception e) {
+            log.warn("Could not check/add column '{}' to companies table: {}", columnName, e.getMessage());
         }
     }
 

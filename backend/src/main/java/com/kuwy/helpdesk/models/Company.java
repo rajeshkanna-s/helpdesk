@@ -54,6 +54,39 @@ public class Company {
     @Column(name = "max_agents")
     private Integer maxAgents = 50;
 
+    @Column(name = "legal_name")
+    private String legalName;
+
+    @Column(name = "support_email")
+    private String supportEmail;
+
+    @Column(name = "support_phone")
+    private String supportPhone;
+
+    @Column(name = "support_address")
+    private String supportAddress;
+
+    @Column(name = "business_hours_text")
+    private String businessHoursText;
+
+    @Column(name = "portal_name")
+    private String portalName;
+
+    @Column(name = "portal_welcome_message", columnDefinition = "TEXT")
+    private String portalWelcomeMessage;
+
+    @Column(name = "accent_color", length = 30)
+    private String accentColor = "#6366f1";
+
+    @Column(name = "powered_by_badge")
+    private Boolean poweredByBadge = true;
+
+    @Column(name = "custom_domain_status", length = 40)
+    private String customDomainStatus = "ACTIVE";
+
+    @Column(name = "settings_json", columnDefinition = "LONGTEXT")
+    private String settingsJson;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
 

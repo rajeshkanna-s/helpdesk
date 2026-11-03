@@ -887,4 +887,70 @@ export const apiService = {
     return res.data;
   },
 
+
+  // =========================================================================
+  // SECTION E: ADMIN SETTINGS APIS (SCREENS 25 TO 39)
+  // =========================================================================
+
+  async getCompanySettings(companyId: number): Promise<any> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/settings`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  async updateCompanySettings(companyId: number, settings: any): Promise<any> {
+    const res = await axios.put(`${API_BASE}/companies/${companyId}/settings`, settings, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async getAuditLogs(companyId: number): Promise<any[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/audit-logs`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async saveMailbox(companyId: number, mailbox: any): Promise<any> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/mailboxes`, mailbox, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async deleteMailbox(companyId: number, mailboxId: number): Promise<void> {
+    await axios.delete(`${API_BASE}/companies/${companyId}/mailboxes/${mailboxId}`, { headers: getHeaders() });
+  },
+
+  async saveCannedResponse(companyId: number, canned: any): Promise<any> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/canned-responses`, canned, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async getAutomationRules(companyId: number): Promise<any[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/companies/${companyId}/automation-rules`, { headers: getHeaders() });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  async saveAutomationRule(companyId: number, rule: any): Promise<any> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/automation-rules`, rule, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async reauthenticate(companyId: number, password: string): Promise<{ success: boolean; message: string }> {
+    const res = await axios.post(`${API_BASE}/companies/${companyId}/reauth`, { password }, { headers: getHeaders() });
+    return res.data;
+  },
+
+  async exportWorkspaceData(companyId: number): Promise<any> {
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/export`, { headers: getHeaders() });
+    return res.data;
+  },
+
 };
