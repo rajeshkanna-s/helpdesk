@@ -22,10 +22,10 @@ public class DashboardController {
 
     @GetMapping("/stats")
     public ResponseEntity<DashboardStatsDto> getDashboardStats(@RequestParam(required = false) Long companyId) {
-        Long targetId = companyId != null ? companyId : TenantContext.getCompanyId();
-        if (targetId == null) {
-            targetId = 1L;
-        }
+        Long targetId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetId);
 
         DashboardStatsDto stats = DashboardStatsDto.builder()
                 .totalTickets(ticketRepository.countByCompanyId(targetId))

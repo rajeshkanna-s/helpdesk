@@ -146,9 +146,16 @@ public class AttachmentService {
     }
 
     private void validateFileExtension(String fileName) {
+        String lower = fileName.toLowerCase().trim();
+        // Disallow dangerous executable extensions and double extensions
+        for (String danger : Arrays.asList(".exe", ".bat", ".cmd", ".sh", ".php", ".jsp", ".asp", ".aspx", ".jar", ".vbs", ".ps1", ".scr", ".pif")) {
+            if (lower.contains(danger)) {
+                throw new IllegalArgumentException("Executable and script files are strictly blocked for security.");
+            }
+        }
         int dot = fileName.lastIndexOf('.');
         if (dot < 0) {
-            return; // Allow extensionless or default to binary
+            throw new IllegalArgumentException("File must have a valid extension (.png, .pdf, .jpg, .txt, etc.)");
         }
         String ext = fileName.substring(dot + 1).toLowerCase();
         if (!ALLOWED_EXTENSIONS.contains(ext)) {

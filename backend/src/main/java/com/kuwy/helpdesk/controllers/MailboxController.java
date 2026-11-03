@@ -31,10 +31,11 @@ public class MailboxController {
 
     @GetMapping
     public ResponseEntity<List<CompanyMailbox>> listMailboxes(@RequestParam(required = false) Long companyId) {
-        Long targetId = companyId != null ? companyId : TenantContext.getCompanyId();
-        if (targetId == null) {
-            targetId = 1L;
-        }
+        Long targetId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetId);
+
         List<CompanyMailbox> list = mailboxRepository.findByCompanyId(targetId);
         // Ensure every mailbox has a deterministic forwarding address
         for (CompanyMailbox mb : list) {
@@ -51,6 +52,8 @@ public class MailboxController {
     public ResponseEntity<CompanyMailbox> verifyForwarding(@PathVariable Long id) {
         CompanyMailbox mailbox = mailboxRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Mailbox not found: " + id));
+        TenantContext.assertAccessTo(mailbox.getCompany().getId());
+
         mailbox.setForwardingVerified(true);
         if (mailbox.getForwardingAddress() == null || mailbox.getForwardingAddress().isBlank()) {
             mailbox.setForwardingAddress(id + "81753993@tickets.helpdesk.com");
@@ -62,6 +65,7 @@ public class MailboxController {
     public ResponseEntity<CompanyMailbox> connectMs365Mailbox(@RequestBody MailboxConnectDto dto) {
         Company company = companyRepository.findById(dto.getCompanyId())
                 .orElseThrow(() -> new RuntimeException("Company not found: " + dto.getCompanyId()));
+        TenantContext.assertAccessTo(company.getId());
 
         Department department = departmentRepository.findById(dto.getDepartmentId())
                 .orElseThrow(() -> new RuntimeException("Department not found: " + dto.getDepartmentId()));
@@ -88,25 +92,25 @@ public class MailboxController {
      * Endpoint to ingest incoming email (can be invoked by Microsoft Graph Webhook Notification,
      * Email Forwarding, Azure Logic Apps, or tested directly from UI)
      */
-    @PostMapping("/simulate-incoming-mail")
-    public ResponseEntity<Ticket> simulateIncomingEmail(@RequestBody IngestMailRequest request) {
+    @PostMapping("/ingest")
+    public ResponseEntity<Ticket> ingestEmail(@RequestBody IngestEmailRequest req) {
         Ticket ticket = emailIngestionService.processIncomingEmail(
-                request.getRecipientMailbox(),
-                request.getSenderEmail(),
-                request.getSenderName(),
-                request.getSubject(),
-                request.getBodyHtml(),
-                request.getBodyText(),
-                request.getInternetMessageId(),
-                request.getMsConversationId(),
-                request.getInReplyTo()
+                req.getRecipientMailbox(),
+                req.getSenderEmail(),
+                req.getSenderName(),
+                req.getSubject(),
+                req.getBodyHtml(),
+                req.getBodyText(),
+                req.getInternetMessageId(),
+                req.getMsConversationId(),
+                req.getInReplyTo()
         );
         return ResponseEntity.ok(ticket);
     }
 
     @Getter
     @Setter
-    public static class IngestMailRequest {
+    public static class IngestEmailRequest {
         private String recipientMailbox;
         private String senderEmail;
         private String senderName;

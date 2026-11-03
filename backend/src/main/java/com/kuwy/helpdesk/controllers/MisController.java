@@ -36,8 +36,10 @@ public class MisController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
+        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetCompanyId);
 
         MisFilterDto filter = MisFilterDto.builder()
                 .companyId(targetCompanyId)
@@ -54,8 +56,10 @@ public class MisController {
 
     @GetMapping("/summary")
     public ResponseEntity<MisSummaryDto> getSummary(@RequestParam(required = false) Long companyId) {
-        Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
+        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetCompanyId);
 
         return ResponseEntity.ok(misService.getMisSummary(targetCompanyId));
     }
@@ -71,8 +75,10 @@ public class MisController {
             @RequestParam(defaultValue = "100000") int rows,
             HttpServletResponse response
     ) throws IOException {
-        Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
+        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetCompanyId);
 
         // Cap at 200,000 max for safety
         int safeRows = Math.min(Math.max(rows, 10), 200000);
@@ -88,34 +94,5 @@ public class MisController {
 
         log.info("Starting Streaming SXSSFWorkbook Excel export for company {} with {} rows...", targetCompanyId, safeRows);
         misService.exportToExcel(targetCompanyId, filter, safeRows, response);
-    }
-
-    @GetMapping("/export/csv")
-    public void exportCsv(
-            @RequestParam(required = false) Long companyId,
-            @RequestParam(required = false) Long departmentId,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String priority,
-            @RequestParam(required = false) String channel,
-            @RequestParam(required = false) String slaStatus,
-            @RequestParam(defaultValue = "100000") int rows,
-            HttpServletResponse response
-    ) throws IOException {
-        Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
-
-        int safeRows = Math.min(Math.max(rows, 10), 200000);
-
-        MisFilterDto filter = MisFilterDto.builder()
-                .companyId(targetCompanyId)
-                .departmentId(departmentId)
-                .status(status)
-                .priority(priority)
-                .channel(channel)
-                .slaStatus(slaStatus)
-                .build();
-
-        log.info("Starting Streaming CSV export for company {} with {} rows...", targetCompanyId, safeRows);
-        misService.exportToCsv(targetCompanyId, filter, safeRows, response);
     }
 }

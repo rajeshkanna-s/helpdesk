@@ -6,6 +6,7 @@ import com.kuwy.helpdesk.dto.UserCredentialCreateDto;
 import com.kuwy.helpdesk.models.Company;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.services.AdminService;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,18 +22,27 @@ public class AdminController {
 
     private final AdminService adminService;
 
+    private void assertSuperAdmin() {
+        if (!TenantContext.isSuperAdmin()) {
+            throw new SecurityException("Forbidden: Only Platform Super Admin can access Admin Console control endpoints.");
+        }
+    }
+
     @GetMapping("/overview")
     public ResponseEntity<AdminOverviewDto> getOverview() {
+        assertSuperAdmin();
         return ResponseEntity.ok(adminService.getPlatformOverview());
     }
 
     @GetMapping("/companies")
     public ResponseEntity<List<AdminService.CompanyDetailDto>> listCompanies() {
+        assertSuperAdmin();
         return ResponseEntity.ok(adminService.getAllCompaniesWithDetails());
     }
 
     @PostMapping("/companies")
     public ResponseEntity<?> createCompany(@RequestBody CompanyCreateAdminDto dto) {
+        assertSuperAdmin();
         try {
             Company created = adminService.createCompanyWithAdmin(dto);
             return ResponseEntity.ok(created);
@@ -46,6 +56,7 @@ public class AdminController {
             @PathVariable Long id,
             @RequestParam String status
     ) {
+        assertSuperAdmin();
         try {
             Company.CompanyStatus newStatus = Company.CompanyStatus.valueOf(status.toUpperCase());
             Company updated = adminService.updateCompanyStatus(id, newStatus);
@@ -61,6 +72,7 @@ public class AdminController {
             @RequestParam(required = false) String planName,
             @RequestParam(required = false) Integer maxAgents
     ) {
+        assertSuperAdmin();
         try {
             Company updated = adminService.updateCompanyLimits(id, planName, maxAgents);
             return ResponseEntity.ok(updated);
@@ -71,11 +83,13 @@ public class AdminController {
 
     @GetMapping("/users")
     public ResponseEntity<List<User>> listAllUsers() {
+        assertSuperAdmin();
         return ResponseEntity.ok(adminService.getAllUsers());
     }
 
     @PostMapping("/users")
     public ResponseEntity<?> createUserCredential(@RequestBody UserCredentialCreateDto dto) {
+        assertSuperAdmin();
         try {
             User created = adminService.createUserCredential(dto);
             return ResponseEntity.ok(created);
@@ -86,6 +100,7 @@ public class AdminController {
 
     @PatchMapping("/users/{id}/toggle-active")
     public ResponseEntity<?> toggleUserActive(@PathVariable Long id) {
+        assertSuperAdmin();
         try {
             User updated = adminService.toggleUserActive(id);
             return ResponseEntity.ok(updated);
@@ -99,6 +114,7 @@ public class AdminController {
             @PathVariable Long id,
             @RequestBody Map<String, String> body
     ) {
+        assertSuperAdmin();
         try {
             String newPassword = body.getOrDefault("newPassword", "Password@123");
             adminService.resetUserPassword(id, newPassword);

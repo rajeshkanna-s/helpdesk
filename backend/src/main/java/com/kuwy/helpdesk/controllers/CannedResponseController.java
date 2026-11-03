@@ -27,14 +27,19 @@ public class CannedResponseController {
     public ResponseEntity<List<CannedResponse>> getCannedResponses(
             @RequestParam(required = false) Long companyId
     ) {
-        Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
+        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
+                ? companyId
+                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        TenantContext.assertAccessTo(targetCompanyId);
+
         return ResponseEntity.ok(cannedResponseRepository.findByCompanyIdOrderByTitleAsc(targetCompanyId));
     }
 
     @PostMapping
     public ResponseEntity<CannedResponse> createCannedResponse(@RequestBody CannedResponseDto dto) {
         Long targetCompanyId = TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L;
+        TenantContext.assertAccessTo(targetCompanyId);
+
         Company company = companyRepository.findById(targetCompanyId)
                 .orElseThrow(() -> new RuntimeException("Company not found"));
 
@@ -54,7 +59,11 @@ public class CannedResponseController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteCannedResponse(@PathVariable Long id) {
-        cannedResponseRepository.deleteById(id);
+        CannedResponse resp = cannedResponseRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Canned response not found: " + id));
+        TenantContext.assertAccessTo(resp.getCompany().getId());
+
+        cannedResponseRepository.delete(resp);
         return ResponseEntity.noContent().build();
     }
 
@@ -63,8 +72,7 @@ public class CannedResponseController {
         private String title;
         private String shortcut;
         private String content;
-        private Boolean isShared;
         private Long departmentId;
+        private Boolean isShared;
     }
 }
-

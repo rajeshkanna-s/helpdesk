@@ -40,6 +40,9 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     @Query("SELECT MAX(t.id) FROM Ticket t WHERE t.company.id = :companyId")
     Long findMaxTicketIdForCompany(@Param("companyId") Long companyId);
 
+    @Query("SELECT COUNT(t) FROM Ticket t WHERE t.company.id = :companyId AND t.createdAt >= :afterDate")
+    long countByCompanyIdAndCreatedAtAfter(@Param("companyId") Long companyId, @Param("afterDate") java.time.LocalDateTime afterDate);
+
     @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(ticket_number, LOCATE('-', ticket_number) + 1) AS UNSIGNED)), 1000) FROM tickets WHERE company_id = :companyId", nativeQuery = true)
     Long findMaxTicketSequenceForCompany(@Param("companyId") Long companyId);
 }

@@ -13,4 +13,7 @@ public interface CompanySubscriptionRepository extends JpaRepository<CompanySubs
 
     @Query("SELECT s FROM CompanySubscription s WHERE s.company.id = :companyId")
     Optional<CompanySubscription> findByCompanyId(@Param("companyId") Long companyId);
+
+    @Query("SELECT s FROM CompanySubscription s WHERE s.gatewaySubscriptionId = :subId")
+    Optional<CompanySubscription> findByGatewaySubscriptionId(@Param("subId") String subId);
 }

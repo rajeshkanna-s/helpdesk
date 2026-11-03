@@ -48,6 +48,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [priority, setPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('MEDIUM');
   const [description, setDescription] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [honeypot, setHoneypot] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<Ticket | null>(null);
 
@@ -194,7 +195,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         departmentId: deptId,
         subject,
         description,
-        priority
+        priority,
+        websiteUrl: honeypot,
       });
 
       // Upload attachments if present
@@ -617,6 +619,18 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 </div>
 
                 <form onSubmit={handleSubmitTicket}>
+                  {/* Anti-Spam Bot Honeypot */}
+                  <div style={{ display: 'none', position: 'absolute', left: '-9999px' }} aria-hidden="true">
+                    <input
+                      type="text"
+                      name="websiteUrl"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={honeypot}
+                      onChange={(e) => setHoneypot(e.target.value)}
+                    />
+                  </div>
+
                   {/* Requester Identity */}
                   <div className="row g-3 mb-3">
                     <div className="col-md-6">

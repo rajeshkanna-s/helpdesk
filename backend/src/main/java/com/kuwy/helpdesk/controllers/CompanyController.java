@@ -5,6 +5,7 @@ import com.kuwy.helpdesk.models.Company;
 import com.kuwy.helpdesk.models.Department;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.services.CompanyService;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -36,11 +37,13 @@ public class CompanyController {
 
     @GetMapping("/{id}/departments")
     public ResponseEntity<List<Department>> getDepartments(@PathVariable Long id) {
+        TenantContext.assertAccessTo(id);
         return ResponseEntity.ok(companyService.getDepartments(id));
     }
 
     @GetMapping("/{id}/agents")
     public ResponseEntity<List<User>> getAgents(@PathVariable Long id) {
+        TenantContext.assertAccessTo(id);
         return ResponseEntity.ok(companyService.getAgents(id));
     }
 
