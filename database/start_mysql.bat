@@ -1,0 +1,3 @@
+@echo off
+echo Starting Kuwy HelpDesk MySQL 8.4 Server on localhost:3306...
+"C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --defaults-file="C:\ProgramData\MySQL\MySQL Server 8.4\my.ini" --console
