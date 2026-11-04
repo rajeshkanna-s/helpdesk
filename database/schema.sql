@@ -95,6 +95,8 @@ CREATE TABLE `users` (
   `company_id` BIGINT NOT NULL,
   `email` VARCHAR(255) NOT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
+  `auth_version` BIGINT NOT NULL DEFAULT 0,
+  `row_version` BIGINT NOT NULL DEFAULT 0,
   `first_name` VARCHAR(100) NOT NULL,
   `last_name` VARCHAR(100) DEFAULT NULL,
   `display_name` VARCHAR(150) NOT NULL,
@@ -104,6 +106,12 @@ CREATE TABLE `users` (
   `primary_department_id` BIGINT DEFAULT NULL,
   `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
   `is_verified` BOOLEAN NOT NULL DEFAULT TRUE,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  `is_two_factor_enabled` BOOLEAN NOT NULL DEFAULT FALSE,
+  `two_factor_secret` VARCHAR(512) DEFAULT NULL,
+  `backup_codes` TEXT,
+  `failed_login_attempts` INT NOT NULL DEFAULT 0,
+  `lockout_until` TIMESTAMP NULL DEFAULT NULL,
   `last_login_at` TIMESTAMP NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -176,7 +184,7 @@ CREATE TABLE `company_mailboxes` (
   `forwarding_verified` BOOLEAN NOT NULL DEFAULT FALSE,
   `provider_type` ENUM('MICROSOFT_365', 'EXCHANGE_ONLINE', 'GOOGLE_WORKSPACE', 'IMAP_SMTP', 'FORWARDING') NOT NULL DEFAULT 'MICROSOFT_365',
   `auth_type` ENUM('OAUTH2_GRAPH_API', 'OAUTH2_IMAP', 'BASIC_AUTH', 'FORWARD_ONLY') NOT NULL DEFAULT 'OAUTH2_GRAPH_API',
-  
+
   -- Microsoft 365 / Azure AD OAuth Credentials
   `ms_tenant_id` VARCHAR(255) DEFAULT NULL COMMENT 'Azure AD Directory / Tenant ID',
   `ms_client_id` VARCHAR(255) DEFAULT NULL COMMENT 'Azure Application Client ID',
@@ -184,7 +192,7 @@ CREATE TABLE `company_mailboxes` (
   `ms_access_token_enc` MEDIUMTEXT DEFAULT NULL,
   `ms_refresh_token_enc` MEDIUMTEXT DEFAULT NULL,
   `token_expires_at` TIMESTAMP NULL DEFAULT NULL,
-  
+
   -- Real-Time Webhook / Polling Sync Management
   `graph_subscription_id` VARCHAR(255) DEFAULT NULL COMMENT 'MS Graph change notification subscription ID',
   `subscription_expires_at` TIMESTAMP NULL DEFAULT NULL,
@@ -266,7 +274,7 @@ CREATE TABLE `tickets` (
   `sla_policy_id` BIGINT DEFAULT NULL,
   `source_mailbox_id` BIGINT DEFAULT NULL,
   `channel` ENUM('EMAIL', 'MICROSOFT_365', 'WEB_PORTAL', 'CHAT', 'PHONE', 'API') NOT NULL DEFAULT 'MICROSOFT_365',
-  
+
   -- Content
   `subject` VARCHAR(500) NOT NULL,
   `description_html` LONGTEXT DEFAULT NULL,
@@ -275,7 +283,7 @@ CREATE TABLE `tickets` (
   -- Status & Prioritization
   `status` ENUM('OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'WAITING_ON_THIRD_PARTY', 'RESOLVED', 'CLOSED', 'SPAM') NOT NULL DEFAULT 'OPEN',
   `priority` ENUM('LOW', 'MEDIUM', 'HIGH', 'URGENT') NOT NULL DEFAULT 'MEDIUM',
-  
+
   -- Microsoft 365 / Email Threading Identity (Crucial for conversation matching!)
   `internet_message_id` VARCHAR(255) DEFAULT NULL COMMENT 'RFC 822 Message-ID e.g. <abc@outlook.com>',
   `ms_conversation_id` VARCHAR(255) DEFAULT NULL COMMENT 'Microsoft Graph Conversation ID',
@@ -330,7 +338,7 @@ CREATE TABLE `ticket_threads` (
   `subject` VARCHAR(500) DEFAULT NULL,
   `body_html` LONGTEXT NOT NULL,
   `body_text` LONGTEXT DEFAULT NULL,
-  
+
   -- Email Headers for Thread Ingestion
   `internet_message_id` VARCHAR(255) DEFAULT NULL,
   `ms_graph_message_id` VARCHAR(255) DEFAULT NULL,
@@ -508,13 +516,13 @@ CREATE TABLE company_subscriptions (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   company_id BIGINT NOT NULL,
   plan_tier ENUM('FREE', 'STARTER', 'PRO', 'ENTERPRISE') NOT NULL DEFAULT 'STARTER',
-  illing_cycle ENUM('MONTHLY', 'ANNUAL') NOT NULL DEFAULT 'MONTHLY',
-  mount DECIMAL(10,2) NOT NULL DEFAULT 2999.00,
+  billing_cycle ENUM('MONTHLY', 'ANNUAL') NOT NULL DEFAULT 'MONTHLY',
+  amount DECIMAL(10,2) NOT NULL DEFAULT 2999.00,
   currency VARCHAR(10) NOT NULL DEFAULT 'INR',
   gateway_provider VARCHAR(50) DEFAULT 'RAZORPAY',
   gateway_subscription_id VARCHAR(100) DEFAULT NULL,
-  gent_limit INT NOT NULL DEFAULT 5,
-  	icket_limit_monthly INT NOT NULL DEFAULT 1000,
+  agent_limit INT NOT NULL DEFAULT 5,
+  ticket_limit_monthly INT NOT NULL DEFAULT 1000,
   status ENUM('ACTIVE', 'TRIAL', 'PAST_DUE', 'CANCELLED', 'LOCKED') NOT NULL DEFAULT 'ACTIVE',
   current_period_start TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   current_period_end TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -533,7 +541,7 @@ CREATE TABLE canned_responses (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   company_id BIGINT NOT NULL,
   department_id BIGINT DEFAULT NULL,
-  	itle VARCHAR(150) NOT NULL,
+  title VARCHAR(150) NOT NULL,
   shortcut VARCHAR(50) NOT NULL,
   content TEXT NOT NULL,
   is_shared BOOLEAN NOT NULL DEFAULT TRUE,
@@ -547,15 +555,14 @@ CREATE TABLE canned_responses (
 -- ------------------------------------------------------------------------
 -- 17. AUTOMATION & ROUTING RULES
 -- ------------------------------------------------------------------------
-DROP TABLE IF EXISTS utomation_rules;
-CREATE TABLE utomation_rules (
+DROP TABLE IF EXISTS automation_rules;
+CREATE TABLE automation_rules (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   company_id BIGINT NOT NULL,
-  
-ame VARCHAR(150) NOT NULL,
+name VARCHAR(150) NOT NULL,
   event_trigger ENUM('TICKET_CREATED', 'TICKET_UPDATED', 'CUSTOMER_REPLIED', 'SLA_BREACHED', 'TIME_INACTIVE') NOT NULL,
   condition_json JSON DEFAULT NULL,
-  ction_json JSON DEFAULT NULL,
+  action_json JSON DEFAULT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   priority_order INT NOT NULL DEFAULT 10,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -571,9 +578,9 @@ DROP TABLE IF EXISTS email_templates;
 CREATE TABLE email_templates (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   company_id BIGINT NOT NULL,
-  	emplate_type ENUM('TICKET_CREATED_CONFIRMATION', 'AGENT_REPLY', 'TICKET_RESOLVED', 'TICKET_CLOSED', 'CUSTOMER_OTP') NOT NULL,
+  template_type ENUM('TICKET_CREATED_CONFIRMATION', 'AGENT_REPLY', 'TICKET_RESOLVED', 'TICKET_CLOSED', 'CUSTOMER_OTP') NOT NULL,
   subject_template VARCHAR(255) NOT NULL,
-  ody_html TEXT NOT NULL,
+  body_html TEXT NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -590,12 +597,12 @@ CREATE TABLE customer_auth_tokens (
   company_id BIGINT NOT NULL,
   email VARCHAR(255) NOT NULL,
   otp_code VARCHAR(10) NOT NULL,
-  	oken VARCHAR(255) NOT NULL,
+  token VARCHAR(255) NOT NULL,
   expires_at TIMESTAMP NOT NULL,
   is_used BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
-  INDEX idx_auth_token (	oken),
+  INDEX idx_auth_token (token),
   INDEX idx_auth_email (company_id, email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

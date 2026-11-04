@@ -24,7 +24,7 @@ public class DashboardController {
     public ResponseEntity<DashboardStatsDto> getDashboardStats(@RequestParam(required = false) Long companyId) {
         Long targetId = TenantContext.isSuperAdmin() && companyId != null
                 ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+                : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetId);
 
         DashboardStatsDto stats = DashboardStatsDto.builder()

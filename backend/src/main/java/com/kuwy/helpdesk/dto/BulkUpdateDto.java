@@ -23,10 +23,10 @@ public class BulkUpdateDto {
                 || new HashSet<>(ticketIds).size() != ticketIds.size()) {
             throw new IllegalArgumentException("Ticket IDs must be positive and unique.");
         }
-        if (agentId != null && agentId <= 0 || departmentId != null && departmentId <= 0) {
+        if ((agentId != null && agentId <= 0) || (departmentId != null && departmentId <= 0)) {
             throw new IllegalArgumentException("Replacement IDs must be positive.");
         }
-        if (status != null && status.length() > 32 || priority != null && priority.length() > 16) {
+        if ((status != null && status.length() > 32) || (priority != null && priority.length() > 16)) {
             throw new IllegalArgumentException("Invalid status or priority.");
         }
         if ((status == null || status.isBlank()) && (priority == null || priority.isBlank())

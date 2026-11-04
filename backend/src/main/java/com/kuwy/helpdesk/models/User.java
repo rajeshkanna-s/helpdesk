@@ -33,6 +33,15 @@ public class User {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    @JsonIgnore
+    @Column(name = "auth_version", nullable = false, columnDefinition = "BIGINT DEFAULT 0")
+    private Long authVersion = 0L;
+
+    @JsonIgnore
+    @Version
+    @Column(name = "row_version", nullable = false, columnDefinition = "BIGINT DEFAULT 0")
+    private Long rowVersion = 0L;
+
     @Column(name = "first_name", nullable = false, length = 100)
     private String firstName;
 
@@ -65,15 +74,19 @@ public class User {
     @Column(name = "is_two_factor_enabled")
     private Boolean isTwoFactorEnabled = false;
 
-    @Column(name = "two_factor_secret", length = 64)
+    @JsonIgnore
+    @Column(name = "two_factor_secret", length = 512)
     private String twoFactorSecret;
 
+    @JsonIgnore
     @Column(name = "backup_codes", columnDefinition = "TEXT")
     private String backupCodes;
 
+    @JsonIgnore
     @Column(name = "failed_login_attempts")
     private Integer failedLoginAttempts = 0;
 
+    @JsonIgnore
     @Column(name = "lockout_until")
     private LocalDateTime lockoutUntil;
 
@@ -82,4 +95,8 @@ public class User {
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    public void invalidateAuthentication() {
+        authVersion = Math.addExact(authVersion == null ? 0L : authVersion, 1L);
+    }
 }

@@ -7,8 +7,10 @@ import com.kuwy.helpdesk.repositories.CompanySubscriptionRepository;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,7 +29,7 @@ public class SubscriptionController {
             @RequestParam(required = false) Long companyId
     ) {
         Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
-        if (targetCompanyId == null) targetCompanyId = 1L;
+        TenantContext.assertAccessTo(targetCompanyId);
 
         final Long resolvedCompanyId = targetCompanyId;
         CompanySubscription sub = subscriptionRepository.findByCompanyId(resolvedCompanyId)
@@ -35,10 +37,10 @@ public class SubscriptionController {
                     Company company = companyRepository.findById(resolvedCompanyId).orElse(null);
                     CompanySubscription newSub = new CompanySubscription();
                     newSub.setCompany(company);
-                    newSub.setPlanTier(CompanySubscription.PlanTier.PRO);
-                    newSub.setAmount(BigDecimal.valueOf(5999.00));
-                    newSub.setAgentLimit(25);
-                    newSub.setTicketLimitMonthly(5000);
+                    newSub.setPlanTier(CompanySubscription.PlanTier.STARTER);
+                    newSub.setAmount(BigDecimal.valueOf(2499.00));
+                    newSub.setAgentLimit(5);
+                    newSub.setTicketLimitMonthly(1000);
                     newSub.setStatus(CompanySubscription.SubscriptionStatus.ACTIVE);
                     return subscriptionRepository.save(newSub);
                 });
@@ -47,10 +49,17 @@ public class SubscriptionController {
     }
 
     @PostMapping("/checkout")
-    public ResponseEntity<CompanySubscription> upgradeSubscription(@RequestBody CheckoutDto dto) {
-        Long targetCompanyId = TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L;
+    public ResponseEntity<CompanySubscription> upgradeSubscription(
+            @RequestBody CheckoutDto dto,
+            @RequestParam(required = false) Long companyId
+    ) {
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
+        TenantContext.assertCompanyAdminAccessTo(targetCompanyId);
+
         Company company = companyRepository.findById(targetCompanyId)
-                .orElseThrow(() -> new RuntimeException("Company not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + targetCompanyId));
+
+        CompanySubscription.PlanTier tier = CompanySubscription.PlanTier.valueOf(dto.getPlanTier().toUpperCase());
 
         CompanySubscription sub = subscriptionRepository.findByCompanyId(targetCompanyId)
                 .orElseGet(() -> {
@@ -59,31 +68,38 @@ public class SubscriptionController {
                     return newSub;
                 });
 
-        CompanySubscription.PlanTier tier = CompanySubscription.PlanTier.valueOf(dto.getPlanTier().toUpperCase());
         sub.setPlanTier(tier);
         sub.setGatewayProvider(dto.getGateway() != null ? dto.getGateway() : "RAZORPAY");
-        sub.setGatewaySubscriptionId("sub_" + System.currentTimeMillis());
-        sub.setStatus(CompanySubscription.SubscriptionStatus.ACTIVE);
-        sub.setCurrentPeriodStart(LocalDateTime.now());
-        sub.setCurrentPeriodEnd(LocalDateTime.now().plusDays(30));
+        sub.setGatewaySubscriptionId("order_" + System.currentTimeMillis());
 
         if (tier == CompanySubscription.PlanTier.FREE) {
             sub.setAmount(BigDecimal.ZERO);
             sub.setAgentLimit(2);
             sub.setTicketLimitMonthly(100);
-        } else if (tier == CompanySubscription.PlanTier.STARTER) {
-            sub.setAmount(BigDecimal.valueOf(2499.00));
-            sub.setAgentLimit(5);
-            sub.setTicketLimitMonthly(1000);
+            sub.setStatus(CompanySubscription.SubscriptionStatus.ACTIVE);
+            sub.setCurrentPeriodStart(LocalDateTime.now());
+            sub.setCurrentPeriodEnd(LocalDateTime.now().plusYears(1));
+            company.setPlanName(tier.name());
+            company.setMaxAgents(sub.getAgentLimit());
+            companyRepository.save(company);
         } else {
-            sub.setAmount(BigDecimal.valueOf(5999.00));
-            sub.setAgentLimit(25);
-            sub.setTicketLimitMonthly(5000);
+            // For paid plans: Set to TRIAL / PENDING until payment webhook verifies capture
+            if (tier == CompanySubscription.PlanTier.STARTER) {
+                sub.setAmount(BigDecimal.valueOf(2499.00));
+                sub.setAgentLimit(5);
+                sub.setTicketLimitMonthly(1000);
+            } else {
+                sub.setAmount(BigDecimal.valueOf(5999.00));
+                sub.setAgentLimit(25);
+                sub.setTicketLimitMonthly(5000);
+            }
+            sub.setStatus(CompanySubscription.SubscriptionStatus.TRIAL);
+            sub.setCurrentPeriodStart(LocalDateTime.now());
+            sub.setCurrentPeriodEnd(LocalDateTime.now().plusDays(14));
+            company.setPlanName(tier.name());
+            company.setMaxAgents(sub.getAgentLimit());
+            companyRepository.save(company);
         }
-
-        company.setPlanName(tier.name());
-        company.setMaxAgents(sub.getAgentLimit());
-        companyRepository.save(company);
 
         return ResponseEntity.ok(subscriptionRepository.save(sub));
     }
@@ -94,4 +110,3 @@ public class SubscriptionController {
         private String gateway;
     }
 }
-

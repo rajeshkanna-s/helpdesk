@@ -30,6 +30,8 @@ public class DatabaseSchemaInitializer implements ApplicationRunner {
             ensureUserColumn("backup_codes", "TEXT DEFAULT NULL");
             ensureUserColumn("failed_login_attempts", "INT DEFAULT 0");
             ensureUserColumn("lockout_until", "TIMESTAMP NULL DEFAULT NULL");
+            ensureUserColumn("auth_version", "BIGINT NOT NULL DEFAULT 0");
+            ensureUserColumn("row_version", "BIGINT NOT NULL DEFAULT 0");
 
             // 2. Ensure `password_reset_tokens` table
             jdbcTemplate.execute("""

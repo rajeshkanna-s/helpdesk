@@ -91,6 +91,20 @@ public final class TenantContext {
         }
     }
 
+    public static Long requireUserId() {
+        if (!isAuthenticated()) {
+            throw new SecurityException("An authenticated staff identity is required.");
+        }
+        return getUserId();
+    }
+
+    public static void assertCompanyAdminAccessTo(Long targetCompanyId) {
+        assertAccessTo(targetCompanyId);
+        if (!isSuperAdmin() && !Role.RoleType.COMPANY_ADMIN.name().equals(getUserRole())) {
+            throw new SecurityException("Company administrator permission is required.");
+        }
+    }
+
     public static void clear() {
         CURRENT_TENANT.remove();
         CURRENT_USER_ID.remove();

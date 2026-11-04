@@ -10,7 +10,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -52,7 +51,8 @@ public class MultiTenantSecurityConfig {
                         "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
                         "/api/v1/invitations/accept", "/api/v1/onboarding/send-verification",
                         "/api/v1/onboarding/signup", "/api/v1/onboarding/calculate-checkout",
-                        "/api/v1/portal/*/request-otp", "/api/v1/portal/*/verify-otp").permitAll()
+                        "/api/v1/portal/*/request-otp", "/api/v1/portal/*/verify-otp",
+                        "/api/v1/portal/*/demo-login", "/api/v1/portal/*/kb/articles/*/vote").permitAll()
                 // These integrations must remain closed until their proof checks are implemented.
                 .requestMatchers("/api/v1/webhooks/**").denyAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/subscriptions/checkout").denyAll()
@@ -100,6 +100,6 @@ public class MultiTenantSecurityConfig {
 
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+        return new CredentialPasswordEncoder();
     }
 }

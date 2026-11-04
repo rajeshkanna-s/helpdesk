@@ -84,6 +84,7 @@ public class Company {
     @Column(name = "custom_domain_status", length = 40)
     private String customDomainStatus = "ACTIVE";
 
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "settings_json", columnDefinition = "LONGTEXT")
     private String settingsJson;
 

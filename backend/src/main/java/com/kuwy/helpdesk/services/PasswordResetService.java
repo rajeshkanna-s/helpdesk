@@ -4,17 +4,23 @@ import com.kuwy.helpdesk.dto.ForgotPasswordRequest;
 import com.kuwy.helpdesk.dto.ResetPasswordRequest;
 import com.kuwy.helpdesk.models.Company;
 import com.kuwy.helpdesk.models.PasswordResetToken;
+import com.kuwy.helpdesk.models.Role;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.repositories.CompanyRepository;
 import com.kuwy.helpdesk.repositories.PasswordResetTokenRepository;
 import com.kuwy.helpdesk.repositories.UserRepository;
+import com.kuwy.helpdesk.util.PasswordPolicy;
+import jakarta.mail.internet.InternetAddress;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.web.util.HtmlUtils;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -22,7 +28,6 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.*;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PasswordResetService {
@@ -32,85 +37,81 @@ public class PasswordResetService {
     private final CompanyRepository companyRepository;
     private final PasswordEncoder passwordEncoder;
     private final SecurityAuditService auditService;
+    private final AccountEmailService accountEmailService;
+    private final RateLimiterService rateLimiterService;
+
+    @Value("${kuwy.frontend-url:http://localhost:5174}")
+    private String frontendUrl;
 
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final Set<String> COMMON_BREACHED_PASSWORDS = Set.of(
-            "password", "password123", "1234567890", "admin12345", "welcome123",
-            "kuwyhelpdesk", "qwerty12345", "letmein123"
-    );
+    private static final String INVALID_RESET = "This reset link is invalid, already used, or expired.";
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> requestPasswordReset(ForgotPasswordRequest req, HttpServletRequest request) {
-        String email = req.getEmail() != null ? req.getEmail().trim().toLowerCase() : "";
-        String companyCode = req.getCompanyCode() != null ? req.getCompanyCode().trim().toUpperCase() : null;
+        String email = req != null && req.getEmail() != null ? req.getEmail().trim().toLowerCase(Locale.ROOT) : "";
+        String companyCode = req != null && req.getCompanyCode() != null
+                ? req.getCompanyCode().trim().toUpperCase(Locale.ROOT) : "";
 
-        // Constant-time execution simulation to prevent timing attacks
-        try {
-            Thread.sleep(120 + RANDOM.nextInt(80));
-        } catch (InterruptedException ignored) {}
+        // Configuration and throttling failures must not depend on whether an account exists.
+        accountEmailService.requireReady();
+        String baseUrl = frontendBaseUrl();
+        if (!rateLimiterService.allowAuthentication(request != null ? request.getRemoteAddr() : null,
+                companyCode + ":" + email, "password-reset-request")) {
+            throw new IllegalStateException("PASSWORD_RESET_RATE_LIMITED");
+        }
+        Map<String, Object> response = Map.of("success", true, "message",
+                "If an eligible account exists for this email, a password reset email has been queued.");
+        if (!validEmail(email) || companyCode.length() > 50) {
+            return response;
+        }
 
-        // Locate user if exists
         Optional<User> userOpt;
-        if (companyCode != null && !companyCode.isBlank()) {
-            Optional<Company> company = companyRepository.findByCompanyCode(companyCode);
-            userOpt = company.flatMap(c -> userRepository.findByCompanyIdAndEmail(c.getId(), email));
+        if (!companyCode.isBlank()) {
+            userOpt = companyRepository.findByCompanyCode(companyCode)
+                    .flatMap(c -> userRepository.findForAuthenticationByCompanyAndEmail(c.getId(), email))
+                    .filter(u -> u.getCompany() != null && companyCode.equals(u.getCompany().getCompanyCode()));
         } else {
-            userOpt = userRepository.findByEmail(email);
+            List<User> matches = userRepository.findForAuthenticationByEmail(email);
+            // Without a workspace identifier, never choose arbitrarily between tenant identities.
+            userOpt = matches.size() == 1 ? Optional.of(matches.get(0)) : Optional.empty();
+        }
+        if (userOpt.isEmpty() || !eligibleUser(userOpt.get())
+                || !email.equalsIgnoreCase(userOpt.get().getEmail())) {
+            return response;
         }
 
-        String rawToken = null;
-        if (userOpt.isPresent()) {
-            User user = userOpt.get();
-            // Invalidate any existing unused reset tokens for this user
-            List<PasswordResetToken> existingTokens = tokenRepository.findByUserIdAndIsUsedFalse(user.getId());
-            for (PasswordResetToken t : existingTokens) {
-                t.setIsUsed(true);
-            }
-            tokenRepository.saveAll(existingTokens);
-
-            // Generate cryptographically secure random token (32 hex bytes)
-            rawToken = generateRandomHex(32);
-            String tokenHash = sha256(rawToken);
-
-            PasswordResetToken prt = new PasswordResetToken();
-            prt.setUserId(user.getId());
-            prt.setCompanyId(user.getCompany() != null ? user.getCompany().getId() : 1L);
-            prt.setEmail(user.getEmail());
-            prt.setTokenHash(tokenHash);
-            prt.setExpiresAt(LocalDateTime.now().plusHours(1));
-            prt.setIsUsed(false);
-            tokenRepository.save(prt);
-
-            auditService.recordEvent(
-                    user.getCompany() != null ? user.getCompany().getId() : null,
-                    user.getId(),
-                    "PASSWORD_RESET_REQUESTED",
-                    user.getEmail(),
-                    "Reset token generated (valid 1 hour)",
-                    request
-            );
-
-            log.info("Password reset link generated for {}: http://localhost:5174/reset-password?token={}",
-                    user.getEmail(), rawToken);
-        } else {
-            log.info("Password reset requested for non-existing email: {} (blind response returned)", email);
+        User user = userOpt.get();
+        invalidateRequests(user.getId());
+        String rawToken = generateRandomHex(32);
+        PasswordResetToken token = new PasswordResetToken();
+        token.setUserId(user.getId());
+        token.setCompanyId(user.getCompany().getId());
+        token.setEmail(user.getEmail());
+        token.setTokenHash(sha256(rawToken));
+        token.setExpiresAt(LocalDateTime.now().plusHours(1));
+        token.setIsUsed(false);
+        PasswordResetToken saved = tokenRepository.save(token);
+        if (saved.getId() == null) {
+            throw new IllegalStateException("ACCOUNT_EMAIL_ENQUEUE_FAILED");
         }
-
-        // Blind response returned for all inputs
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("success", true);
-        response.put("message", "If an account exists for this email, we've sent a reset link.");
-        if (rawToken != null) {
-            // Include simulator token in development environment for convenience
-            response.put("devResetUrl", "http://localhost:5174/reset-password?token=" + rawToken);
-        }
+        String resetUrl = baseUrl + "/reset-password?token=" + rawToken;
+        accountEmailService.enqueue(token.getCompanyId(), user.getEmail(), "Reset your Helpdesk password",
+                "<p>A password reset was requested for your Helpdesk account.</p>"
+                        + "<p><a href=\"" + HtmlUtils.htmlEscape(resetUrl) + "\">Reset your password</a></p>"
+                        + "<p>This link expires in one hour and can be used only once. "
+                        + "If you did not request this, ignore this email.</p>",
+                "password-reset:" + user.getId() + ":" + saved.getId());
+        auditService.recordEvent(token.getCompanyId(), null, "PASSWORD_RESET_REQUESTED", user.getEmail(),
+                "Password reset email queued; link valid for one hour.", request);
         return response;
     }
 
+    @Transactional(readOnly = true)
     public Map<String, Object> validateResetToken(String rawToken) {
         Map<String, Object> res = new LinkedHashMap<>();
-        if (rawToken == null || rawToken.isBlank()) {
+        if (!validToken(rawToken)) {
             res.put("valid", false);
+            res.put("status", "NOT_FOUND");
             res.put("message", "Invalid or missing password reset link.");
             return res;
         }
@@ -126,18 +127,23 @@ public class PasswordResetService {
         }
 
         PasswordResetToken prt = tokenOpt.get();
-        if (Boolean.TRUE.equals(prt.getIsUsed())) {
+        if (!Boolean.FALSE.equals(prt.getIsUsed())) {
             res.put("valid", false);
             res.put("status", "USED");
             res.put("message", "This reset link has already been used. Please request a new one.");
             return res;
         }
 
-        if (prt.getExpiresAt().isBefore(LocalDateTime.now())) {
+        if (prt.getExpiresAt() == null || !prt.getExpiresAt().isAfter(LocalDateTime.now())) {
             res.put("valid", false);
             res.put("status", "EXPIRED");
             res.put("message", "This password reset link has expired (1 hour limit). Please request a new one.");
             return res;
+        }
+
+        User user = prt.getUserId() != null ? userRepository.findById(prt.getUserId()).orElse(null) : null;
+        if (!matchesAccount(prt, user)) {
+            return Map.of("valid", false, "status", "NOT_FOUND", "message", INVALID_RESET);
         }
 
         res.put("valid", true);
@@ -146,40 +152,36 @@ public class PasswordResetService {
         return res;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> resetPassword(ResetPasswordRequest req, HttpServletRequest request) {
-        if (req.getToken() == null || req.getToken().isBlank()) {
-            throw new RuntimeException("Reset token is required.");
+        if (req == null || !validToken(req.getToken())) {
+            throw new IllegalArgumentException(INVALID_RESET);
         }
-        if (req.getNewPassword() == null || req.getNewPassword().length() < 10) {
-            throw new RuntimeException("Password must be at least 10 characters long.");
-        }
-
-        validatePasswordStrength(req.getNewPassword());
+        PasswordPolicy.validate(req.getNewPassword());
 
         String tokenHash = sha256(req.getToken().trim());
-        PasswordResetToken prt = tokenRepository.findByTokenHashAndIsUsedFalseAndExpiresAtAfter(tokenHash, LocalDateTime.now())
-                .orElseThrow(() -> new RuntimeException("This reset link is either invalid, already used, or expired."));
+        // Issuance and consumption both lock the user first. The scalar hint avoids caching a stale token.
+        Long userId = tokenRepository.findUserIdByTokenHash(tokenHash)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_RESET));
+        User user = userRepository.findForAuthenticationById(userId)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_RESET));
+        PasswordResetToken prt = tokenRepository.findForConsumptionByTokenHash(tokenHash)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_RESET));
+        if (!tokenHash.equals(prt.getTokenHash()) || !Boolean.FALSE.equals(prt.getIsUsed())
+                || prt.getExpiresAt() == null || !prt.getExpiresAt().isAfter(LocalDateTime.now())
+                || !matchesAccount(prt, user)) {
+            throw new IllegalArgumentException(INVALID_RESET);
+        }
 
-        User user = userRepository.findById(prt.getUserId())
-                .orElseThrow(() -> new RuntimeException("Associated user account not found."));
-
-        // Update password hash
         user.setPasswordHash(passwordEncoder.encode(req.getNewPassword()));
         user.setFailedLoginAttempts(0);
         user.setLockoutUntil(null);
+        user.invalidateAuthentication();
         userRepository.save(user);
 
-        // Mark token as used
         prt.setIsUsed(true);
         tokenRepository.save(prt);
-
-        // Invalidate all other reset tokens for this user
-        List<PasswordResetToken> otherTokens = tokenRepository.findByUserIdAndIsUsedFalse(user.getId());
-        for (PasswordResetToken t : otherTokens) {
-            t.setIsUsed(true);
-        }
-        tokenRepository.saveAll(otherTokens);
+        invalidateRequests(user.getId());
 
         auditService.recordEvent(
                 prt.getCompanyId(),
@@ -196,20 +198,64 @@ public class PasswordResetService {
         return res;
     }
 
-    private void validatePasswordStrength(String password) {
-        String lower = password.toLowerCase();
-        for (String breached : COMMON_BREACHED_PASSWORDS) {
-            if (lower.contains(breached)) {
-                throw new RuntimeException("Password is too common or easily guessable. Please choose a more secure password.");
-            }
-        }
-        boolean hasUpper = password.chars().anyMatch(Character::isUpperCase);
-        boolean hasLower = password.chars().anyMatch(Character::isLowerCase);
-        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
-        boolean hasSpecial = password.chars().anyMatch(ch -> "!@#$%^&*()_+-=[]{}|;':,.<>?".indexOf(ch) >= 0);
+    private void invalidateRequests(Long userId) {
+        List<PasswordResetToken> unused = tokenRepository.findByUserIdAndIsUsedFalse(userId);
+        unused.forEach(token -> token.setIsUsed(true));
+        tokenRepository.saveAll(unused);
+    }
 
-        if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
-            throw new RuntimeException("Password must contain uppercase, lowercase, numbers, and at least one special character (!@#$%^&*).");
+    private boolean matchesAccount(PasswordResetToken token, User user) {
+        return eligibleUser(user) && Objects.equals(token.getUserId(), user.getId())
+                && Objects.equals(token.getCompanyId(), user.getCompany().getId())
+                && user.getEmail().equalsIgnoreCase(token.getEmail());
+    }
+
+    private boolean eligibleUser(User user) {
+        if (user == null || user.getId() == null || user.getId() <= 0 || !validEmail(user.getEmail())
+                || !Boolean.TRUE.equals(user.getIsActive()) || !"ACTIVE".equalsIgnoreCase(user.getStatus())
+                || user.getCompany() == null || user.getCompany().getId() == null || user.getCompany().getId() <= 0
+                || (user.getCompany().getStatus() != Company.CompanyStatus.ACTIVE
+                    && user.getCompany().getStatus() != Company.CompanyStatus.TRIAL)
+                || user.getRole() == null || user.getRole().getRoleType() == null
+                || user.getRole().getRoleType() == Role.RoleType.CUSTOMER) {
+            return false;
+        }
+        Role role = user.getRole();
+        return role.getCompany() == null ? Boolean.TRUE.equals(role.getIsSystemRole())
+                : user.getCompany().getId().equals(role.getCompany().getId());
+    }
+
+    private boolean validToken(String rawToken) {
+        return rawToken != null && rawToken.length() <= 256 && rawToken.trim().matches("[0-9a-f]{64}");
+    }
+
+    private boolean validEmail(String email) {
+        if (email == null || email.length() > 254 || email.indexOf('@') <= 0
+                || email.chars().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            InternetAddress address = new InternetAddress(email, true);
+            address.validate();
+            return !address.isGroup() && address.getPersonal() == null && email.equals(address.getAddress());
+        } catch (Exception invalid) {
+            return false;
+        }
+    }
+
+    private String frontendBaseUrl() {
+        try {
+            URI uri = URI.create(frontendUrl);
+            if (frontendUrl.length() > 2048 || !uri.isAbsolute() || uri.getHost() == null
+                    || (!"https".equalsIgnoreCase(uri.getScheme()) && !"http".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || uri.getPort() == 0 || uri.getPort() > 65535 || !uri.equals(uri.normalize())
+                    || uri.getPath().chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException();
+            }
+            return uri.toASCIIString().replaceAll("/+$", "");
+        } catch (RuntimeException invalid) {
+            throw new IllegalStateException("ACCOUNT_EMAIL_NOT_READY");
         }
     }
 
@@ -240,7 +286,7 @@ public class PasswordResetService {
     }
 
     private String maskEmail(String email) {
-        if (email == null || !email.contains("@")) return email;
+        if (email == null || email.indexOf('@') <= 0) return "***";
         int atIdx = email.indexOf('@');
         String namePart = email.substring(0, atIdx);
         String domainPart = email.substring(atIdx);
@@ -250,4 +296,3 @@ public class PasswordResetService {
         return namePart.charAt(0) + "***" + namePart.charAt(namePart.length() - 1) + domainPart;
     }
 }
-

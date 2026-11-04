@@ -2,6 +2,8 @@ package com.kuwy.helpdesk.services;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kuwy.helpdesk.dto.CustomerContactDto;
 import com.kuwy.helpdesk.dto.KbArticleDto;
@@ -16,6 +18,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -323,22 +326,40 @@ public class CompanyService {
 
     @Transactional
     public CompanyMailbox saveCompanyMailbox(Long companyId, Map<String, Object> payload) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
         Long id = payload.get("id") != null ? Long.valueOf(String.valueOf(payload.get("id"))) : null;
 
         CompanyMailbox mailbox;
         if (id != null) {
-            mailbox = companyMailboxRepository.findById(id).orElse(new CompanyMailbox());
+            mailbox = companyMailboxRepository.findById(id)
+                    .filter(m -> m.getCompany() != null && companyId.equals(m.getCompany().getId()))
+                    .orElseThrow(() -> new SecurityException("Mailbox not found in this workspace."));
         } else {
             mailbox = new CompanyMailbox();
             mailbox.setCompany(company);
         }
 
+        validateTenantReferences(companyId, payload);
+        Long departmentId = departmentIdFrom(payload);
+        Department department = departmentId != null ? requireDepartment(companyId, departmentId) : mailbox.getDepartment();
+        if (department == null) {
+            department = departmentRepository.findByCompanyIdAndIsActiveTrue(companyId).stream().findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("A department in this workspace is required."));
+        }
+        if (department.getCompany() == null || !companyId.equals(department.getCompany().getId())) {
+            throw new SecurityException("Department not found in this workspace.");
+        }
+
+        String previousEmail = mailbox.getEmailAddress();
+        CompanyMailbox.MailProviderType previousProvider = mailbox.getProviderType();
         mailbox.setMailboxName(String.valueOf(payload.getOrDefault("mailboxName", company.getName() + " Support")));
-        mailbox.setEmailAddress(String.valueOf(payload.getOrDefault("emailAddress", "support@" + company.getSubdomain() + ".com")));
+        mailbox.setEmailAddress(String.valueOf(payload.getOrDefault("emailAddress",
+                previousEmail != null ? previousEmail : "support@" + company.getSubdomain() + ".com")));
         mailbox.setSendAsName(String.valueOf(payload.getOrDefault("sendAsName", company.getName() + " Support")));
 
-        String prov = String.valueOf(payload.getOrDefault("providerType", "FORWARDING"));
+        String prov = String.valueOf(payload.getOrDefault("providerType",
+                id != null && previousProvider != null ? previousProvider.name() : "FORWARDING"));
         if (prov.contains("MICROSOFT")) {
             mailbox.setProviderType(CompanyMailbox.MailProviderType.MICROSOFT_365);
             mailbox.setAuthType(CompanyMailbox.AuthType.OAUTH2_GRAPH_API);
@@ -353,77 +374,79 @@ public class CompanyService {
             }
         }
 
-        mailbox.setSyncStatus(CompanyMailbox.SyncStatus.CONNECTED);
-        mailbox.setLastSyncedAt(LocalDateTime.now());
-        mailbox.setIsActive(true);
-
-        if (mailbox.getDepartment() == null) {
-            Department dept = departmentRepository.findByCompanyIdAndIsActiveTrue(companyId).stream().findFirst().orElse(null);
-            mailbox.setDepartment(dept);
+        if (id == null || !Objects.equals(previousEmail, mailbox.getEmailAddress())
+                || previousProvider != mailbox.getProviderType()) {
+            mailbox.setSyncStatus(CompanyMailbox.SyncStatus.PAUSED);
+            mailbox.setForwardingVerified(false);
+            mailbox.setLastSyncedAt(null);
+            mailbox.setSyncErrorDetails("Configuration saved; mailbox connection has not been verified.");
         }
+        mailbox.setIsActive(true);
+        mailbox.setDepartment(department);
 
         CompanyMailbox saved = companyMailboxRepository.save(mailbox);
-        recordAuditLog(companyId, "MAILBOX_CONFIGURED", "Support mailbox " + saved.getEmailAddress() + " updated with status CONNECTED", null, null);
+        recordAuditLog(companyId, "MAILBOX_CONFIGURED", "Saved configuration for support mailbox " + saved.getEmailAddress(), null, null);
         return saved;
     }
 
     @Transactional
     public void deleteCompanyMailbox(Long companyId, Long mailboxId) {
-        companyMailboxRepository.findById(mailboxId).ifPresent(m -> {
-            if (m.getCompany().getId().equals(companyId)) {
-                companyMailboxRepository.delete(m);
-                recordAuditLog(companyId, "MAILBOX_REMOVED", "Removed support mailbox ID #" + mailboxId, null, null);
-            }
-        });
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        CompanyMailbox mailbox = companyMailboxRepository.findById(mailboxId)
+                .filter(m -> m.getCompany() != null && companyId.equals(m.getCompany().getId()))
+                .orElseThrow(() -> new SecurityException("Mailbox not found in this workspace."));
+        companyMailboxRepository.delete(mailbox);
+        recordAuditLog(companyId, "MAILBOX_REMOVED", "Removed support mailbox ID #" + mailboxId, null, null);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<CannedResponse> getCannedResponses(Long companyId) {
-        List<CannedResponse> list = cannedResponseRepository.findByCompanyIdOrderByTitleAsc(companyId);
-        if (list.isEmpty()) {
-            Company company = getCompanyById(companyId);
-            seedDefaultCannedResponses(company);
-            list = cannedResponseRepository.findByCompanyIdOrderByTitleAsc(companyId);
-        }
-        return list;
-    }
-
-    private void seedDefaultCannedResponses(Company company) {
-        createCanned(company, "Standard Welcome Greeting", "/greeting", "Hello {{customer.name}},\\n\\nThank you for contacting " + company.getName() + " Support. We have received your inquiry regarding '{{ticket.subject}}' and our specialized engineering team is actively investigating.\\n\\nBest regards,\\n{{agent.name}}\\n" + company.getName() + " HelpDesk");
-        createCanned(company, "Refund & Credit Confirmation", "/refund", "Hello {{customer.name}},\\n\\nWe have reviewed your request and confirmed the refund for Ticket #{{ticket.number}}. The transaction will reflect in your originating account within 3 to 5 business days.\\n\\nThank you for your patience.");
-        createCanned(company, "Ticket Resolved & CSAT Feedback", "/resolved", "Hello {{customer.name}},\\n\\nWe are pleased to inform you that the issue outlined in Ticket #{{ticket.number}} has been successfully resolved.\\n\\nPlease rate your experience with our team via the survey below.");
-        createCanned(company, "Tier-2 Escalation Notice", "/escalate", "Hello {{customer.name}},\\n\\nTo ensure the fastest possible resolution, Ticket #{{ticket.number}} has been escalated directly to our Tier-2 Lead Infrastructure Team. We will provide our next progress update shortly.");
-    }
-
-    private void createCanned(Company comp, String title, String shortcut, String content) {
-        CannedResponse cr = new CannedResponse();
-        cr.setCompany(comp);
-        cr.setTitle(title);
-        cr.setShortcut(shortcut);
-        cr.setContent(content);
-        cr.setIsShared(true);
-        cr.setCreatedByUserId(1L);
-        cannedResponseRepository.save(cr);
+        TenantContext.assertAccessTo(companyId);
+        Long actorId = TenantContext.requireUserId();
+        boolean admin = TenantContext.isSuperAdmin() || Role.RoleType.COMPANY_ADMIN.name().equals(TenantContext.getUserRole());
+        return cannedResponseRepository.findByCompanyIdOrderByTitleAsc(companyId).stream()
+                .filter(c -> admin || Boolean.TRUE.equals(c.getIsShared()) || actorId.equals(c.getCreatedByUserId()))
+                .toList();
     }
 
     @Transactional
     public CannedResponse saveCannedResponse(Long companyId, Map<String, Object> payload) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
         Long id = payload.get("id") != null ? Long.valueOf(String.valueOf(payload.get("id"))) : null;
 
         CannedResponse cr;
         if (id != null) {
-            cr = cannedResponseRepository.findById(id).orElse(new CannedResponse());
+            cr = cannedResponseRepository.findById(id)
+                    .filter(c -> c.getCompany() != null && companyId.equals(c.getCompany().getId()))
+                    .orElseThrow(() -> new SecurityException("Canned response not found in this workspace."));
         } else {
             cr = new CannedResponse();
             cr.setCompany(company);
         }
 
-        cr.setTitle(String.valueOf(payload.getOrDefault("title", "Quick Response")));
-        cr.setShortcut(String.valueOf(payload.getOrDefault("shortcut", "/quick")));
-        cr.setContent(String.valueOf(payload.getOrDefault("content", "")));
-        cr.setIsShared(Boolean.valueOf(String.valueOf(payload.getOrDefault("isShared", "true"))));
-        cr.setCreatedByUserId(TenantContext.getUserId() != null ? TenantContext.getUserId() : 1L);
+        validateTenantReferences(companyId, payload);
+        Department department = cr.getDepartment();
+        if (payload.containsKey("departmentId") || payload.containsKey("department")) {
+            if (payload.get("department") != null && !(payload.get("department") instanceof Map<?, ?>)) {
+                throw new IllegalArgumentException("Department must be an object containing its ID.");
+            }
+            Long departmentId = departmentIdFrom(payload);
+            department = departmentId != null ? requireDepartment(companyId, departmentId) : null;
+        }
+        if (department != null && (department.getCompany() == null || !companyId.equals(department.getCompany().getId()))) {
+            throw new SecurityException("Department not found in this workspace.");
+        }
+        String shared = String.valueOf(payload.getOrDefault("isShared", Boolean.TRUE.equals(cr.getIsShared())));
+        if (!"true".equalsIgnoreCase(shared) && !"false".equalsIgnoreCase(shared)) {
+            throw new IllegalArgumentException("isShared must be true or false.");
+        }
+        cr.setTitle(String.valueOf(payload.getOrDefault("title", id != null ? cr.getTitle() : "Quick Response")));
+        cr.setShortcut(String.valueOf(payload.getOrDefault("shortcut", id != null ? cr.getShortcut() : "/quick")));
+        cr.setContent(String.valueOf(payload.getOrDefault("content", id != null ? cr.getContent() : "")));
+        cr.setIsShared(Boolean.valueOf(shared));
+        cr.setDepartment(department);
+        if (id == null) cr.setCreatedByUserId(TenantContext.requireUserId());
 
         CannedResponse saved = cannedResponseRepository.save(cr);
         recordAuditLog(companyId, "CANNED_RESPONSE_SAVED", "Saved canned response shortcut " + saved.getShortcut(), null, null);
@@ -432,102 +455,98 @@ public class CompanyService {
 
     @Transactional
     public void deleteCannedResponse(Long companyId, Long responseId) {
-        cannedResponseRepository.findById(responseId).ifPresent(c -> {
-            if (c.getCompany().getId().equals(companyId)) {
-                cannedResponseRepository.delete(c);
-                recordAuditLog(companyId, "CANNED_RESPONSE_DELETED", "Deleted canned response " + c.getShortcut(), null, null);
-            }
-        });
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        CannedResponse response = cannedResponseRepository.findById(responseId)
+                .filter(c -> c.getCompany() != null && companyId.equals(c.getCompany().getId()))
+                .orElseThrow(() -> new SecurityException("Canned response not found in this workspace."));
+        cannedResponseRepository.delete(response);
+        recordAuditLog(companyId, "CANNED_RESPONSE_DELETED", "Deleted canned response " + response.getShortcut(), null, null);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<AutomationRule> getAutomationRules(Long companyId) {
-        List<AutomationRule> list = automationRuleRepository.findByCompanyIdOrderByPriorityOrderAsc(companyId);
-        if (list.isEmpty()) {
-            Company company = getCompanyById(companyId);
-            seedDefaultAutomationRules(company);
-            list = automationRuleRepository.findByCompanyIdOrderByPriorityOrderAsc(companyId);
-        }
-        return list;
-    }
-
-    private void seedDefaultAutomationRules(Company company) {
-        createRule(company, "Auto-route Invoicing & Billing tickets to Finance", AutomationRule.EventTrigger.TICKET_CREATED,
-            "{\"field\":\"subject\",\"operator\":\"contains\",\"value\":\"billing,invoice,payment\"}",
-            "{\"action\":\"assign_team\",\"team\":\"Billing & Finance\",\"priority\":\"HIGH\"}", 10);
-
-        createRule(company, "Auto-close resolved tickets after 48 hours of customer inactivity", AutomationRule.EventTrigger.TIME_INACTIVE,
-            "{\"field\":\"status\",\"operator\":\"equals\",\"value\":\"RESOLVED\",\"hours\":48}",
-            "{\"action\":\"set_status\",\"status\":\"CLOSED\"}", 20);
-
-        createRule(company, "SLA Breach Escalation: Alert Team Lead at 90% threshold", AutomationRule.EventTrigger.SLA_BREACHED,
-            "{\"field\":\"sla_threshold\",\"operator\":\"greater_than\",\"value\":90}",
-            "{\"action\":\"notify_manager\",\"channel\":\"email_and_slack\"}", 30);
-    }
-
-    private void createRule(Company comp, String name, AutomationRule.EventTrigger trigger, String conditionJson, String actionJson, int order) {
-        AutomationRule rule = new AutomationRule();
-        rule.setCompany(comp);
-        rule.setName(name);
-        rule.setEventTrigger(trigger);
-        rule.setConditionJson(conditionJson);
-        rule.setActionJson(actionJson);
-        rule.setIsActive(true);
-        rule.setPriorityOrder(order);
-        automationRuleRepository.save(rule);
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        return automationRuleRepository.findByCompanyIdOrderByPriorityOrderAsc(companyId);
     }
 
     @Transactional
     public AutomationRule saveAutomationRule(Long companyId, Map<String, Object> payload) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
         Long id = payload.get("id") != null ? Long.valueOf(String.valueOf(payload.get("id"))) : null;
 
         AutomationRule rule;
         if (id != null) {
-            rule = automationRuleRepository.findById(id).orElse(new AutomationRule());
+            rule = automationRuleRepository.findById(id)
+                    .filter(r -> r.getCompany() != null && companyId.equals(r.getCompany().getId()))
+                    .orElseThrow(() -> new SecurityException("Automation rule not found in this workspace."));
         } else {
             rule = new AutomationRule();
             rule.setCompany(company);
         }
 
-        rule.setName(String.valueOf(payload.getOrDefault("name", "Custom Workflow Rule")));
-        String trig = String.valueOf(payload.getOrDefault("eventTrigger", "TICKET_CREATED"));
-        try {
-            rule.setEventTrigger(AutomationRule.EventTrigger.valueOf(trig));
-        } catch (Exception e) {
-            rule.setEventTrigger(AutomationRule.EventTrigger.TICKET_CREATED);
+        if (payload.get("companyId") != null) {
+            validateTenantReferences(companyId, Map.of("companyId", payload.get("companyId")));
         }
-        rule.setConditionJson(String.valueOf(payload.getOrDefault("conditionJson", "{}")));
-        rule.setActionJson(String.valueOf(payload.getOrDefault("actionJson", "{}")));
-        rule.setIsActive(Boolean.valueOf(String.valueOf(payload.getOrDefault("isActive", "true"))));
-        rule.setPriorityOrder(Integer.valueOf(String.valueOf(payload.getOrDefault("priorityOrder", "10"))));
+        if (payload.get("company") instanceof Map<?, ?> owner && owner.get("id") != null) {
+            validateTenantReferences(companyId, Map.of("companyId", owner.get("id")));
+        }
+        String conditionJson = validatedRuleJson(companyId,
+                payload.getOrDefault("conditionJson", id != null ? rule.getConditionJson() : null), true);
+        String actionJson = validatedRuleJson(companyId,
+                payload.getOrDefault("actionJson", id != null ? rule.getActionJson() : null), false);
+        AutomationRule.EventTrigger trigger = AutomationRule.EventTrigger.valueOf(String.valueOf(
+                payload.getOrDefault("eventTrigger", id != null ? rule.getEventTrigger() : AutomationRule.EventTrigger.TICKET_CREATED)));
+        String active = String.valueOf(payload.getOrDefault("isActive", id == null || Boolean.TRUE.equals(rule.getIsActive())));
+        if (!"true".equalsIgnoreCase(active) && !"false".equalsIgnoreCase(active)) {
+            throw new IllegalArgumentException("isActive must be true or false.");
+        }
+        int order = Integer.parseInt(String.valueOf(payload.getOrDefault("priorityOrder",
+                id != null ? String.valueOf(rule.getPriorityOrder()) : "10")));
+        if (order < 0 || order > 10_000) throw new IllegalArgumentException("Rule order must be between 0 and 10000.");
+
+        rule.setName(String.valueOf(payload.getOrDefault("name", id != null ? rule.getName() : "Custom Workflow Rule")));
+        rule.setEventTrigger(trigger);
+        rule.setConditionJson(conditionJson);
+        rule.setActionJson(actionJson);
+        rule.setIsActive(Boolean.valueOf(active));
+        rule.setPriorityOrder(order);
 
         AutomationRule saved = automationRuleRepository.save(rule);
         recordAuditLog(companyId, "AUTOMATION_RULE_SAVED", "Saved automation routing rule " + saved.getName(), null, null);
         return saved;
     }
 
+    @Transactional
     public boolean reauthenticate(Long companyId, Long userId, String password) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        Long actorId = TenantContext.requireUserId();
+        if (userId != null && !actorId.equals(userId)) return false;
         if (password == null || password.isBlank()) return false;
-        if ("Password@123".equals(password)) {
-            recordAuditLog(companyId, "REAUTH_VERIFIED", "Sensitive administrative action re-authentication verified", null, null);
-            return true;
+        User actor = userRepository.findById(actorId).orElse(null);
+        if (actor == null || !Boolean.TRUE.equals(actor.getIsActive()) || !"ACTIVE".equalsIgnoreCase(actor.getStatus())
+                || actor.getRole() == null || actor.getRole().getRoleType() == null || actor.getPasswordHash() == null
+                || !actor.getRole().getRoleType().name().equals(TenantContext.getUserRole())
+                || actor.getEmail() == null || !actor.getEmail().equalsIgnoreCase(TenantContext.getUserEmail())) {
+            return false;
         }
-        if (userId != null) {
-            Optional<User> userOpt = userRepository.findById(userId);
-            if (userOpt.isPresent()) {
-                boolean ok = passwordEncoder.matches(password, userOpt.get().getPasswordHash());
-                if (ok) {
-                    recordAuditLog(companyId, "REAUTH_VERIFIED", "Sensitive administrative action re-authentication verified", null, null);
-                }
-                return ok;
-            }
+        if (!TenantContext.isSuperAdmin()
+                && (actor.getCompany() == null || !companyId.equals(actor.getCompany().getId()))) return false;
+        boolean ok;
+        try {
+            ok = passwordEncoder.matches(password, actor.getPasswordHash());
+        } catch (IllegalArgumentException invalidHash) {
+            return false;
         }
-        return false;
+        if (ok) {
+            recordAuditLog(companyId, "REAUTH_VERIFIED", "Current administrator password verified", null, null);
+        }
+        return ok;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Map<String, Object> exportWorkspaceData(Long companyId) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
         Map<String, Object> export = new HashMap<>();
         export.put("companyId", company.getId());
@@ -541,8 +560,199 @@ public class CompanyService {
         export.put("recentAuditLogs", getAuditLogs(companyId));
         export.put("complianceChecksum", UUID.randomUUID().toString());
 
-        recordAuditLog(companyId, "DATA_EXPORT_GENERATED", "Full enterprise workspace data export generated by admin", null, null);
+        recordAuditLog(companyId, "DATA_EXPORT_GENERATED", "Workspace summary export generated by administrator", null, null);
         return export;
+    }
+
+    private Department requireDepartment(Long companyId, Long departmentId) {
+        return departmentRepository.findById(departmentId)
+                .filter(d -> d.getCompany() != null && companyId.equals(d.getCompany().getId()))
+                .orElseThrow(() -> new SecurityException("Department not found in this workspace."));
+    }
+
+    private Long departmentIdFrom(Map<String, Object> payload) {
+        Object value = payload.get("departmentId");
+        if (value == null && payload.get("department") instanceof Map<?, ?> department) {
+            value = department.get("id");
+        }
+        return value != null ? Long.valueOf(String.valueOf(value)) : null;
+    }
+
+    private void validateTenantReferences(Long companyId, Object value) {
+        if (value instanceof Map<?, ?> fields) {
+            for (Map.Entry<?, ?> field : fields.entrySet()) {
+                String key = String.valueOf(field.getKey()).replace("_", "").toLowerCase(Locale.ROOT);
+                Object reference = field.getValue();
+                if (Set.of("department", "category", "account", "company").contains(key)
+                        && reference instanceof Map<?, ?> nested) {
+                    reference = nested.get("id");
+                    key += "id";
+                }
+                if (reference != null && Set.of("departmentid", "categoryid", "accountid", "companyid").contains(key)) {
+                    Long referenceId = Long.valueOf(String.valueOf(reference));
+                    if ("departmentid".equals(key)) {
+                        requireDepartment(companyId, referenceId);
+                    } else if ("companyid".equals(key)) {
+                        if (!companyId.equals(referenceId)) {
+                            throw new SecurityException("Company reference does not match this workspace.");
+                        }
+                    } else {
+                        String table = "categoryid".equals(key) ? "kb_categories" : "customer_accounts";
+                        Long count = jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM " + table + " WHERE id = ? AND company_id = ?",
+                                Long.class, referenceId, companyId);
+                        if (!Long.valueOf(1).equals(count)) {
+                            throw new SecurityException("Referenced resource not found in this workspace.");
+                        }
+                    }
+                }
+                validateTenantReferences(companyId, field.getValue());
+            }
+        } else if (value instanceof Collection<?> values) {
+            values.forEach(item -> validateTenantReferences(companyId, item));
+        }
+    }
+
+    private String validatedRuleJson(Long companyId, Object value, boolean condition) {
+        try {
+            if (value instanceof String json && (json.length() > 16_384
+                    || json.getBytes(StandardCharsets.UTF_8).length > 16_384)) {
+                throw new IllegalArgumentException("Rule JSON cannot exceed 16 KiB.");
+            }
+            Object parsed = value instanceof String json ? objectMapper.readerFor(Object.class)
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readValue(json) : value;
+            validateRuleNode(companyId, parsed, condition, 0, new int[] {100});
+            String json = value instanceof String text ? text : objectMapper.writeValueAsString(parsed);
+            if (json.getBytes(StandardCharsets.UTF_8).length > 16_384) {
+                throw new IllegalArgumentException("Rule JSON cannot exceed 16 KiB.");
+            }
+            validateTenantReferences(companyId, parsed);
+            return json;
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException("Rule configuration must contain valid JSON.", invalidJson);
+        }
+    }
+
+    private void validateRuleNode(Long companyId, Object node, boolean condition, int depth, int[] remaining) {
+        if (depth > 8 || --remaining[0] < 0) {
+            throw new IllegalArgumentException("Rule JSON exceeds the depth or 100-node limit.");
+        }
+        if (node instanceof Collection<?> clauses) {
+            if (clauses.isEmpty() || clauses.size() > 100) {
+                throw new IllegalArgumentException("Rule lists must contain between 1 and 100 clauses.");
+            }
+            for (Object clause : clauses) validateRuleNode(companyId, clause, condition, depth + 1, remaining);
+            return;
+        }
+        if (!(node instanceof Map<?, ?> fields) || fields.isEmpty()) {
+            throw new IllegalArgumentException("A nonempty rule object is required.");
+        }
+        String group = condition ? (fields.containsKey("all") ? "all" : fields.containsKey("any") ? "any" : "conditions") : "actions";
+        if (fields.containsKey(group)) {
+            if (fields.size() != 1 || !(fields.get(group) instanceof Collection<?>)) {
+                throw new IllegalArgumentException("A rule group must contain only its clause list.");
+            }
+            validateRuleNode(companyId, fields.get(group), condition, depth + 1, remaining);
+            return;
+        }
+        if (condition) {
+            if (!Set.of("field", "operator", "value", "hours").containsAll(fields.keySet())
+                    || !(fields.get("field") instanceof String field)
+                    || !(fields.get("operator") instanceof String operator)
+                    || !Set.of("equals", "not_equals", "contains", "not_contains", "greater_than", "less_than").contains(operator)) {
+                throw new IllegalArgumentException("Invalid rule condition fields or operator.");
+            }
+            Object value = fields.get("value");
+            if (!(value instanceof String text && !text.isBlank() && text.length() <= 2048)
+                    && !(value instanceof Number number && Double.isFinite(number.doubleValue()))) {
+                throw new IllegalArgumentException("A bounded scalar condition value is required.");
+            }
+            String key = field.replace("_", "").toLowerCase(Locale.ROOT);
+            boolean equality = Set.of("equals", "not_equals").contains(operator);
+            if (Set.of("departmentid", "categoryid", "accountid", "companyid").contains(key)) {
+                if (!equality || Long.parseLong(String.valueOf(value)) <= 0) {
+                    throw new IllegalArgumentException("Reference conditions require a positive ID and equality operator.");
+                }
+                validateTenantReferences(companyId, Map.of(field, value));
+            } else if ("subject".equals(key)) {
+                if (!(value instanceof String) || !(equality || operator.equals("contains") || operator.equals("not_contains"))) {
+                    throw new IllegalArgumentException("Subject conditions require text comparisons.");
+                }
+            } else if ("slathreshold".equals(key)) {
+                if (!(value instanceof Number number) || number.doubleValue() < 0 || number.doubleValue() > 100
+                        || !(equality || operator.equals("greater_than") || operator.equals("less_than"))) {
+                    throw new IllegalArgumentException("SLA threshold conditions require a percentage comparison.");
+                }
+            } else {
+                if (!equality || !(value instanceof String text)) {
+                    throw new IllegalArgumentException("State conditions require a named value and equality operator.");
+                }
+                switch (key) {
+                    case "status" -> Ticket.TicketStatus.valueOf(text);
+                    case "priority" -> Ticket.TicketPriority.valueOf(text);
+                    case "channel" -> Ticket.TicketChannel.valueOf(text);
+                    default -> throw new IllegalArgumentException("Unsupported condition field.");
+                }
+            }
+            if (fields.containsKey("hours")) {
+                long hours = Long.parseLong(String.valueOf(fields.get("hours")));
+                if (hours < 1 || hours > 8760) throw new IllegalArgumentException("Condition hours must be between 1 and 8760.");
+            }
+        } else {
+            if (!(fields.get("action") instanceof String action)) {
+                throw new IllegalArgumentException("A named rule action is required.");
+            }
+            switch (action) {
+                case "assign_team" -> {
+                    if (!Set.of("action", "team", "departmentId", "department_id", "department", "priority").containsAll(fields.keySet())
+                            || fields.keySet().stream().filter(k -> !k.equals("action") && !k.equals("priority")).count() != 1) {
+                        throw new IllegalArgumentException("Team assignment requires exactly one department reference.");
+                    }
+                    if (fields.containsKey("team")) {
+                        if (!(fields.get("team") instanceof String team) || team.isBlank() || team.length() > 150) {
+                            throw new IllegalArgumentException("A bounded department name is required.");
+                        }
+                        boolean found = departmentRepository.findByCompanyId(companyId).stream()
+                                .anyMatch(d -> d.getCompany() != null && companyId.equals(d.getCompany().getId())
+                                        && d.getName() != null && d.getName().equalsIgnoreCase(team.trim()));
+                        if (!found) throw new SecurityException("Department not found in this workspace.");
+                    } else {
+                        Object target = fields.containsKey("department") ? fields.get("department")
+                                : fields.containsKey("departmentId") ? fields.get("departmentId") : fields.get("department_id");
+                        if (fields.containsKey("department")) {
+                            if (!(target instanceof Map<?, ?> department) || !Set.of("id").equals(department.keySet())) {
+                                throw new IllegalArgumentException("Department must contain only its ID.");
+                            }
+                            target = department.get("id");
+                        }
+                        if (Long.parseLong(String.valueOf(target)) <= 0) {
+                            throw new IllegalArgumentException("A positive department ID is required.");
+                        }
+                    }
+                    if (fields.containsKey("priority")) Ticket.TicketPriority.valueOf(String.valueOf(fields.get("priority")));
+                }
+                case "set_status" -> {
+                    if (!Set.of("action", "status").equals(fields.keySet())) {
+                        throw new IllegalArgumentException("A status action requires only a status value.");
+                    }
+                    Ticket.TicketStatus.valueOf(String.valueOf(fields.get("status")));
+                }
+                case "set_priority" -> {
+                    if (!Set.of("action", "priority").equals(fields.keySet())) {
+                        throw new IllegalArgumentException("A priority action requires only a priority value.");
+                    }
+                    Ticket.TicketPriority.valueOf(String.valueOf(fields.get("priority")));
+                }
+                case "notify_manager" -> {
+                    if (!Set.of("action", "channel").equals(fields.keySet())
+                            || !Set.of("email", "slack", "email_and_slack").contains(String.valueOf(fields.get("channel")))) {
+                        throw new IllegalArgumentException("A manager notification requires a supported channel.");
+                    }
+                }
+                default -> throw new IllegalArgumentException("Unsupported rule action.");
+            }
+        }
     }
 
     private void ensureSettingsDefaults(Company comp, Map<String, Object> s) {

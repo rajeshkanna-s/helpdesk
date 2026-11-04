@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DOMPurify from 'dompurify';
 import {
   LifeBuoy, Send, Search, CheckCircle2,
   Paperclip, FileText, Download,
@@ -47,7 +48,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [customerOrg, setCustomerOrg] = useState<string>('Apex Auto Dealers Ltd');
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return !!localStorage.getItem('kuwy_cust_email');
+    return !!localStorage.getItem('kuwy_cust_email') && !!localStorage.getItem('kuwy_cust_token');
   });
 
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -203,7 +204,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     try {
       const tickets = await apiService.getCustomerPortalTickets(companySlug, customerEmail);
       setMyTickets(tickets);
-    } catch {
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        setIsAuthenticated(false);
+        localStorage.removeItem('kuwy_cust_token');
+      }
       setMyTickets([]);
     }
   };
@@ -227,15 +232,28 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     }
   };
 
-  const handleQuickCustomerLogin = (email: string, name: string) => {
-    localStorage.setItem('kuwy_cust_email', email);
-    localStorage.setItem('kuwy_cust_name', name);
-    localStorage.setItem('kuwy_cust_token', 'cust_quick_' + Date.now());
-    setCustomerEmail(email);
-    setCustomerName(name);
-    setIsAuthenticated(true);
-    setShowAuthModal(false);
-    loadCustomerTickets();
+  const handleQuickCustomerLogin = async (email: string, name: string) => {
+    try {
+      const res = await apiService.demoCustomerLogin(companySlug, email);
+      const token = res.token || ('cust_token_' + Date.now());
+      localStorage.setItem('kuwy_cust_email', email);
+      localStorage.setItem('kuwy_cust_name', name);
+      localStorage.setItem('kuwy_cust_token', token);
+      setCustomerEmail(email);
+      setCustomerName(name);
+      setIsAuthenticated(true);
+      setShowAuthModal(false);
+      setTimeout(() => loadCustomerTickets(), 50);
+    } catch {
+      localStorage.setItem('kuwy_cust_email', email);
+      localStorage.setItem('kuwy_cust_name', name);
+      localStorage.setItem('kuwy_cust_token', 'cust_demo_' + Date.now());
+      setCustomerEmail(email);
+      setCustomerName(name);
+      setIsAuthenticated(true);
+      setShowAuthModal(false);
+      loadCustomerTickets();
+    }
   };
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
@@ -261,17 +279,30 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     }
   };
 
-  const handleOAuthLogin = (provider: 'Google' | 'Microsoft') => {
-    const demoEmail = provider === 'Google' ? 'priya.customer@gmail.com' : 'priya.customer@outlook.com';
-    const demoName = 'Priya Natarajan';
-    localStorage.setItem('kuwy_cust_email', demoEmail);
-    localStorage.setItem('kuwy_cust_name', demoName);
-    localStorage.setItem('kuwy_cust_token', 'cust_oauth_token');
-    setCustomerEmail(demoEmail);
-    setCustomerName(demoName);
-    setIsAuthenticated(true);
-    setShowAuthModal(false);
-    loadCustomerTickets();
+  const handleOAuthLogin = async (provider: 'Google' | 'Microsoft') => {
+    const demoEmail = provider === 'Google' ? 'priya.customer@gmail.com' : 'loan.applicant@gmail.com';
+    const demoName = provider === 'Google' ? 'Priya Sharma' : 'Rajesh Kannan';
+    try {
+      const res = await apiService.demoCustomerLogin(companySlug, demoEmail);
+      const token = res.token || ('cust_token_' + Date.now());
+      localStorage.setItem('kuwy_cust_email', demoEmail);
+      localStorage.setItem('kuwy_cust_name', demoName);
+      localStorage.setItem('kuwy_cust_token', token);
+      setCustomerEmail(demoEmail);
+      setCustomerName(demoName);
+      setIsAuthenticated(true);
+      setShowAuthModal(false);
+      setTimeout(() => loadCustomerTickets(), 50);
+    } catch {
+      localStorage.setItem('kuwy_cust_email', demoEmail);
+      localStorage.setItem('kuwy_cust_name', demoName);
+      localStorage.setItem('kuwy_cust_token', 'cust_oauth_' + Date.now());
+      setCustomerEmail(demoEmail);
+      setCustomerName(demoName);
+      setIsAuthenticated(true);
+      setShowAuthModal(false);
+      loadCustomerTickets();
+    }
   };
 
   const handleSignOut = () => {
@@ -1318,7 +1349,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               >
                 <ArrowLeft size={15} /> Back to Home
               </button>
-              <span className="small text-muted">Screen 11 • Protected Ticket Submission</span>
+              <span className="small text-muted">Screen 11 • Public Ticket Submission</span>
             </div>
 
             {!isAuthenticated ? (
@@ -1929,7 +1960,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         <div
                           className="text-secondary small mt-2 lh-base"
                           style={{ wordBreak: 'break-word' }}
-                          dangerouslySetInnerHTML={{ __html: th.bodyHtml || th.bodyText || '' }}
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(th.bodyHtml || th.bodyText || '') }}
                         />
                       </div>
                     );
@@ -2145,7 +2176,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               {/* Formatted Article HTML */}
               <div
                 className="article-content text-dark lh-lg"
-                dangerouslySetInnerHTML={{ __html: selectedArticle.contentHtml }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedArticle.contentHtml) }}
               />
 
               {/* Feedback Thumbs */}

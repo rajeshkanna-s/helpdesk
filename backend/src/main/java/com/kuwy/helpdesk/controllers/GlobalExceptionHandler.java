@@ -6,6 +6,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -22,13 +24,28 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<Map<String, Object>> handleSecurityException(SecurityException ex) {
-        log.warn("🚨 [SECURITY ENFORCEMENT] Blocked unauthorized request: {}", ex.getMessage());
+        log.warn("Unauthorized request blocked.");
         Map<String, Object> body = new HashMap<>();
         body.put("timestamp", LocalDateTime.now());
         body.put("status", HttpStatus.FORBIDDEN.value());
         body.put("error", "Forbidden");
         body.put("message", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new java.util.TreeMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(error ->
+                fields.putIfAbsent(error.getField(), error.getDefaultMessage() == null ? "Invalid value" : error.getDefaultMessage()));
+        return ResponseEntity.badRequest().body(Map.of(
+                "error", "Validation failed", "message", "Please correct the highlighted fields.", "fields", fields));
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleConcurrentUpdate(ObjectOptimisticLockingFailureException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "error", "Conflict", "message", "This record changed. Refresh it before trying again."));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -73,7 +90,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGenericException(Exception ex) {
-        log.error("Unhandled exception: {}", ex.getMessage(), ex);
+        log.error("Unhandled request failure of type {}", ex.getClass().getSimpleName());
         Map<String, Object> body = new HashMap<>();
         body.put("timestamp", LocalDateTime.now());
         body.put("status", HttpStatus.INTERNAL_SERVER_ERROR.value());

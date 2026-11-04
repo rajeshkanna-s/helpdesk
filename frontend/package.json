@@ -13,11 +13,13 @@
     "axios": "^1.21.0",
     "bootstrap": "^5.3.8",
     "bootstrap-icons": "^1.13.2",
+    "dompurify": "^3.4.17",
     "lucide-react": "^1.66.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.0.5",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

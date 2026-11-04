@@ -3,6 +3,7 @@ package com.kuwy.helpdesk.controllers;
 import com.kuwy.helpdesk.dto.MisFilterDto;
 import com.kuwy.helpdesk.dto.MisSummaryDto;
 import com.kuwy.helpdesk.dto.MisTrackItemDto;
+import com.kuwy.helpdesk.models.Ticket;
 import com.kuwy.helpdesk.services.MisService;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import jakarta.servlet.http.HttpServletResponse;
@@ -15,17 +16,17 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/mis")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
-@Slf4j
 public class MisController {
 
     private final MisService misService;
 
     @GetMapping("/track")
-    public ResponseEntity<Page<MisTrackItemDto>> getTracking(
+    public ResponseEntity<Page<MisTrackItemDto>> getTrackingData(
             @RequestParam(required = false) Long companyId,
             @RequestParam(required = false) Long departmentId,
             @RequestParam(required = false) String status,
@@ -38,7 +39,7 @@ public class MisController {
     ) {
         Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
                 ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+                : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
         MisFilterDto filter = MisFilterDto.builder()
@@ -58,7 +59,7 @@ public class MisController {
     public ResponseEntity<MisSummaryDto> getSummary(@RequestParam(required = false) Long companyId) {
         Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
                 ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+                : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
         return ResponseEntity.ok(misService.getMisSummary(targetCompanyId));
@@ -77,7 +78,7 @@ public class MisController {
     ) throws IOException {
         Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
                 ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+                : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
         // Cap at 200,000 max for safety

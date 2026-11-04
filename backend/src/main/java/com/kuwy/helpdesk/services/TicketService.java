@@ -43,7 +43,7 @@ public class TicketService {
         Company company = companyRepository.findById(targetCompanyId)
                 .orElseThrow(() -> new IllegalArgumentException("Company not found."));
         assertCompanyAccess(company);
-        if (pageable == null || pageable.isUnpaged() || pageable.getPageNumber() > MAX_PAGE_NUMBER
+        if (pageable == null || pageable.isUnpaged() || pageable.getPageNumber() < 0 || pageable.getPageNumber() > MAX_PAGE_NUMBER
                 || pageable.getPageSize() < 1 || pageable.getPageSize() > MAX_PAGE_SIZE
                 || pageable.getSort().stream().anyMatch(order -> !SORT_FIELDS.contains(order.getProperty()))) {
             throw new IllegalArgumentException("Invalid ticket page, page size or sort field.");
@@ -323,7 +323,7 @@ public class TicketService {
         User actor = requireActor(true);
         if (dto == null || dto.getScenarioKey() == null || dto.getScenarioKey().isBlank()
                 || dto.getScenarioKey().length() > 64
-                || dto.getCustomNote() != null && dto.getCustomNote().length() > TicketCreateDto.MAX_BODY_LENGTH) {
+                || (dto.getCustomNote() != null && dto.getCustomNote().length() > TicketCreateDto.MAX_BODY_LENGTH)) {
             throw new IllegalArgumentException("A valid scenario key and bounded note are required.");
         }
         Ticket ticket = findAccessibleTicket(ticketId);

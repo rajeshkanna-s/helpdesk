@@ -6,6 +6,7 @@ import com.kuwy.helpdesk.dto.InvitationValidationResponse;
 import com.kuwy.helpdesk.dto.InviteAgentRequest;
 import com.kuwy.helpdesk.dto.LoginResponse;
 import com.kuwy.helpdesk.services.AgentInvitationService;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -30,59 +31,46 @@ public class InvitationController {
 
     @PostMapping("/accept")
     public ResponseEntity<?> acceptInvitation(@RequestBody AcceptInvitationRequest request, HttpServletRequest httpRequest) {
-        try {
-            LoginResponse response = invitationService.acceptInvitation(request, httpRequest);
-            return ResponseEntity.ok(response);
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
-        }
+        LoginResponse response = invitationService.acceptInvitation(request, httpRequest);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping
     public ResponseEntity<List<AgentInvitationDto>> getPendingInvitations(
-            @RequestParam(value = "companyId", defaultValue = "1") Long companyId) {
-        List<AgentInvitationDto> list = invitationService.getPendingInvitations(companyId);
+            @RequestParam(value = "companyId", required = false) Long companyId) {
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
+        TenantContext.assertCompanyAdminAccessTo(targetCompanyId);
+        List<AgentInvitationDto> list = invitationService.getPendingInvitations(targetCompanyId);
         return ResponseEntity.ok(list);
     }
 
     @PostMapping("/invite")
     public ResponseEntity<?> inviteAgent(
             @RequestBody InviteAgentRequest request,
-            @RequestParam(value = "adminUserId", defaultValue = "1") Long adminUserId,
-            @RequestParam(value = "companyId", defaultValue = "1") Long companyId,
+            @RequestParam(value = "companyId", required = false) Long companyId,
             HttpServletRequest httpRequest) {
-        try {
-            Map<String, Object> result = invitationService.inviteAgent(request, adminUserId, companyId, httpRequest);
-            return ResponseEntity.ok(result);
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
-        }
+        Long adminUserId = TenantContext.requireUserId();
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
+        TenantContext.assertCompanyAdminAccessTo(targetCompanyId);
+        Map<String, Object> result = invitationService.inviteAgent(request, adminUserId, targetCompanyId, httpRequest);
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/{id}/resend")
     public ResponseEntity<?> resendInvitation(
             @PathVariable("id") Long id,
-            @RequestParam(value = "adminUserId", defaultValue = "1") Long adminUserId,
             HttpServletRequest httpRequest) {
-        try {
-            Map<String, Object> result = invitationService.resendInvitation(id, adminUserId, httpRequest);
-            return ResponseEntity.ok(result);
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
-        }
+        Long adminUserId = TenantContext.requireUserId();
+        Map<String, Object> result = invitationService.resendInvitation(id, adminUserId, httpRequest);
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/{id}/revoke")
     public ResponseEntity<?> revokeInvitation(
             @PathVariable("id") Long id,
-            @RequestParam(value = "adminUserId", defaultValue = "1") Long adminUserId,
             HttpServletRequest httpRequest) {
-        try {
-            Map<String, Object> result = invitationService.revokeInvitation(id, adminUserId, httpRequest);
-            return ResponseEntity.ok(result);
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
-        }
+        Long adminUserId = TenantContext.requireUserId();
+        Map<String, Object> result = invitationService.revokeInvitation(id, adminUserId, httpRequest);
+        return ResponseEntity.ok(result);
     }
 }
-

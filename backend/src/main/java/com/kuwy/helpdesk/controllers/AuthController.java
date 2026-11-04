@@ -9,6 +9,7 @@ import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.repositories.UserRepository;
 import com.kuwy.helpdesk.services.AuthService;
 import com.kuwy.helpdesk.services.PasswordResetService;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -56,13 +57,14 @@ public class AuthController {
     @PostMapping("/forgot-password")
     public ResponseEntity<?> forgotPassword(@RequestBody ForgotPasswordRequest request, HttpServletRequest httpRequest) {
         try {
-            Map<String, Object> result = passwordResetService.requestPasswordReset(request, httpRequest);
-            return ResponseEntity.ok(result);
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", ex.getMessage()
-            ));
+            passwordResetService.requestPasswordReset(request, httpRequest);
+        } catch (Exception ignored) {
+            // Constant timing to defeat user enumeration
         }
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", "If an account exists with this email, password reset instructions have been dispatched."
+        ));
     }
 
     @GetMapping("/validate-reset-token")
@@ -104,40 +106,43 @@ public class AuthController {
                     "companyCode", userOpt.get().getCompany().getCompanyCode()
             ));
         }
+        // Generic fallback to prevent enumeration
         return ResponseEntity.ok(Map.of(
                 "found", false,
-                "subdomain", "kuwy" // fallback default
+                "subdomain", "kuwy"
         ));
     }
 
-    @GetMapping("/2fa/setup")
-    public ResponseEntity<?> setup2Fa(@RequestParam("userId") Long userId) {
+    @PostMapping("/2fa/setup")
+    public ResponseEntity<?> setup2Fa(@RequestBody(required = false) Map<String, String> payload, HttpServletRequest request) {
         try {
-            return ResponseEntity.ok(authService.setup2Fa(userId));
+            Long userId = TenantContext.requireUserId();
+            String password = payload != null ? payload.get("password") : "";
+            String currentCode = payload != null ? payload.get("currentCode") : "";
+            return ResponseEntity.ok(authService.setup2Fa(userId, password, currentCode, request));
         } catch (Exception ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         }
     }
 
     @PostMapping("/2fa/enable")
-    public ResponseEntity<?> enable2Fa(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> enable2Fa(@RequestBody Map<String, String> payload, HttpServletRequest request) {
         try {
-            Long userId = Long.valueOf(payload.get("userId").toString());
-            String secret = (String) payload.get("secret");
-            String code = (String) payload.get("code");
-            @SuppressWarnings("unchecked")
-            java.util.List<String> backupCodes = (java.util.List<String>) payload.get("backupCodes");
-            return ResponseEntity.ok(authService.enable2Fa(userId, secret, code, backupCodes));
+            Long userId = TenantContext.requireUserId();
+            String code = payload.get("code");
+            return ResponseEntity.ok(authService.enable2Fa(userId, code, request));
         } catch (Exception ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         }
     }
 
     @PostMapping("/2fa/disable")
-    public ResponseEntity<?> disable2Fa(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> disable2Fa(@RequestBody Map<String, String> payload, HttpServletRequest request) {
         try {
-            Long userId = Long.valueOf(payload.get("userId").toString());
-            return ResponseEntity.ok(authService.disable2Fa(userId));
+            Long userId = TenantContext.requireUserId();
+            String password = payload.get("password");
+            String code = payload.get("code");
+            return ResponseEntity.ok(authService.disable2Fa(userId, password, code, request));
         } catch (Exception ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         }

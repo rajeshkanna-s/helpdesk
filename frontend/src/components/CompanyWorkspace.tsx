@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import DOMPurify from 'dompurify';
 import {
   Inbox, Send, Lock, Mail, CheckCircle2, AlertCircle, Clock,
   Building2, RefreshCw, Plus, BarChart3, Sparkles,
@@ -1432,7 +1433,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 <time dateTime={th.createdAt} title={th.fromEmail}>{th.createdAt ? new Date(th.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</time>
                               </div>
 
-                              {th.bodyHtml ? <div className="thread-body" dangerouslySetInnerHTML={{ __html: th.bodyHtml }} /> : <div className="thread-body ticket-plain-message">{th.bodyText}</div>}
+                              {th.bodyHtml ? <div className="thread-body" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(th.bodyHtml) }} /> : <div className="thread-body ticket-plain-message">{th.bodyText}</div>}
 
                               {/* Thread Attachments View */}
                               {th.attachments && th.attachments.length > 0 && (
@@ -2221,7 +2222,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         <div
                           className="text-muted small mb-3 text-truncate-3"
                           style={{ fontSize: '0.8rem', lineHeight: '1.45' }}
-                          dangerouslySetInnerHTML={{ __html: art.contentHtml }}
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(art.contentHtml) }}
                         />
                       </div>
                       <div className="pt-2 border-top d-flex justify-content-between align-items-center">

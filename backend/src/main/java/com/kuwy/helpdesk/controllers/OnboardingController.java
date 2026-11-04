@@ -294,6 +294,7 @@ public class OnboardingController {
         User adminUser = new User();
         adminUser.setCompany(savedCompany);
         adminUser.setEmail(dto.getAdminEmail().trim().toLowerCase());
+        com.kuwy.helpdesk.util.PasswordPolicy.validate(dto.getAdminPassword());
         adminUser.setPasswordHash(passwordEncoder.encode(dto.getAdminPassword()));
         adminUser.setFirstName(dto.getAdminName() != null ? dto.getAdminName() : "Admin");
         adminUser.setLastName(savedCompany.getCompanyCode());

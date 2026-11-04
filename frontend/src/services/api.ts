@@ -36,6 +36,17 @@ const getHeaders = () => {
   return headers;
 };
 
+const getCustomerHeaders = () => {
+  const custToken = localStorage.getItem('kuwy_cust_token');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (custToken) {
+    headers['Authorization'] = `Bearer ${custToken}`;
+  }
+  return headers;
+};
+
 export const apiService = {
   // Auth
   async login(credentials: { email: string; password: string; companyCode?: string }): Promise<LoginResponse> {
@@ -699,28 +710,33 @@ export const apiService = {
     return res.data;
   },
 
+  async demoCustomerLogin(subdomain: string, email: string): Promise<any> {
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/demo-login`, { email });
+    return res.data;
+  },
+
   async submitPortalTicket(subdomain: string, ticketData: any): Promise<Ticket> {
-    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets`, ticketData);
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets`, ticketData, { headers: getCustomerHeaders() });
     return res.data;
   },
 
   async getCustomerPortalTickets(subdomain: string, email: string): Promise<Ticket[]> {
-    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets?email=${encodeURIComponent(email)}`);
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets?email=${encodeURIComponent(email)}`, { headers: getCustomerHeaders() });
     return res.data;
   },
 
   async getCustomerPortalTicketDetail(subdomain: string, ticketNumber: string, email: string): Promise<Ticket> {
-    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}?email=${encodeURIComponent(email)}`);
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}?email=${encodeURIComponent(email)}`, { headers: getCustomerHeaders() });
     return res.data;
   },
 
   async sendCustomerPortalReply(subdomain: string, ticketNumber: string, email: string, reply: string): Promise<TicketThread> {
-    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reply`, { email, reply });
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reply`, { email, reply }, { headers: getCustomerHeaders() });
     return res.data;
   },
 
   async reopenCustomerPortalTicket(subdomain: string, ticketNumber: string): Promise<Ticket> {
-    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reopen`, {});
+    const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reopen`, {}, { headers: getCustomerHeaders() });
     return res.data;
   },
 
@@ -826,23 +842,22 @@ export const apiService = {
     return res.data;
   },
 
-  async setup2Fa(userId: number): Promise<{ secret: string; otpAuthUrl: string; qrCodeUrl: string; backupCodes: string[] }> {
-    const res = await axios.get(`${API_BASE}/auth/2fa/setup`, {
-      params: { userId },
+  async setup2Fa(password: string, currentCode?: string): Promise<{ secret: string; otpAuthUrl: string; expiresAt: string }> {
+    const res = await axios.post(`${API_BASE}/auth/2fa/setup`, { password, currentCode }, {
       headers: getHeaders()
     });
     return res.data;
   },
 
-  async enable2Fa(payload: { userId: number; secret: string; code: string; backupCodes: string[] }): Promise<{ success: boolean; message: string }> {
-    const res = await axios.post(`${API_BASE}/auth/2fa/enable`, payload, {
+  async enable2Fa(code: string): Promise<{ success: boolean; message: string; backupCodes: string[]; signInRequired: boolean }> {
+    const res = await axios.post(`${API_BASE}/auth/2fa/enable`, { code }, {
       headers: getHeaders()
     });
     return res.data;
   },
 
-  async disable2Fa(userId: number): Promise<{ success: boolean; message: string }> {
-    const res = await axios.post(`${API_BASE}/auth/2fa/disable`, { userId }, {
+  async disable2Fa(password: string, code: string): Promise<{ success: boolean; message: string; signInRequired: boolean }> {
+    const res = await axios.post(`${API_BASE}/auth/2fa/disable`, { password, code }, {
       headers: getHeaders()
     });
     return res.data;
@@ -881,14 +896,16 @@ export const apiService = {
 
   async closeTicketByCustomer(subdomain: string, ticketNumber: string, email?: string): Promise<Ticket> {
     const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${ticketNumber}/close`, {}, {
-      params: email ? { email } : undefined
+      params: email ? { email } : undefined,
+      headers: getCustomerHeaders()
     });
     return res.data;
   },
 
   async exportCustomerData(subdomain: string, email: string): Promise<any> {
     const res = await axios.get(`${API_BASE}/portal/${subdomain}/export-data`, {
-      params: { email }
+      params: { email },
+      headers: getCustomerHeaders()
     });
     return res.data;
   },

@@ -137,8 +137,8 @@ public class AdminService {
             User adminUser = new User();
             adminUser.setCompany(savedCompany);
             adminUser.setEmail(dto.getAdminEmail().trim().toLowerCase());
-            String rawPassword = (dto.getAdminPassword() != null && !dto.getAdminPassword().isBlank())
-                    ? dto.getAdminPassword() : "Password@123";
+            String rawPassword = dto.getAdminPassword();
+            com.kuwy.helpdesk.util.PasswordPolicy.validate(rawPassword);
             adminUser.setPasswordHash(passwordEncoder.encode(rawPassword));
             adminUser.setFirstName(dto.getAdminFirstName() != null ? dto.getAdminFirstName() : "Admin");
             adminUser.setLastName(dto.getAdminLastName() != null ? dto.getAdminLastName() : savedCompany.getCompanyCode());
@@ -216,7 +216,8 @@ public class AdminService {
         User user = new User();
         user.setCompany(company);
         user.setEmail(email);
-        String rawPassword = (dto.getPassword() != null && !dto.getPassword().isBlank()) ? dto.getPassword() : "Password@123";
+        String rawPassword = dto.getPassword();
+        com.kuwy.helpdesk.util.PasswordPolicy.validate(rawPassword);
         user.setPasswordHash(passwordEncoder.encode(rawPassword));
         user.setFirstName(dto.getFirstName());
         user.setLastName(dto.getLastName());
@@ -239,9 +240,11 @@ public class AdminService {
 
     @Transactional
     public void resetUserPassword(Long userId, String newPassword) {
+        com.kuwy.helpdesk.util.PasswordPolicy.validate(newPassword);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found: " + userId));
         user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.invalidateAuthentication();
         userRepository.save(user);
     }
 

@@ -305,15 +305,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   <input
                     type="text"
                     className="form-control form-control-lg text-center font-monospace fw-bold letter-spacing-2"
-                    placeholder={isBackupCode ? 'e.g. 8492-4019' : '000000'}
-                    maxLength={isBackupCode ? 12 : 6}
+                    aria-label={isBackupCode ? 'Recovery code' : 'Authenticator code'}
+                    inputMode={isBackupCode ? 'text' : 'numeric'}
+                    autoComplete="one-time-code"
+                    placeholder={isBackupCode ? 'Enter a saved recovery code' : '6-digit code'}
+                    maxLength={isBackupCode ? 64 : 6}
                     value={totpCode}
                     onChange={(e) => setTotpCode(e.target.value)}
                     required
                     autoFocus
                   />
                   <small className="text-muted d-block mt-1" style={{ fontSize: '0.75rem' }}>
-                    Dev test code: <code>123456</code> or <code>BACKUP-9999</code>
+                    {isBackupCode ? 'Each recovery code can be used once.' : 'Use the current code from your authenticator app.'}
                   </small>
                 </div>
 
@@ -322,11 +325,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     className="form-check-input"
                     type="checkbox"
                     id="trustDeviceCheck"
+                    disabled
                     checked={trustDevice30Days}
                     onChange={(e) => setTrustDevice30Days(e.target.checked)}
                   />
                   <label className="form-check-label small text-muted" htmlFor="trustDeviceCheck">
-                    Trust this device for 30 days
+                    Trusted-device sessions are not available yet
                   </label>
                 </div>
 

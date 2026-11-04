@@ -19,6 +19,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
@@ -53,19 +54,35 @@ public class TenantFilter extends OncePerRequestFilter {
                         return;
                     }
                     Claims claims = jwtTokenProvider.getClaimsFromToken(token);
+                    Object roleObj = claims.get("role");
+                    if ("CUSTOMER".equals(roleObj)) {
+                        String uri = request.getRequestURI();
+                        if (uri == null || !uri.startsWith("/api/v1/portal/")) {
+                            throw new IllegalArgumentException("Invalid staff role.");
+                        }
+                        String custEmail = claims.getSubject();
+                        Long custCompanyId = requiredLongClaim(claims, "companyId", 1);
+                        TenantContext.setContext(custCompanyId, 0L, "CUSTOMER", custEmail);
+                        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                                custEmail,
+                                null,
+                                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER"))
+                        );
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
+
                     userId = requiredLongClaim(claims, "userId", 1);
                     tokenCompanyId = requiredLongClaim(claims, "companyId", 1);
                     authVersion = requiredLongClaim(claims, "authVersion", 0);
                     if (!(claims.get(Claims.SUBJECT) instanceof String subject) || subject.isBlank()
                             || !subject.equals(subject.trim())
-                            || !(claims.get("role") instanceof String roleName)) {
+                            || !(roleObj instanceof String roleName)) {
                         throw new IllegalArgumentException("Invalid token claims.");
                     }
                     email = subject;
                     role = Role.RoleType.valueOf(roleName);
-                    if (role == Role.RoleType.CUSTOMER) {
-                        throw new IllegalArgumentException("Invalid staff role.");
-                    }
                 } catch (RuntimeException invalidToken) {
                     response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid authentication.");
                     return;

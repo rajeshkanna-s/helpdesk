@@ -26,11 +26,22 @@ public class CompanyController {
 
     @GetMapping
     public ResponseEntity<List<Company>> listCompanies() {
-        return ResponseEntity.ok(companyService.getAllCompanies());
+        if (!TenantContext.isAuthenticated()) {
+            throw new SecurityException("Authentication is required to list workspaces.");
+        }
+        if (TenantContext.isSuperAdmin()) {
+            return ResponseEntity.ok(companyService.getAllCompanies());
+        }
+        Long companyId = TenantContext.getCompanyId();
+        if (companyId == null) {
+            return ResponseEntity.ok(List.of());
+        }
+        return ResponseEntity.ok(List.of(companyService.getCompanyById(companyId)));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Company> getCompany(@PathVariable Long id) {
+        TenantContext.assertAccessTo(id);
         return ResponseEntity.ok(companyService.getCompanyById(id));
     }
 

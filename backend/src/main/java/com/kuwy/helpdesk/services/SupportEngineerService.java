@@ -104,7 +104,8 @@ public class SupportEngineerService {
         User user = new User();
         user.setCompany(company);
         user.setEmail(dto.getEmail().trim().toLowerCase());
-        user.setPasswordHash(passwordEncoder.encode(dto.getPassword() != null && !dto.getPassword().isBlank() ? dto.getPassword() : "Password@123"));
+        com.kuwy.helpdesk.util.PasswordPolicy.validate(dto.getPassword());
+        user.setPasswordHash(passwordEncoder.encode(dto.getPassword()));
         user.setFirstName(dto.getFirstName());
         user.setLastName(dto.getLastName());
         user.setDisplayName(displayName);
@@ -163,6 +164,8 @@ public class SupportEngineerService {
             assertSeatAvailable(company);
         }
         user.setIsActive(!active);
+        user.setStatus(active ? "INACTIVE" : "ACTIVE");
+        user.invalidateAuthentication();
         return userRepository.save(user);
     }
 

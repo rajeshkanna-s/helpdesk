@@ -2,6 +2,7 @@ package com.kuwy.helpdesk.services;
 
 import com.kuwy.helpdesk.models.*;
 import com.kuwy.helpdesk.repositories.*;
+import com.kuwy.helpdesk.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -49,9 +50,14 @@ public class EmailIngestionService {
     ) {
         log.info("Processing incoming email from '{}' to recipient '{}': {}", senderEmail, recipientMailboxEmail, subject);
 
+        // Sanitize incoming HTML and text against Stored XSS before processing or storing
+        String cleanHtml = HtmlSanitizer.clean(bodyHtml);
+        String cleanText = bodyText != null ? HtmlSanitizer.cleanToPlainText(bodyText) : HtmlSanitizer.cleanToPlainText(bodyHtml);
+        String cleanSubject = HtmlSanitizer.cleanToPlainText(subject);
+
         // 1. Anti-Loop & Auto-Responder Filtering (Prevent mail storms and infinite bounce loops)
-        if (isLoopOrAutoReply(senderEmail, subject)) {
-            log.warn("Detected automated auto-responder or bounce notice from '{}' with subject '{}'. Suppressing automatic reply/ticket creation to avoid loop.", senderEmail, subject);
+        if (isLoopOrAutoReply(senderEmail, cleanSubject)) {
+            log.warn("Detected automated auto-responder or bounce notice from '{}' with subject '{}'. Suppressing automatic reply/ticket creation to avoid loop.", senderEmail, cleanSubject);
             return null;
         }
 
@@ -127,8 +133,8 @@ public class EmailIngestionService {
                 thread.setThreadType(TicketThread.ThreadType.CUSTOMER_REPLY);
                 thread.setSenderType(TicketThread.SenderType.CUSTOMER);
                 thread.setSenderContact(contact);
-                thread.setBodyHtml(bodyHtml != null ? bodyHtml : "<p>" + (bodyText != null ? bodyText : "") + "</p>");
-                thread.setBodyText(bodyText);
+                thread.setBodyHtml(cleanHtml != null && !cleanHtml.isBlank() ? cleanHtml : "<p>" + cleanText + "</p>");
+                thread.setBodyText(cleanText);
                 thread.setIsPrivate(false);
 
                 // Re-open ticket if it was resolved or closed
@@ -141,8 +147,8 @@ public class EmailIngestionService {
                 // Company Agent replied via email client
                 thread.setThreadType(TicketThread.ThreadType.REPLY);
                 thread.setSenderType(TicketThread.SenderType.AGENT);
-                thread.setBodyHtml(bodyHtml != null ? bodyHtml : "<p>" + (bodyText != null ? bodyText : "") + "</p>");
-                thread.setBodyText(bodyText);
+                thread.setBodyHtml(cleanHtml != null && !cleanHtml.isBlank() ? cleanHtml : "<p>" + cleanText + "</p>");
+                thread.setBodyText(cleanText);
                 thread.setIsPrivate(false);
             } else {
                 // UNVERIFIED THIRD-PARTY: Potential thread injection/spoofing
@@ -152,8 +158,8 @@ public class EmailIngestionService {
                 thread.setThreadType(TicketThread.ThreadType.PRIVATE_NOTE);
                 thread.setSenderType(TicketThread.SenderType.SYSTEM);
                 thread.setBodyHtml("<div class='alert alert-warning p-2'><strong>[SECURITY NOTICE]</strong> Email received from unverified third-party address: <code>" +
-                        senderEmail + "</code>. Marked private to protect customer thread integrity.</div>" + (bodyHtml != null ? bodyHtml : ""));
-                thread.setBodyText("[SECURITY NOTICE: Email from unverified third-party: " + senderEmail + "]\n\n" + (bodyText != null ? bodyText : ""));
+                        senderEmail + "</code>. Marked private to protect customer thread integrity.</div>" + (cleanHtml != null ? cleanHtml : ""));
+                thread.setBodyText("[SECURITY NOTICE: Email from unverified third-party: " + senderEmail + "]\n\n" + cleanText);
                 thread.setIsPrivate(true);
             }
 
@@ -177,9 +183,9 @@ public class EmailIngestionService {
             newTicket.setContact(contact);
             newTicket.setSourceMailbox(mailbox);
             newTicket.setChannel(isForwarded ? Ticket.TicketChannel.EMAIL : Ticket.TicketChannel.MICROSOFT_365);
-            newTicket.setSubject(subject != null ? subject : "Support Request from " + senderEmail);
-            newTicket.setDescriptionHtml(bodyHtml != null ? bodyHtml : "<p>" + (bodyText != null ? bodyText : "") + "</p>");
-            newTicket.setDescriptionText(bodyText);
+            newTicket.setSubject(cleanSubject != null && !cleanSubject.isBlank() ? cleanSubject : "Support Request from " + senderEmail);
+            newTicket.setDescriptionHtml(cleanHtml != null && !cleanHtml.isBlank() ? cleanHtml : "<p>" + cleanText + "</p>");
+            newTicket.setDescriptionText(cleanText);
             newTicket.setInternetMessageId(internetMessageId);
             newTicket.setMsConversationId(msConversationId);
             newTicket.setStatus(Ticket.TicketStatus.OPEN);
