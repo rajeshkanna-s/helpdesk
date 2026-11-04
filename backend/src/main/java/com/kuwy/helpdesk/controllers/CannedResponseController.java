@@ -1,10 +1,8 @@
 package com.kuwy.helpdesk.controllers;
 
 import com.kuwy.helpdesk.models.CannedResponse;
-import com.kuwy.helpdesk.models.Company;
 import com.kuwy.helpdesk.repositories.CannedResponseRepository;
-import com.kuwy.helpdesk.repositories.CompanyRepository;
-import com.kuwy.helpdesk.repositories.DepartmentRepository;
+import com.kuwy.helpdesk.services.CompanyService;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +10,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/canned-responses")
@@ -20,50 +20,43 @@ import java.util.List;
 public class CannedResponseController {
 
     private final CannedResponseRepository cannedResponseRepository;
-    private final CompanyRepository companyRepository;
-    private final DepartmentRepository departmentRepository;
+    private final CompanyService companyService;
 
     @GetMapping
     public ResponseEntity<List<CannedResponse>> getCannedResponses(
             @RequestParam(required = false) Long companyId
     ) {
-        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
-                ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
-        return ResponseEntity.ok(cannedResponseRepository.findByCompanyIdOrderByTitleAsc(targetCompanyId));
+        return ResponseEntity.ok(companyService.getCannedResponses(targetCompanyId));
     }
 
     @PostMapping
     public ResponseEntity<CannedResponse> createCannedResponse(@RequestBody CannedResponseDto dto) {
-        Long targetCompanyId = TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L;
-        TenantContext.assertAccessTo(targetCompanyId);
-
-        Company company = companyRepository.findById(targetCompanyId)
-                .orElseThrow(() -> new RuntimeException("Company not found"));
-
-        CannedResponse resp = new CannedResponse();
-        resp.setCompany(company);
-        resp.setTitle(dto.getTitle());
-        resp.setShortcut(dto.getShortcut().startsWith("#") ? dto.getShortcut() : "#" + dto.getShortcut());
-        resp.setContent(dto.getContent());
-        resp.setIsShared(dto.getIsShared() != null ? dto.getIsShared() : true);
-
-        if (dto.getDepartmentId() != null) {
-            departmentRepository.findById(dto.getDepartmentId()).ifPresent(resp::setDepartment);
+        Long targetCompanyId = TenantContext.getCompanyId();
+        TenantContext.assertCompanyAdminAccessTo(targetCompanyId);
+        if (dto.getShortcut() == null || dto.getShortcut().isBlank()) {
+            throw new IllegalArgumentException("A canned response shortcut is required.");
         }
-
-        return ResponseEntity.ok(cannedResponseRepository.save(resp));
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("title", dto.getTitle());
+        payload.put("shortcut", dto.getShortcut().startsWith("#") ? dto.getShortcut() : "#" + dto.getShortcut());
+        payload.put("content", dto.getContent());
+        payload.put("isShared", dto.getIsShared() != null ? dto.getIsShared() : true);
+        payload.put("departmentId", dto.getDepartmentId());
+        return ResponseEntity.ok(companyService.saveCannedResponse(targetCompanyId, payload));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteCannedResponse(@PathVariable Long id) {
+        TenantContext.requireUserId();
         CannedResponse resp = cannedResponseRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Canned response not found: " + id));
-        TenantContext.assertAccessTo(resp.getCompany().getId());
+        Long companyId = resp.getCompany() != null ? resp.getCompany().getId() : null;
+        TenantContext.assertCompanyAdminAccessTo(companyId);
 
-        cannedResponseRepository.delete(resp);
+        companyService.deleteCannedResponse(companyId, id);
         return ResponseEntity.noContent().build();
     }
 
