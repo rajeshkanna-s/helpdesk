@@ -1,13 +1,16 @@
 package com.kuwy.helpdesk.tenant;
 
 import com.kuwy.helpdesk.config.JwtTokenProvider;
+import com.kuwy.helpdesk.models.Company;
+import com.kuwy.helpdesk.models.Role;
+import com.kuwy.helpdesk.models.User;
+import com.kuwy.helpdesk.repositories.UserRepository;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -17,12 +20,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Collections;
 
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class TenantFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final UserRepository userRepository;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -38,38 +41,73 @@ public class TenantFilter extends OncePerRequestFilter {
                 token = authHeader.substring(7).trim();
             }
 
-            if (token != null && jwtTokenProvider.validateToken(token)) {
-                Claims claims = jwtTokenProvider.getClaimsFromToken(token);
-                String email = claims.getSubject();
-                Long userId = claims.get("userId", Long.class);
-                Long tokenCompanyId = claims.get("companyId", Long.class);
-                String role = claims.get("role", String.class);
+            if (token != null) {
+                String email;
+                Long userId;
+                Long tokenCompanyId;
+                Long authVersion;
+                Role.RoleType role;
+                try {
+                    if (!jwtTokenProvider.validateToken(token)) {
+                        response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid authentication.");
+                        return;
+                    }
+                    Claims claims = jwtTokenProvider.getClaimsFromToken(token);
+                    userId = requiredLongClaim(claims, "userId", 1);
+                    tokenCompanyId = requiredLongClaim(claims, "companyId", 1);
+                    authVersion = requiredLongClaim(claims, "authVersion", 0);
+                    if (!(claims.get(Claims.SUBJECT) instanceof String subject) || subject.isBlank()
+                            || !subject.equals(subject.trim())
+                            || !(claims.get("role") instanceof String roleName)) {
+                        throw new IllegalArgumentException("Invalid token claims.");
+                    }
+                    email = subject;
+                    role = Role.RoleType.valueOf(roleName);
+                    if (role == Role.RoleType.CUSTOMER) {
+                        throw new IllegalArgumentException("Invalid staff role.");
+                    }
+                } catch (RuntimeException invalidToken) {
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid authentication.");
+                    return;
+                }
+
+                try {
+                    User user = userRepository.findById(userId).orElse(null);
+                    if (user == null || !userId.equals(user.getId())
+                            || !Boolean.TRUE.equals(user.getIsActive())
+                            || !"ACTIVE".equalsIgnoreCase(user.getStatus())
+                            || !email.equals(user.getEmail())
+                            || !authVersion.equals(user.getAuthVersion())
+                            || user.getRole() == null || user.getRole().getRoleType() != role
+                            || user.getCompany() == null || !tokenCompanyId.equals(user.getCompany().getId())
+                            || user.getCompany().getStatus() == null
+                            || (role != Role.RoleType.SUPER_ADMIN
+                                && user.getCompany().getStatus() != Company.CompanyStatus.ACTIVE
+                                && user.getCompany().getStatus() != Company.CompanyStatus.TRIAL)) {
+                        response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid authentication.");
+                        return;
+                    }
+                } catch (RuntimeException authenticationUnavailable) {
+                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Authentication service unavailable.");
+                    return;
+                }
 
                 Long resolvedCompanyId = tokenCompanyId;
 
-                // Only SUPER_ADMIN is allowed to switch tenants via X-Company-ID header
-                if ("SUPER_ADMIN".equalsIgnoreCase(role)) {
+                // Only a current, verified platform administrator may override the signed tenant.
+                if (role == Role.RoleType.SUPER_ADMIN) {
                     String overrideHeader = request.getHeader("X-Company-ID");
                     if (overrideHeader != null && !overrideHeader.isBlank()) {
                         try {
-                            resolvedCompanyId = Long.parseLong(overrideHeader.trim());
-                        } catch (NumberFormatException ignored) {}
-                    }
-                } else {
-                    // For all normal company admins and agents, NEVER trust X-Company-ID if it differs from the signed JWT!
-                    String untrustedHeader = request.getHeader("X-Company-ID");
-                    if (untrustedHeader != null && !untrustedHeader.isBlank()) {
-                        try {
-                            Long requestedId = Long.parseLong(untrustedHeader.trim());
-                            if (tokenCompanyId != null && !tokenCompanyId.equals(requestedId)) {
-                                log.warn("Rejected tenant override for user [{}]: signed tenant [{}], requested tenant [{}].",
-                                        userId, tokenCompanyId, requestedId);
+                            long requestedId = Long.parseLong(overrideHeader.trim());
+                            if (requestedId > 0) {
+                                resolvedCompanyId = requestedId;
                             }
                         } catch (NumberFormatException ignored) {}
                     }
                 }
 
-                TenantContext.setContext(resolvedCompanyId, userId, role, email);
+                TenantContext.setContext(resolvedCompanyId, userId, role.name(), email);
 
                 if (TenantContext.isAuthenticated()) {
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
@@ -80,6 +118,8 @@ public class TenantFilter extends OncePerRequestFilter {
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 } else {
                     TenantContext.clear();
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid authentication.");
+                    return;
                 }
             }
 
@@ -88,5 +128,15 @@ public class TenantFilter extends OncePerRequestFilter {
             TenantContext.clear();
             SecurityContextHolder.clearContext();
         }
+    }
+
+    private Long requiredLongClaim(Claims claims, String name, long minimum) {
+        Object value = claims.get(name);
+        // Do not coerce strings or truncate fractional/out-of-range JSON numbers into identities.
+        if (!(value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte)
+                || ((Number) value).longValue() < minimum) {
+            throw new IllegalArgumentException("Invalid token claims.");
+        }
+        return ((Number) value).longValue();
     }
 }
