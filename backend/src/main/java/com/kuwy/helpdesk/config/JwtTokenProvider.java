@@ -108,6 +108,27 @@ public class JwtTokenProvider {
                 .compact();
     }
 
+    public String generateBrowserToken(String sessionId, String kind, Long subjectId, Long companyId,
+                                       String email, String role, Long authVersion, long expirationSeconds) {
+        if (sessionId == null || !sessionId.matches("[0-9a-fA-F-]{36}")
+                || !("STAFF".equals(kind) || "CUSTOMER".equals(kind))
+                || subjectId == null || subjectId <= 0 || companyId == null || companyId <= 0
+                || email == null || email.isBlank() || !email.equals(email.trim())
+                || role == null || authVersion == null || authVersion < 0 || expirationSeconds < 1 || expirationSeconds > 900) {
+            throw new IllegalArgumentException("Cannot issue a browser token for an incomplete session.");
+        }
+        Role.RoleType roleType = Role.RoleType.valueOf(role);
+        if ("CUSTOMER".equals(kind) != (roleType == Role.RoleType.CUSTOMER)) {
+            throw new IllegalArgumentException("Session audience and role must match.");
+        }
+        Date now = new Date();
+        return Jwts.builder().subject(email).claim("type", "BROWSER_SESSION")
+                .claim("kind", kind).claim("sid", sessionId).claim("subjectId", subjectId)
+                .claim("companyId", companyId).claim("role", role).claim("authVersion", authVersion)
+                .issuedAt(now).expiration(new Date(now.getTime() + expirationSeconds * 1000))
+                .signWith(getSigningKey()).compact();
+    }
+
     public boolean validateToken(String token) {
         try {
             Jwts.parser()

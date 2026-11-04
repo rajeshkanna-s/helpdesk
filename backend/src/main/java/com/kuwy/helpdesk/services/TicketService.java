@@ -87,6 +87,7 @@ public class TicketService {
         Long ticketId = ticket.getId();
         List<TicketThread> threads = threadRepository.findByTicketIdOrderByCreatedAtAsc(ticketId);
         for (TicketThread thread : threads) {
+            thread.setBodyHtml(HtmlSanitizer.clean(thread.getBodyHtml()));
             assertOwnedBy(thread.getCompany(), ticket.getCompany().getId());
             if (thread.getTicket() == null || !Objects.equals(thread.getTicket().getId(), ticketId)) {
                 throw new SecurityException("Thread does not belong to this ticket.");

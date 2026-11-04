@@ -35,7 +35,7 @@ class InvitationControllerSecurityTest {
     void setUp() {
         TenantContext.clear();
         invitations = mock(AgentInvitationService.class);
-        controller = new InvitationController(invitations);
+        controller = new InvitationController(invitations, mock(com.kuwy.helpdesk.services.BrowserSessionService.class), mock(com.kuwy.helpdesk.config.BrowserSessionCookies.class));
         http = new MockHttpServletRequest();
     }
 

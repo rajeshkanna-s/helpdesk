@@ -2,6 +2,9 @@ package com.kuwy.helpdesk.controllers;
 
 import com.kuwy.helpdesk.dto.ForgotPasswordRequest;
 import com.kuwy.helpdesk.dto.LoginRequest;
+import com.kuwy.helpdesk.dto.LoginResponse;
+import com.kuwy.helpdesk.config.BrowserSessionCookies;
+import com.kuwy.helpdesk.services.BrowserSessionService;
 import com.kuwy.helpdesk.dto.ResetPasswordRequest;
 import com.kuwy.helpdesk.dto.Verify2FaRequest;
 import com.kuwy.helpdesk.services.AuthService;
@@ -23,15 +26,19 @@ public class AuthController {
 
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
+    private final BrowserSessionService sessions;
+    private final BrowserSessionCookies cookies;
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
-        return ResponseEntity.ok(authService.login(request, httpRequest));
+        if ("1".equals(httpRequest.getHeader("X-Browser-Session"))) cookies.requireBrowserMutation(httpRequest);
+        return authenticatedResponse(authService.login(request, httpRequest), httpRequest);
     }
 
     @PostMapping("/verify-2fa")
     public ResponseEntity<?> verify2Fa(@Valid @RequestBody Verify2FaRequest request, HttpServletRequest httpRequest) {
-        return ResponseEntity.ok(authService.verify2Fa(request, httpRequest));
+        if ("1".equals(httpRequest.getHeader("X-Browser-Session"))) cookies.requireBrowserMutation(httpRequest);
+        return authenticatedResponse(authService.verify2Fa(request, httpRequest), httpRequest);
     }
 
     @PostMapping("/forgot-password")
@@ -78,5 +85,23 @@ public class AuthController {
     @PostMapping("/2fa/disable")
     public ResponseEntity<?> disable2Fa(@RequestBody Map<String, String> payload, HttpServletRequest request) {
         return ResponseEntity.ok(authService.disable2Fa(TenantContext.requireUserId(), payload.get("password"), payload.get("code"), request));
+    }
+
+    private ResponseEntity<LoginResponse> authenticatedResponse(LoginResponse result, HttpServletRequest request) {
+        if (!"1".equals(request.getHeader("X-Browser-Session")) || Boolean.TRUE.equals(result.getTwoFactorRequired())) {
+            return ResponseEntity.ok().headers(BrowserSessionCookies.noStore()).body(result);
+        }
+        var session = sessions.openStaff(result.getToken(), false, request);
+        result.setToken(null);
+        result.setBrowserSession(true);
+        result.setCsrfToken(session.csrfToken());
+        result.setSessionId(session.sessionId());
+        return ResponseEntity.ok().headers(cookies.issue(session, "STAFF")).body(result);
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(@RequestBody Map<String, String> payload, HttpServletRequest request) {
+        return ResponseEntity.ok().headers(cookies.clear("STAFF"))
+                .body(authService.changeOwnPassword(payload.get("currentPassword"), payload.get("newPassword"), payload.get("code"), request));
     }
 }

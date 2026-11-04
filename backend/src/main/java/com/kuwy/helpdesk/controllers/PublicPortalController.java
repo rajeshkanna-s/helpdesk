@@ -1,7 +1,9 @@
 package com.kuwy.helpdesk.controllers;
 
 import com.kuwy.helpdesk.config.JwtTokenProvider;
-import com.kuwy.helpdesk.dto.TicketCreateDto;
+import com.kuwy.helpdesk.config.BrowserSessionCookies;
+import com.kuwy.helpdesk.services.PortalLoginService;
+import com.kuwy.helpdesk.dto.PortalTicketDto;
 import com.kuwy.helpdesk.dto.KbArticleDto;
 import com.kuwy.helpdesk.models.*;
 import com.kuwy.helpdesk.repositories.*;
@@ -10,12 +12,13 @@ import com.kuwy.helpdesk.services.EmailService;
 import com.kuwy.helpdesk.services.RateLimiterService;
 import com.kuwy.helpdesk.services.SubscriptionService;
 import com.kuwy.helpdesk.services.TicketService;
-import com.kuwy.helpdesk.util.HtmlSanitizer;
+import com.kuwy.helpdesk.services.PortalTicketService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -53,6 +56,9 @@ public class PublicPortalController {
     private final CustomerOtpService customerOtpService;
     private final EmailService emailService;
     private final JwtTokenProvider jwtTokenProvider;
+    private final PortalTicketService portalTicketService;
+    private final PortalLoginService portalLoginService;
+    private final BrowserSessionCookies browserCookies;
 
     @GetMapping("/{subdomain}")
     public ResponseEntity<Map<String, Object>> getPortalInfo(@PathVariable String subdomain) {
@@ -83,55 +89,80 @@ public class PublicPortalController {
             @RequestBody Map<String, String> body,
             HttpServletRequest request
     ) {
-        String email = body.get("email");
-        if (email == null || email.isBlank() || !email.contains("@")) {
+        String cleanEmail;
+        try {
+            cleanEmail = CustomerOtpService.canonicalEmail(body == null ? null : body.get("email"));
+        } catch (IllegalArgumentException invalid) {
             return ResponseEntity.badRequest().body(Map.of("error", "Valid email address required"));
         }
-        String cleanEmail = email.trim().toLowerCase();
+        Company company = requireOtpCompany(subdomain);
         String clientIp = extractClientIp(request);
 
         // Anti-Abuse Rate Limiting on OTP generation
-        if (!rateLimiterService.allowOtpRequest(clientIp, cleanEmail)) {
+        if (!rateLimiterService.allowOtpRequest(clientIp, company.getId() + ":" + cleanEmail)) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
                     "error", "Too many OTP verification requests. Please wait a few minutes before trying again."
             ));
         }
 
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        // Generate and dispatch real cryptographically secure random 6-digit OTP via email
-        customerOtpService.generateAndDispatchOtp(company.getId(), cleanEmail, company.getName());
+        try {
+            customerOtpService.generateAndDispatchOtp(company.getId(), cleanEmail, company.getName());
+        } catch (RuntimeException unavailable) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                    "error", "Verification email could not be queued. Please try again later."));
+        }
 
         Map<String, Object> resp = new HashMap<>();
         resp.put("success", true);
-        resp.put("message", "A 6-digit verification code has been dispatched to " + cleanEmail);
+        resp.put("message", "A verification email has been queued. Check your inbox for a 6-digit code.");
         return ResponseEntity.ok(resp);
     }
 
     @PostMapping("/{subdomain}/verify-otp")
     public ResponseEntity<Map<String, Object>> verifyOtp(
             @PathVariable String subdomain,
-            @RequestBody Map<String, String> body
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request
     ) {
-        String email = body.get("email");
-        String otp = body.get("otp");
-
-        if (email == null || otp == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Email and OTP code are required"));
+        boolean browser = "1".equals(request.getHeader("X-Browser-Session"));
+        if (browser) browserCookies.requireBrowserMutation(request);
+        String cleanEmail;
+        try {
+            cleanEmail = CustomerOtpService.canonicalEmail(body == null ? null : body.get("email"));
+        } catch (IllegalArgumentException invalid) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Valid email address required"));
         }
-        String cleanEmail = email.trim().toLowerCase();
+        String otp = body.get("otp");
+        if (otp == null || !otp.matches("[0-9]{6}")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "A 6-digit verification code is required"));
+        }
+        Company company = requireOtpCompany(subdomain);
+        if (!rateLimiterService.allowAuthentication(extractClientIp(request), company.getId() + ":" + cleanEmail,
+                "customer-otp-verify")) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                    "error", "Too many verification attempts. Please wait before trying again."));
+        }
 
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        boolean valid = customerOtpService.verifyOtp(company.getId(), cleanEmail, otp.trim());
+        boolean valid = customerOtpService.verifyOtp(company.getId(), cleanEmail, otp);
         if (!valid) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid or expired verification code"));
         }
 
+        if (browser) {
+            var session = portalLoginService.openVerifiedSession(company, cleanEmail, request);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("browserSession", true);
+            result.put("csrfToken", session.csrfToken());
+            result.put("sessionId", session.sessionId());
+            result.put("email", cleanEmail);
+            result.put("companyId", company.getId());
+            return ResponseEntity.ok().headers(browserCookies.issue(session, "CUSTOMER")).body(result);
+        }
+
         // Issue signed, tamper-proof Customer JWT
-        String customerJwt = jwtTokenProvider.generateCustomerToken(cleanEmail, company.getId(), subdomain.toLowerCase());
+        String customerJwt = jwtTokenProvider.generateCustomerToken(cleanEmail, company.getId(),
+                company.getSubdomain().toLowerCase(Locale.ROOT));
 
         Map<String, Object> resp = new HashMap<>();
         resp.put("success", true);
@@ -144,298 +175,110 @@ public class PublicPortalController {
     @PostMapping("/{subdomain}/demo-login")
     public ResponseEntity<Map<String, Object>> demoCustomerLogin(
             @PathVariable String subdomain,
-            @RequestBody Map<String, String> body
+            @RequestBody(required = false) Map<String, String> body
     ) {
-        String email = body.get("email");
-        if (email == null || email.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Email is required"));
+        return ResponseEntity.status(HttpStatus.GONE).body(Map.of(
+                "error", "Demo sign-in is unavailable. Use verified email sign-in to request and verify a code."));
+    }
+
+    private Company requireOtpCompany(String subdomain) {
+        if (subdomain == null || !subdomain.matches("[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,98}[a-zA-Z0-9])?")) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found");
         }
-        String cleanEmail = email.trim().toLowerCase();
-
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        // Allow verified demo customers to obtain signed Customer JWT
-        if (!cleanEmail.contains("@") || !cleanEmail.contains(".")) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Invalid customer demo email"));
+        String canonicalSubdomain = subdomain.toLowerCase(Locale.ROOT);
+        Company company = companyRepository.findBySubdomain(canonicalSubdomain)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found"));
+        if (company.getId() == null || company.getId() <= 0 || company.getSubdomain() == null
+                || !canonicalSubdomain.equals(company.getSubdomain().toLowerCase(Locale.ROOT))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found");
         }
-
-        String customerJwt = jwtTokenProvider.generateCustomerToken(cleanEmail, company.getId(), subdomain.toLowerCase());
-
-        Map<String, Object> resp = new HashMap<>();
-        resp.put("success", true);
-        resp.put("token", customerJwt);
-        resp.put("email", cleanEmail);
-        resp.put("companyId", company.getId());
-        return ResponseEntity.ok(resp);
+        if (company.getStatus() != Company.CompanyStatus.ACTIVE && company.getStatus() != Company.CompanyStatus.TRIAL) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Customer sign-in is unavailable for this company");
+        }
+        return company;
     }
 
     @PostMapping("/{subdomain}/tickets")
-    public ResponseEntity<Ticket> createPublicTicket(
+    public ResponseEntity<PortalTicketDto> createPublicTicket(
             @PathVariable String subdomain,
             @RequestBody PublicTicketCreateDto dto,
             HttpServletRequest request
     ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        String clientIp = extractClientIp(request);
-
-        // 1. Anti-Spam: Honeypot trap (Invisible input fields that only automated bots fill)
-        if ((dto.getWebsiteUrl() != null && !dto.getWebsiteUrl().isBlank()) ||
-            (dto.getHpToken() != null && !dto.getHpToken().isBlank())) {
-            log.warn("Spambot trapped by honeypot from IP {} targeting company {}. Simulating success to deflect bot.", clientIp, subdomain);
-            Ticket fakeTicket = new Ticket();
-            fakeTicket.setTicketNumber(company.getCompanyCode() + "-SPAM");
-            fakeTicket.setSubject(dto.getSubject());
-            return ResponseEntity.ok(fakeTicket);
-        }
-
-        // 2. Anti-Abuse: Sliding-window Rate Limiting
-        if (!rateLimiterService.allowTicketSubmission(clientIp, dto.getRequesterEmail())) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
-        }
-
-        // 3. Subscription & Quota Enforcement
-        if (subscriptionService.isWorkspaceLocked(company.getId())) {
-            return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED).build();
-        }
-        subscriptionService.assertCanCreateTicket(company.getId());
-
-        // 4. Sanitize Input against Stored XSS using OWASP Whitelist
-        String cleanSubject = HtmlSanitizer.cleanToPlainText(dto.getSubject());
-        String cleanDescription = HtmlSanitizer.clean(dto.getDescription());
-        String cleanEmail = dto.getRequesterEmail() != null ? dto.getRequesterEmail().trim().toLowerCase() : "";
-
-        // If authenticated as customer, verify that requesterEmail matches token
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String token = authHeader.substring(7).trim();
-            if (jwtTokenProvider.validateCustomerToken(token, company.getId(), null)) {
-                Claims claims = jwtTokenProvider.getClaimsFromToken(token);
-                cleanEmail = claims.getSubject();
-            }
-        }
-
-        TicketCreateDto createDto = new TicketCreateDto();
-        createDto.setCompanyId(company.getId());
-        createDto.setDepartmentId(dto.getDepartmentId());
-        createDto.setRequesterName(HtmlSanitizer.cleanToPlainText(dto.getRequesterName()));
-        createDto.setRequesterEmail(cleanEmail);
-        createDto.setSubject(cleanSubject);
-        createDto.setDescription(cleanDescription);
-        createDto.setPriority(dto.getPriority() != null ? dto.getPriority() : Ticket.TicketPriority.MEDIUM);
-        createDto.setChannel(Ticket.TicketChannel.WEB_PORTAL);
-
-        Ticket created = ticketService.createTicket(createDto);
-
-        // Send confirmation email to requester
-        emailService.sendTicketConfirmation(cleanEmail, created.getTicketNumber(), cleanSubject, company.getName());
-
-        return ResponseEntity.ok(created);
+        return ResponseEntity.ok(portalTicketService.create(subdomain, dto, extractClientIp(request)));
     }
 
     @GetMapping("/{subdomain}/tickets")
-    public ResponseEntity<List<Ticket>> getCustomerTickets(
+    public ResponseEntity<Page<PortalTicketDto>> getCustomerTickets(
             @PathVariable String subdomain,
-            @RequestParam String email,
+            @RequestParam(required = false) String email,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status,
             HttpServletRequest request
     ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        // Cryptographically verify customer session token
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        List<Ticket> tickets = ticketRepository.findByCompanyIdAndContactEmail(company.getId(), verifiedEmail);
-        return ResponseEntity.ok(tickets);
+        return ResponseEntity.ok(portalTicketService.list(subdomain, email, page, size, q, status));
     }
 
     @GetMapping("/{subdomain}/tickets/{ticketNumber}")
-    public ResponseEntity<Ticket> getCustomerTicketDetail(
+    public ResponseEntity<PortalTicketDto> getCustomerTicketDetail(
             @PathVariable String subdomain,
             @PathVariable String ticketNumber,
-            @RequestParam String email,
+            @RequestParam(required = false) String email,
             HttpServletRequest request
     ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        // Cryptographically verify customer session token
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found: " + ticketNumber));
-
-        // Verify ticket belongs to the authenticated customer
-        if (!ticket.getContact().getEmail().equalsIgnoreCase(verifiedEmail)) {
-            log.warn("SECURITY WARNING: Customer [{}] attempted to access ticket #{} belonging to [{}]",
-                    verifiedEmail, ticketNumber, ticket.getContact().getEmail());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-
-        List<TicketThread> threads = ticketService.getTicketThreads(ticket.getId());
-        // Strictly filter out internal private notes so customer cannot see staff deliberations
-        List<TicketThread> publicThreads = threads.stream()
-                .filter(th -> !Boolean.TRUE.equals(th.getIsPrivate()))
-                .toList();
-
-        ticket.setThreads(publicThreads);
-        return ResponseEntity.ok(ticket);
+        return ResponseEntity.ok(portalTicketService.detail(subdomain, ticketNumber, email));
     }
 
     @PostMapping("/{subdomain}/tickets/{ticketNumber}/reply")
-    public ResponseEntity<TicketThread> customerReply(
-            @PathVariable String subdomain,
-            @PathVariable String ticketNumber,
-            @RequestBody Map<String, String> body,
-            HttpServletRequest request
-    ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found: " + ticketNumber));
-
-        String email = body.get("email");
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        if (!verifiedEmail.equalsIgnoreCase(ticket.getContact().getEmail().trim())) {
-            log.warn("SECURITY VIOLATION: Unauthorized reply attempt on ticket #{} by unverified address '{}'",
-                    ticketNumber, verifiedEmail);
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-
-        String rawReply = body.get("reply");
-        String cleanReplyHtml = HtmlSanitizer.clean(rawReply);
-        String cleanReplyText = HtmlSanitizer.cleanToPlainText(rawReply);
-
-        TicketThread thread = new TicketThread();
-        thread.setCompany(company);
-        thread.setTicket(ticket);
-        thread.setThreadType(TicketThread.ThreadType.CUSTOMER_REPLY);
-        thread.setSenderType(TicketThread.SenderType.CUSTOMER);
-        thread.setSenderContact(ticket.getContact());
-        thread.setFromEmail(verifiedEmail);
-        thread.setFromName(ticket.getContact().getFirstName());
-        thread.setSubject("Re: [" + ticket.getTicketNumber() + "] " + ticket.getSubject());
-        thread.setBodyText(cleanReplyText);
-        thread.setBodyHtml("<p>" + cleanReplyHtml + "</p>");
-        thread.setIsPrivate(false);
-
-        TicketThread saved = threadRepository.save(thread);
-
-        // Reopen ticket if resolved or pending customer response
-        if (ticket.getStatus() == Ticket.TicketStatus.RESOLVED || ticket.getStatus() == Ticket.TicketStatus.WAITING_ON_CUSTOMER) {
-            ticket.setStatus(Ticket.TicketStatus.OPEN);
-            ticketRepository.save(ticket);
-        }
-
-        return ResponseEntity.ok(saved);
-    }
-
-    @PostMapping("/{subdomain}/tickets/{ticketNumber}/reopen")
-    public ResponseEntity<Ticket> customerReopen(
-            @PathVariable String subdomain,
-            @PathVariable String ticketNumber,
-            @RequestParam(required = false) String email,
-            HttpServletRequest request
-    ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found: " + ticketNumber));
-
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        if (!verifiedEmail.equalsIgnoreCase(ticket.getContact().getEmail().trim())) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-
-        ticket.setStatus(Ticket.TicketStatus.OPEN);
-        return ResponseEntity.ok(ticketRepository.save(ticket));
-    }
-
-    @PostMapping("/{subdomain}/tickets/{ticketNumber}/close")
-    public ResponseEntity<Ticket> closeTicketByCustomer(
-            @PathVariable String subdomain,
-            @PathVariable String ticketNumber,
-            @RequestParam(required = false) String email,
-            HttpServletRequest request
-    ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found: " + ticketNumber));
-
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        if (!verifiedEmail.equalsIgnoreCase(ticket.getContact().getEmail().trim())) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-
-        ticket.setStatus(Ticket.TicketStatus.RESOLVED);
-        ticket.setResolvedAt(java.time.LocalDateTime.now());
-        Ticket saved = ticketRepository.save(ticket);
-
-        return ResponseEntity.ok(saved);
-    }
-
-    @PostMapping("/{subdomain}/tickets/{ticketNumber}/csat")
-    public ResponseEntity<Map<String, Object>> submitCsat(
+    public ResponseEntity<PortalTicketDto> customerReply(
             @PathVariable String subdomain,
             @PathVariable String ticketNumber,
             @RequestBody Map<String, Object> body,
             HttpServletRequest request
     ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
+        return ResponseEntity.ok(portalTicketService.reply(subdomain, ticketNumber, body));
+    }
 
-        Ticket ticket = ticketRepository.findByCompanyIdAndTicketNumber(company.getId(), ticketNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found: " + ticketNumber));
+    @PostMapping("/{subdomain}/tickets/{ticketNumber}/reopen")
+    public ResponseEntity<PortalTicketDto> customerReopen(
+            @PathVariable String subdomain,
+            @PathVariable String ticketNumber,
+            @RequestParam(required = false) String email,
+            HttpServletRequest request
+    ) {
+        return ResponseEntity.ok(portalTicketService.reopen(subdomain, ticketNumber, email));
+    }
 
-        int rating = body.get("rating") != null ? Integer.parseInt(body.get("rating").toString()) : 5;
-        String comment = body.get("comment") != null ? HtmlSanitizer.cleanToPlainText(body.get("comment").toString().trim()) : "";
+    @PostMapping("/{subdomain}/tickets/{ticketNumber}/close")
+    public ResponseEntity<PortalTicketDto> closeTicketByCustomer(
+            @PathVariable String subdomain,
+            @PathVariable String ticketNumber,
+            @RequestParam(required = false) String email,
+            HttpServletRequest request
+    ) {
+        return ResponseEntity.ok(portalTicketService.close(subdomain, ticketNumber, email));
+    }
 
-        TicketThread csatThread = new TicketThread();
-        csatThread.setCompany(company);
-        csatThread.setTicket(ticket);
-        csatThread.setThreadType(TicketThread.ThreadType.SYSTEM);
-        csatThread.setSenderType(TicketThread.SenderType.CUSTOMER);
-        csatThread.setFromEmail(ticket.getContact().getEmail());
-        csatThread.setFromName(ticket.getContact().getFirstName());
-        csatThread.setSubject("Customer CSAT Satisfaction Rating: " + rating + "/5 Stars");
-        csatThread.setBodyText("Customer gave rating: " + rating + "/5 Stars. Feedback: " + (comment.isEmpty() ? "No comment" : comment));
-        csatThread.setBodyHtml("<div class='csat-rating'><strong>CSAT Rating: " + rating + "/5 Stars</strong><p>" + (comment.isEmpty() ? "No comment provided." : comment) + "</p></div>");
-        csatThread.setIsPrivate(false);
-        threadRepository.save(csatThread);
-
-        return ResponseEntity.ok(Map.of("success", true, "message", "Thank you for your feedback!"));
+    @PostMapping("/{subdomain}/tickets/{ticketNumber}/csat")
+    public ResponseEntity<PortalTicketDto.Csat> submitCsat(
+            @PathVariable String subdomain,
+            @PathVariable String ticketNumber,
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request
+    ) {
+        return ResponseEntity.ok(portalTicketService.csat(subdomain, ticketNumber, body));
     }
 
     @GetMapping("/{subdomain}/export-data")
     public ResponseEntity<Map<String, Object>> exportCustomerData(
             @PathVariable String subdomain,
-            @RequestParam String email,
+            @RequestParam(required = false) String email,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
             HttpServletRequest request
     ) {
-        Company company = companyRepository.findBySubdomain(subdomain.toLowerCase())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Company not found: " + subdomain));
-
-        String verifiedEmail = requireVerifiedCustomerEmail(request, company.getId(), email);
-
-        List<Ticket> tickets = ticketRepository.findByCompanyIdAndContactEmail(company.getId(), verifiedEmail);
-
-        Map<String, Object> export = new LinkedHashMap<>();
-        export.put("customerEmail", verifiedEmail);
-        export.put("companyName", company.getName());
-        export.put("exportedAt", java.time.LocalDateTime.now().toString());
-        export.put("totalTickets", tickets.size());
-        export.put("tickets", tickets);
-
-        return ResponseEntity.ok(export);
+        return ResponseEntity.ok(portalTicketService.export(subdomain, email, page, size));
     }
 
     @GetMapping("/{subdomain}/kb/articles")
@@ -517,12 +360,8 @@ public class PublicPortalController {
     }
 
     private String extractClientIp(HttpServletRequest request) {
-        if (request == null) return "127.0.0.1";
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "127.0.0.1";
+        String remoteAddr = request == null ? null : request.getRemoteAddr();
+        return remoteAddr == null || remoteAddr.isBlank() ? "unknown" : remoteAddr;
     }
 
     @Data

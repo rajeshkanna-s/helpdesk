@@ -60,7 +60,7 @@ class TenantSecurityBoundaryTest {
             assertContextsCleared();
             return Optional.ofNullable(currentUser);
         });
-        filter = new TenantFilter(tokenProvider, userRepository);
+        filter = new TenantFilter(tokenProvider, userRepository, mock(com.kuwy.helpdesk.services.BrowserSessionService.class), mock(com.kuwy.helpdesk.config.BrowserSessionCookies.class));
     }
 
     @AfterEach
@@ -473,6 +473,7 @@ class TenantSecurityBoundaryTest {
         Role role = new Role();
         role.setRoleType(Role.RoleType.AGENT);
         User user = new User();
+        user.setIsTwoFactorEnabled(true);
         user.setId(11L);
         user.setEmail("agent@example.invalid");
         user.setCompany(company);

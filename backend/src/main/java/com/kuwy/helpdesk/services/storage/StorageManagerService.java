@@ -15,9 +15,7 @@ public class StorageManagerService {
     private final CloudinaryStorageService cloudinaryStorageService;
 
     public FileStorageService getActiveStorage() {
-        if (cloudinaryStorageService.isConfigured()) {
-            return cloudinaryStorageService;
-        }
+        // Public cloud uploads are not suitable for customer attachments. Keep new files private.
         return localStorageService;
     }
 
@@ -26,17 +24,12 @@ public class StorageManagerService {
     }
 
     public Resource loadFileAsResource(String storagePath, String storageType) throws IOException {
-        if ("CLOUDINARY".equalsIgnoreCase(storageType) && cloudinaryStorageService.isConfigured()) {
-            return cloudinaryStorageService.loadFileAsResource(storagePath);
-        }
+        if (!"LOCAL_DISK".equalsIgnoreCase(storageType)) throw new IOException("This attachment requires a configured private storage adapter.");
         return localStorageService.loadFileAsResource(storagePath);
     }
 
     public boolean deleteFile(String storagePath, String storageType) {
-        if ("CLOUDINARY".equalsIgnoreCase(storageType) && cloudinaryStorageService.isConfigured()) {
-            return cloudinaryStorageService.deleteFile(storagePath);
-        }
+        if (!"LOCAL_DISK".equalsIgnoreCase(storageType)) return false;
         return localStorageService.deleteFile(storagePath);
     }
 }
-

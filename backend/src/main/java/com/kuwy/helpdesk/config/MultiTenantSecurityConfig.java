@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -35,7 +36,8 @@ public class MultiTenantSecurityConfig {
         http
             .httpBasic(AbstractHttpConfigurer::disable)
             .formLogin(AbstractHttpConfigurer::disable)
-            // Current staff authentication is bearer-only; cookie sessions must enable CSRF.
+            // Cookie mutations use session-bound CSRF checks in TenantFilter/BrowserSessionController.
+            // Bearer API consumers do not use ambient browser credentials.
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -43,12 +45,14 @@ public class MultiTenantSecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/error").permitAll()
                 .requestMatchers(HttpMethod.GET,
-                        "/api/v1/auth/lookup-workspace", "/api/v1/onboarding/check-subdomain",
+                        "/api/v1/auth/lookup-workspace", "/api/v1/onboarding/check-subdomain", "/api/v1/onboarding/config", "/api/v1/plans",
+                        "/api/v1/auth/session", "/api/v1/portal/*/session",
                         "/api/v1/onboarding/plans", "/api/v1/portal/*", "/api/v1/portal/*/kb/articles").permitAll()
                 .requestMatchers(HttpMethod.POST,
                         "/api/v1/auth/login", "/api/v1/auth/verify-2fa",
                         "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
                         "/api/v1/auth/validate-reset-token", "/api/v1/invitations/validate",
+                        "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/portal/*/refresh", "/api/v1/portal/*/logout",
                         "/api/v1/invitations/accept", "/api/v1/onboarding/send-verification",
                         "/api/v1/onboarding/signup", "/api/v1/onboarding/calculate-checkout",
                         "/api/v1/portal/*/request-otp", "/api/v1/portal/*/verify-otp",
@@ -59,7 +63,7 @@ public class MultiTenantSecurityConfig {
                 .requestMatchers("/api/v1/portal/**").hasRole("CUSTOMER")
                 .requestMatchers("/api/v1/admin/**").hasRole("SUPER_ADMIN")
                 .requestMatchers("/api/v1/invitations/**").hasAnyRole("SUPER_ADMIN", "COMPANY_ADMIN")
-                .requestMatchers("/api/v1/auth/2fa/**").hasAnyRole("SUPER_ADMIN", "COMPANY_ADMIN", "TEAM_LEAD", "AGENT", "LIGHT_AGENT")
+                .requestMatchers("/api/v1/auth/2fa/**", "/api/v1/auth/account", "/api/v1/auth/sessions/**", "/api/v1/auth/logout-all", "/api/v1/auth/change-password").hasAnyRole("SUPER_ADMIN", "COMPANY_ADMIN", "TEAM_LEAD", "AGENT", "LIGHT_AGENT")
                 .requestMatchers(HttpMethod.GET, "/api/**").hasAnyRole("SUPER_ADMIN", "COMPANY_ADMIN", "TEAM_LEAD", "AGENT", "LIGHT_AGENT")
                 .requestMatchers("/api/**").hasAnyRole("SUPER_ADMIN", "COMPANY_ADMIN", "TEAM_LEAD", "AGENT")
                 .anyRequest().denyAll()
@@ -91,7 +95,7 @@ public class MultiTenantSecurityConfig {
         configuration.setAllowedOrigins(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(false);
+        configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
@@ -101,5 +105,12 @@ public class MultiTenantSecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new CredentialPasswordEncoder();
+    }
+
+    @Bean
+    public FilterRegistrationBean<TenantFilter> tenantFilterRegistration(TenantFilter filter) {
+        FilterRegistrationBean<TenantFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 }

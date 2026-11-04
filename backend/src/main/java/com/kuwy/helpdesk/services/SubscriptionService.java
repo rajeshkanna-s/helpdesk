@@ -31,16 +31,21 @@ public class SubscriptionService {
      */
     public boolean isWorkspaceLocked(Long companyId) {
         Company company = companyRepository.findById(companyId).orElse(null);
-        if (company == null || company.getStatus() == Company.CompanyStatus.SUSPENDED) {
+        if (company == null || company.getStatus() == Company.CompanyStatus.SUSPENDED || company.getStatus() == Company.CompanyStatus.INACTIVE) {
             return true;
         }
 
         Optional<CompanySubscription> subOpt = subscriptionRepository.findByCompanyId(companyId);
+        if (subOpt.isEmpty()) return true;
         if (subOpt.isPresent()) {
             CompanySubscription sub = subOpt.get();
             if (sub.getStatus() == CompanySubscription.SubscriptionStatus.LOCKED) {
                 return true;
             }
+            boolean freeActive = sub.getPlanTier() == CompanySubscription.PlanTier.FREE && sub.getStatus() == CompanySubscription.SubscriptionStatus.ACTIVE;
+            if (!freeActive && sub.getStatus() != CompanySubscription.SubscriptionStatus.PAST_DUE
+                    && (sub.getCurrentPeriodEnd() == null || !sub.getCurrentPeriodEnd().isAfter(LocalDateTime.now()))) return true;
+            if (sub.getStatus() == CompanySubscription.SubscriptionStatus.PAST_DUE && sub.getCurrentPeriodEnd() == null) return true;
             // Check if past due beyond 7-day grace period
             if (sub.getStatus() == CompanySubscription.SubscriptionStatus.PAST_DUE &&
                 sub.getCurrentPeriodEnd() != null &&
@@ -168,4 +173,3 @@ public class SubscriptionService {
         log.warn("LOCKED workspace for company [{}] due to subscription cancellation.", company.getName());
     }
 }
-

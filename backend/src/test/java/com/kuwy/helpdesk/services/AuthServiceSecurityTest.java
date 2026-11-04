@@ -68,7 +68,7 @@ class AuthServiceSecurityTest {
         byte[] key = new byte[32];
         Arrays.fill(key, (byte) 23);
         crypto = new SecretCryptoService(Base64.getEncoder().encodeToString(key));
-        service = new AuthService(users, companies, encoder, tokens, factors, audit, limiter, crypto);
+        service = new AuthService(users, companies, encoder, tokens, factors, audit, limiter, crypto, mock(AccountEmailService.class));
         ReflectionTestUtils.setField(service, "clock", clock);
         company = new Company();
         company.setId(7L);
@@ -300,6 +300,27 @@ class AuthServiceSecurityTest {
         request.setPassword(password);
         request.setCompanyCode("TEST");
         return request;
+    }
+
+    @Test
+    void passwordChangeRequiresCurrentCredentialsAndRevokesExistingTokens() {
+        bindSelf();
+        assertThrows(AuthenticationException.class, () -> service.changeOwnPassword("wrong", "a new synthetic passphrase", null, http));
+        assertEquals(0L, user.getAuthVersion());
+        service.changeOwnPassword(PASSWORD, "a new synthetic passphrase", null, http);
+        assertEquals(1L, user.getAuthVersion());
+        assertTrue(encoder.matches("a new synthetic passphrase", user.getPasswordHash()));
+        assertFalse(encoder.matches(PASSWORD, user.getPasswordHash()));
+    }
+
+    @Test
+    void enrolledAccountsCannotChangePasswordsWithoutTheirCurrentFactor() {
+        bindSelf(); user.setIsTwoFactorEnabled(true); user.setTwoFactorSecret(SECRET);
+        assertThrows(AuthenticationException.class, () -> service.changeOwnPassword(PASSWORD, "a new synthetic passphrase", "wrong", http));
+        assertEquals(0L, user.getAuthVersion());
+        when(factors.verifyTotpCode(SECRET, "246810")).thenReturn(true);
+        service.changeOwnPassword(PASSWORD, "a new synthetic passphrase", "246810", http);
+        assertEquals(1L, user.getAuthVersion());
     }
 
     private LoginResponse challenge() {

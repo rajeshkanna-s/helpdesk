@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { apiService, setApiTenantId, setAuthToken } from './services/api';
+import { apiService, setApiTenantId, clearStaffSession } from './services/api';
 import type { Company, AuthUser, LoginResponse } from './types';
 import { LoginPage } from './components/LoginPage';
 import { MarketingLandingPage } from './components/MarketingLandingPage';
@@ -12,32 +12,35 @@ const AcceptInvitationPage = lazy(() => import('./components/AcceptInvitationPag
 const OnboardingModal = lazy(() => import('./components/OnboardingModal').then(module => ({ default: module.OnboardingModal })));
 const PricingPage = lazy(() => import('./components/PricingPage').then(module => ({ default: module.PricingPage })));
 const CheckoutModal = lazy(() => import('./components/CheckoutModal').then(module => ({ default: module.CheckoutModal })));
+const AccountSecurityDialog = lazy(() => import('./components/AccountSecurityDialog').then(module => ({ default: module.AccountSecurityDialog })));
 
 export default function App() {
-  return <Suspense fallback={<div className="app-route-loading" role="status"><span className="spinner-border spinner-border-sm" aria-hidden="true" />Loading your workspace...</div>}><AppRoutes /></Suspense>;
+  return <Suspense fallback={<div className="app-route-loading" role="status"><span className="spinner-border spinner-border-sm" aria-hidden="true" />Loading your workspace...</div>}><AppRoutes /><AccountSecurityHost /></Suspense>;
+}
+
+function AccountSecurityHost() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const show = () => setOpen(true);
+    const hide = () => setOpen(false);
+    window.addEventListener('kuwy-open-account-security', show);
+    window.addEventListener('kuwy-session-expired', hide);
+    return () => { window.removeEventListener('kuwy-open-account-security', show); window.removeEventListener('kuwy-session-expired', hide); };
+  }, []);
+  return open ? <AccountSecurityDialog open onClose={() => setOpen(false)} /> : null;
 }
 
 function AppRoutes() {
   const [pathname, setPathname] = useState<string>(() => window.location.pathname || '/');
 
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    const saved = localStorage.getItem('kuwy_user');
-    const token = localStorage.getItem('kuwy_auth_token');
-    if (saved && token) {
-      try {
-        setAuthToken(token);
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const requiresStaffSession = /^\/(?:adminconsole|login|[^/]+\/admin)\/?$/i.test(pathname);
+  const [checkingSession, setCheckingSession] = useState(requiresStaffSession);
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState<Company | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [selectedOnboardPlan, setSelectedOnboardPlan] = useState<string>('STARTER');
+  const [selectedOnboardPlan, setSelectedOnboardPlan] = useState<string>(() => new URLSearchParams(window.location.search).get('plan') || 'STARTER');
 
   // Checkout modal state
   const [showCheckout, setShowCheckout] = useState(false);
@@ -65,8 +68,34 @@ function AppRoutes() {
 
   // Load companies
   useEffect(() => {
-    if (['/reset-password', '/accept-invitation'].includes(window.location.pathname.toLowerCase().replace(/\/+$/, ''))) return;
-    loadCompanies();
+    if (!requiresStaffSession) return;
+    let active = true;
+    setCheckingSession(true);
+    apiService.getStaffSession().then(session => {
+      if (!active || !session.userId || !session.company || !session.roleType) return;
+      setCurrentUser(session as AuthUser);
+      const company = { ...session.company, planName: session.company.planName || 'Not reported' } as Company;
+      setActiveCompany(company);
+      setApiTenantId(company.id);
+      setCompanies([company]);
+    }).catch(() => { if (active) setCurrentUser(null); }).finally(() => { if (active) setCheckingSession(false); });
+    return () => { active = false; };
+  }, [requiresStaffSession]);
+
+  useEffect(() => {
+    if (currentUser && !currentUser.mfaSetupRequired) void loadCompanies();
+  }, [currentUser?.userId, currentUser?.mfaSetupRequired]);
+
+  useEffect(() => {
+    const expired = (event: Event) => {
+      if ((event as CustomEvent).detail === 'STAFF') {
+        setCurrentUser(null);
+        setCompanies([]);
+        setActiveCompany(null);
+      }
+    };
+    window.addEventListener('kuwy-session-expired', expired);
+    return () => window.removeEventListener('kuwy-session-expired', expired);
   }, []);
 
   const loadCompanies = async () => {
@@ -98,6 +127,12 @@ function AppRoutes() {
     : null;
   const customerPortalSlug = customerPortalMatch ? customerPortalMatch[1] : null;
   const customerPortalSubView = (customerPortalMatch && customerPortalMatch[2]) || 'home';
+
+  useEffect(() => {
+    if (isLoginRoute && currentUser) {
+      navigate(currentUser.roleType === 'SUPER_ADMIN' ? '/adminconsole' : `/${currentUser.company?.subdomain || ''}/admin`);
+    }
+  }, [isLoginRoute, currentUser]);
 
   // Sync activeCompany based on URL or current user
   useEffect(() => {
@@ -157,15 +192,12 @@ function AppRoutes() {
   }, [isAdminConsoleRoute, companyAdminSlug, isCustomerPortalRoute, customerPortalSlug, isPricingRoute, isSignupRoute, isLoginRoute, isResetPasswordRoute, isAcceptInvitationRoute, activeCompany]);
 
   const handleLoginSuccess = (res: LoginResponse) => {
-    if (!res.token || res.twoFactorRequired) {
-      setAuthToken(null);
-      localStorage.removeItem('kuwy_user');
+    if (!res.browserSession || !res.userId || res.twoFactorRequired) {
+      clearStaffSession();
       setCurrentUser(null);
       navigate('/login');
       return;
     }
-    setAuthToken(res.token || null);
-    localStorage.setItem('kuwy_user', JSON.stringify(res));
     setCurrentUser(res as unknown as AuthUser);
     if (res.company) {
       const authenticatedCompany = { ...res.company, planName: res.company.planName || 'Not reported' } as Company;
@@ -175,7 +207,6 @@ function AppRoutes() {
         ? previous.map(company => company.id === authenticatedCompany.id ? { ...company, ...authenticatedCompany } : company)
         : [...previous, authenticatedCompany]);
     }
-    void loadCompanies();
 
     if (res.roleType === 'SUPER_ADMIN') {
       if (isAdminConsoleRoute) {
@@ -191,9 +222,14 @@ function AppRoutes() {
     }
   };
 
-  const handleLogout = () => {
-    setAuthToken(null);
-    localStorage.removeItem('kuwy_user');
+  const handleLogout = async () => {
+    try {
+      await apiService.logoutStaff();
+    } catch {
+      window.alert('Your session could not be ended. Please try signing out again.');
+      return;
+    }
+    clearStaffSession();
     setCurrentUser(null);
     if (isAdminConsoleRoute) {
       navigate('/adminconsole');
@@ -218,13 +254,14 @@ function AppRoutes() {
 
   if (isResetPasswordRoute) {
     return <ResetPasswordPage onNavigate={navigate} onResetComplete={() => {
-      setAuthToken(null);
-      localStorage.removeItem('kuwy_user');
+      clearStaffSession();
       setCurrentUser(null);
     }} />;
   }
   if (isAcceptInvitationRoute) return <AcceptInvitationPage onNavigate={navigate} onLoginSuccess={handleLoginSuccess} />;
-  if (isLoginRoute) return <LoginPage onLoginSuccess={handleLoginSuccess} targetMode="company" onNavigate={navigate} />;
+  if (requiresStaffSession && checkingSession) return <div className="app-route-loading" role="status"><span className="spinner-border spinner-border-sm" aria-hidden="true" />Checking your session...</div>;
+  if (requiresStaffSession && currentUser?.mfaSetupRequired) return <AccountSecurityDialog open required onClose={() => setCurrentUser(null)} />;
+  if (isLoginRoute && !currentUser) return <LoginPage onLoginSuccess={handleLoginSuccess} targetMode="generic" companySlug="" onNavigate={navigate} />;
 
   // =========================================================================
   // 1. DEDICATED ROUTE: http://localhost:5174/adminconsole (Admin Console)
@@ -268,6 +305,9 @@ function AppRoutes() {
         />
       );
     }
+    if (currentUser.roleType === 'CUSTOMER' || (currentUser.roleType !== 'SUPER_ADMIN' && currentUser.company?.subdomain?.toLowerCase() !== companyAdminSlug)) {
+      return <div className="account-flow-page"><section className="account-flow-card p-4"><h1 className="h4">This is a different workspace</h1><p className="text-muted">Your staff session does not belong to this company.</p><button type="button" className="btn btn-primary" onClick={() => navigate(`/${currentUser.company?.subdomain || ''}/admin`)}>Go to your workspace</button></section></div>;
+    }
 
     return (
       <CompanyWorkspace
@@ -309,11 +349,16 @@ function AppRoutes() {
         <PricingPage
           onBack={() => navigate('/')}
           onSelectPlan={(plan, cycle) => {
-            setCheckoutPlanTier(plan);
-            setCheckoutBillingCycle(cycle);
-            setShowCheckout(true);
+            if (!currentUser) {
+              setSelectedOnboardPlan(plan);
+              navigate(`/signup?plan=${encodeURIComponent(plan)}`);
+            } else {
+              setCheckoutPlanTier(plan);
+              setCheckoutBillingCycle(cycle);
+              setShowCheckout(true);
+            }
           }}
-          onNavigateToLogin={() => navigate('/kuwy/admin')}
+          onNavigateToLogin={() => navigate('/login')}
         />
         {showCheckout && <CheckoutModal
           isOpen={showCheckout}

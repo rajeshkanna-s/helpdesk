@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Building2, ShieldCheck, Lock, Mail, ArrowRight, KeyRound,
   ShieldAlert, CheckCircle2, Eye, EyeOff, Smartphone, Shield, ArrowLeft
@@ -23,20 +23,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const isSuperAdminRoute = targetMode === 'admin';
   const isGenericLogin = targetMode === 'generic';
 
-  const [email, setEmail] = useState(() => {
-    if (isSuperAdminRoute) return 'testsuperadmin@kuwy.in';
-    if (companySlug.toLowerCase() === 'acme') return 'testsupport@acme.com';
-    return 'testadmin@kuwy.in';
-  });
+  const [email, setEmail] = useState('');
 
-  const [password, setPassword] = useState('Password@123');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberDevice, setRememberDevice] = useState(true);
+  const [rememberDevice, setRememberDevice] = useState(false);
 
   const [companyCode, setCompanyCode] = useState(() => {
-    if (isSuperAdminRoute) return '';
-    if (companySlug.toLowerCase() === 'acme') return 'ACME';
-    return 'KUWY';
+    if (isSuperAdminRoute || isGenericLogin) return '';
+    return companySlug.toUpperCase();
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -44,6 +39,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   // Forgot password modal state
   const [showForgotModal, setShowForgotModal] = useState(false);
+  const forgotTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Two-Factor Authentication (2FA) Challenge State
   const [is2FaStep, setIs2FaStep] = useState(false);
@@ -60,6 +56,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -81,7 +78,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       onLoginSuccess(res);
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.message || 'Email or password is incorrect.';
+      const msg = err.response?.data?.message || err.response?.data?.error || 'Email or password is incorrect.';
       setErrorMessage(msg);
     } finally {
       setIsLoading(false);
@@ -90,7 +87,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   const handleVerify2Fa = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!totpCode.trim()) return;
+    if (!totpCode.trim() || isVerifying2Fa) return;
 
     setIsVerifying2Fa(true);
     setTwoFaError(null);
@@ -105,7 +102,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       onLoginSuccess(res);
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.message || 'Invalid two-factor code.';
+      const msg = err.response?.data?.message || err.response?.data?.error || 'Invalid two-factor code.';
       setTwoFaError(msg);
     } finally {
       setIsVerifying2Fa(false);
@@ -128,20 +125,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     }
   };
 
-  const handleOAuthLogin = (provider: 'Google' | 'Microsoft') => {
-    // Standard OAuth simulation flow with domain validation
-    alert(`Connecting to ${provider} Identity Provider...\n\nOnly pre-registered staff accounts within this workspace are authorized to sign in. New accounts cannot be created via OAuth.`);
-  };
-
-  const applyDemoAccount = (demoEmail: string, demoCompanyCode: string) => {
-    setEmail(demoEmail);
-    setPassword('Password@123');
-    setCompanyCode(demoCompanyCode);
-    setErrorMessage(null);
-    setIs2FaStep(false);
-  };
-
-  const currentCompanyName = companySlug.toLowerCase() === 'acme'
+  const currentCompanyName = isGenericLogin ? 'Kuwy HelpDesk' : companySlug.toLowerCase() === 'acme'
     ? 'Acme Global Logistics'
     : 'Kuwy Technology Services';
 
@@ -228,7 +212,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <div>
                   <div className="fw-bold small text-white">Brute-Force & Credential Protection</div>
                   <small className="text-light opacity-75" style={{ fontSize: '0.75rem' }}>
-                    Uniform response timing, progressive delays, and account lockouts.
+                    Rate-limited sign-in attempts and account lockouts.
                   </small>
                 </div>
               </div>
@@ -237,8 +221,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
           <div className="pt-4 border-top border-secondary border-opacity-25">
             <div className="d-flex align-items-center justify-content-between small text-light opacity-75">
-              <span>Section B: Login & Access</span>
-              <span className="badge bg-white bg-opacity-10 text-white">Screens 6, 7 & 8</span>
+              <span>Kuwy HelpDesk</span>
+              <span className="badge bg-white bg-opacity-10 text-white">Staff access</span>
             </div>
           </div>
         </div>
@@ -249,7 +233,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <div className="d-flex justify-content-between align-items-center mb-4">
             <div className="d-flex align-items-center gap-2">
               <span className="badge bg-light text-dark border px-2.5 py-1">
-                Route: <code>{isSuperAdminRoute ? '/adminconsole' : `/${companySlug}/admin`}</code>
+                {isSuperAdminRoute ? 'Platform sign-in' : 'Staff sign-in'}
               </span>
             </div>
 
@@ -258,7 +242,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-link text-decoration-none text-muted small d-flex align-items-center gap-1"
-                onClick={() => onNavigate && onNavigate('/kuwy/admin')}
+                onClick={() => onNavigate && onNavigate('/login')}
               >
                 <span>Company HelpDesk Login</span>
                 <ArrowRight size={13} />
@@ -267,9 +251,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-link text-decoration-none text-muted small d-flex align-items-center gap-1"
-                onClick={() => onNavigate && onNavigate('/adminconsole')}
+                onClick={() => onNavigate && onNavigate('/')}
               >
-                <span>Admin Console</span>
+                <span>Home</span>
                 <ArrowRight size={13} />
               </button>
             )}
@@ -390,7 +374,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   <h4 className="fw-bolder text-dark mb-0">
                     {isSuperAdminRoute ? 'Sign In to Admin Console' : `Sign In to ${currentCompanyName}`}
                   </h4>
-                  {!isSuperAdminRoute && (
+                  {!isSuperAdminRoute && !isGenericLogin && (
                     <span className="badge bg-primary text-white fw-bold">
                       {currentCompanyBadge}
                     </span>
@@ -409,7 +393,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   <button
                     type="button"
                     className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-                    onClick={() => handleOAuthLogin('Google')}
+                    disabled
+                    title="Google sign-in is not configured"
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24">
                       <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3.03h3.88c2.27-2.09 3.665-5.17 3.665-9.12z" />
@@ -424,7 +409,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   <button
                     type="button"
                     className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-                    onClick={() => handleOAuthLogin('Microsoft')}
+                    disabled
+                    title="Microsoft sign-in is not configured"
                   >
                     <svg width="18" height="18" viewBox="0 0 23 23">
                       <path fill="#f35325" d="M1 1h10v10H1z" />
@@ -455,7 +441,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <form onSubmit={handleLogin}>
                 {!isSuperAdminRoute && (
                   <div className="mb-3">
-                    <label className="form-label fw-bold small text-secondary">Company Code</label>
+                    <label htmlFor="staff-company-code" className="form-label fw-bold small text-secondary">Company Code{isGenericLogin ? ' (optional)' : ''}</label>
                     <div className="input-group">
                       <span className="input-group-text bg-light text-muted border-end-0">
                         <Building2 size={16} />
@@ -463,7 +449,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       <input
                         type="text"
                         className="form-control border-start-0 fw-bold font-monospace"
-                        placeholder="e.g. KUWY or ACME"
+                        placeholder="Workspace code"
+                        id="staff-company-code"
+                        name="companyCode"
+                        maxLength={50}
                         value={companyCode}
                         onChange={e => setCompanyCode(e.target.value.toUpperCase())}
                       />
@@ -472,7 +461,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 )}
 
                 <div className="mb-3">
-                  <label className="form-label fw-bold small text-secondary">Work Email Address</label>
+                  <label htmlFor="staff-email" className="form-label fw-bold small text-secondary">Work Email Address</label>
                   <div className="input-group">
                     <span className="input-group-text bg-light text-muted border-end-0">
                       <Mail size={16} />
@@ -481,6 +470,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       type="email"
                       className="form-control border-start-0"
                       placeholder="name@company.com"
+                      id="staff-email"
+                      name="email"
+                      autoComplete="username"
+                      maxLength={254}
                       value={email}
                       onChange={e => setEmail(e.target.value)}
                       onBlur={handleEmailBlur}
@@ -497,11 +490,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
-                    <label className="form-label fw-bold small text-secondary mb-0">Password</label>
+                    <label htmlFor="staff-password" className="form-label fw-bold small text-secondary mb-0">Password</label>
                     <button
                       type="button"
                       className="btn btn-link btn-sm text-decoration-none text-primary p-0 small fw-semibold"
                       onClick={() => setShowForgotModal(true)}
+                      ref={forgotTriggerRef}
+                      id="forgot-password-trigger"
                     >
                       Forgot password?
                     </button>
@@ -514,6 +509,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       type={showPassword ? 'text' : 'password'}
                       className="form-control border-start-0 border-end-0"
                       placeholder="Enter password"
+                      id="staff-password"
+                      name="password"
+                      autoComplete="current-password"
+                      maxLength={1024}
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       required
@@ -521,6 +520,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     <button
                       type="button"
                       className="btn btn-light border border-start-0 text-muted"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                       onClick={() => setShowPassword(!showPassword)}
                     >
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -533,11 +533,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     className="form-check-input"
                     type="checkbox"
                     id="rememberDeviceCheck"
+                    disabled
                     checked={rememberDevice}
                     onChange={(e) => setRememberDevice(e.target.checked)}
                   />
                   <label className="form-check-label small text-muted" htmlFor="rememberDeviceCheck">
-                    Remember this device for 30 days
+                    Remembered-device sessions are not available yet
                   </label>
                 </div>
 
@@ -566,67 +567,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </button>
               </form>
 
-              {/* Fast 1-Click Demo Accounts Switcher */}
-              <div className="mt-4 pt-3 border-top">
-                <div className="d-flex align-items-center justify-content-between mb-2">
-                  <span className="small text-muted fw-bold text-uppercase" style={{ fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-                    Quick 1-Click Demo Accounts
-                  </span>
-                  <span className="badge bg-light text-secondary border">Dev Verified</span>
-                </div>
-
-                <div className="d-flex flex-wrap gap-1.5">
-                  {isSuperAdminRoute ? (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-outline-dark py-1 px-2.5 small rounded-pill fw-semibold d-flex align-items-center gap-1.5"
-                      onClick={() => applyDemoAccount('testsuperadmin@kuwy.in', '')}
-                    >
-                      <ShieldCheck size={13} className="text-warning" />
-                      <span>Admin Console (testsuperadmin@kuwy.in)</span>
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-outline-primary py-1 px-2 small rounded-pill"
-                        onClick={() => applyDemoAccount('testadmin@kuwy.in', 'KUWY')}
-                      >
-                        Kuwy Company Admin
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-outline-secondary py-1 px-2 small rounded-pill"
-                        onClick={() => applyDemoAccount('testsupport@kuwy.in', 'KUWY')}
-                      >
-                        Kuwy Agent
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-outline-success py-1 px-2 small rounded-pill"
-                        onClick={() => applyDemoAccount('testsupport@acme.com', 'ACME')}
-                      >
-                        Acme Admin
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-outline-dark py-1 px-2 small rounded-pill"
-                        onClick={() => onNavigate?.('/adminconsole')}
-                      >
-                        🛡️ Switch to Admin Console
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
               {/* Footer */}
               <div className="mt-4 text-center">
                 <small className="text-muted d-block mb-1" style={{ fontSize: '0.72rem' }}>
-                  By signing in, you agree to the <a href="#terms" className="text-primary text-decoration-none">Terms</a> and <a href="#privacy" className="text-primary text-decoration-none">Privacy Policy</a>.
+                  By signing in, you agree to the <a href="/?legal=terms" target="_blank" rel="noopener noreferrer" className="text-primary text-decoration-none">Terms</a> and <a href="/?legal=privacy" target="_blank" rel="noopener noreferrer" className="text-primary text-decoration-none">Privacy Policy</a>.
                 </small>
                 <small className="text-muted" style={{ fontSize: '0.7rem' }}>
-                  Powered by <strong>YourHelpdesk SaaS Engine</strong>
+                  Powered by <strong>Kuwy HelpDesk</strong>
                 </small>
               </div>
             </div>
@@ -640,6 +587,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         onClose={() => setShowForgotModal(false)}
         defaultEmail={email}
         companyCode={companyCode}
+        returnFocusRef={forgotTriggerRef}
       />
     </div>
   );

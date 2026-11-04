@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
 import {
   LifeBuoy, Send, Search, CheckCircle2,
@@ -9,7 +9,8 @@ import {
   Menu, X
 } from 'lucide-react';
 import { apiService } from '../services/api';
-import type { Company, Department, Ticket, TicketThread, KbArticle } from '../types';
+import { PortalSignIn } from './PortalSignIn';
+import type { Company, Department, Ticket, TicketAttachment, KbArticle } from '../types';
 
 interface CustomerPortalProps {
   companySlug: string;
@@ -19,17 +20,201 @@ interface CustomerPortalProps {
   onNavigateToSuperAdmin?: () => void;
 }
 
-export const CustomerPortal: React.FC<CustomerPortalProps> = ({
+type CustomerSession = Awaited<ReturnType<typeof apiService.getCustomerSession>>;
+type CustomerProfile = Awaited<ReturnType<typeof apiService.getCustomerProfile>>;
+type PortalCompany = Pick<Company, 'id' | 'name' | 'companyCode' | 'subdomain' | 'primaryColor' | 'logoUrl'>;
+type ReplyDraft = { text: string; files: File[]; saved?: boolean; threadId?: number; error?: string; notice?: string };
+
+function errorMessage(error: unknown, fallback: string) {
+  const response = (error as { response?: { data?: { error?: unknown; message?: unknown } } })?.response;
+  const message = response?.data?.error || response?.data?.message;
+  if (typeof message === 'string') return message;
+  if ((error as { isAxiosError?: boolean })?.isAxiosError) return fallback;
+  return error instanceof Error ? error.message : fallback;
+}
+
+function formatDate(value?: string) {
+  if (!value) return 'Not available';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Not available' : date.toLocaleString();
+}
+
+function verifiedProfile(value: CustomerProfile, email: string) {
+  if (!value || ![value.firstName, value.lastName, value.email, value.phone, value.organizationName, value.timeZone, value.language].every(field => typeof field === 'string')
+    || value.email.trim().toLowerCase() !== email.trim().toLowerCase()
+    || !value.notifications || ![value.notifications.replies, value.notifications.resolved, value.notifications.surveys].every(field => typeof field === 'boolean')) {
+    throw new Error('The profile response could not be verified for your signed-in account. Please retry.');
+  }
+  return value;
+}
+
+const CustomerProfileForm: React.FC<{
+  companySlug: string; customerEmail: string; active: boolean; disabled: boolean; onNameChange: (name: string) => void;
+  sessionGeneration: React.RefObject<number>;
+}> = ({ companySlug, customerEmail, active, disabled, onNameChange, sessionGeneration }) => {
+  const [profile, setProfile] = useState<CustomerProfile | null>(null);
+  const [draft, setDraft] = useState<CustomerProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const mounted = useRef(false);
+  const saveBusy = useRef(false);
+  const dirty = profile !== null && draft !== null && JSON.stringify(profile) !== JSON.stringify(draft);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!active || profile) return;
+    let cancelled = false;
+    const generation = sessionGeneration.current;
+    setLoading(true);
+    setError(null);
+    apiService.getCustomerProfile(companySlug).then(value => {
+      if (cancelled || generation !== sessionGeneration.current) return;
+      const current = verifiedProfile(value, customerEmail);
+      setProfile(current);
+      setDraft(current);
+      setLoading(false);
+      onNameChange(`${current.firstName} ${current.lastName}`.trim());
+    }).catch(failure => {
+      if (!cancelled && generation === sessionGeneration.current) {
+        setError(errorMessage(failure, 'Unable to load your profile. Please retry.'));
+        setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [active, companySlug, customerEmail, profile, retry, onNameChange, sessionGeneration]);
+
+  const updateDraft = (patch: Partial<Omit<CustomerProfile, 'email'>>) => {
+    setDraft(current => current ? { ...current, ...patch } : current);
+    setError(null);
+    setSaved(false);
+  };
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!active || disabled || !draft || !dirty || saveBusy.current) return;
+    const generation = sessionGeneration.current;
+    const currentSession = () => mounted.current && generation === sessionGeneration.current;
+    saveBusy.current = true;
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+    const { firstName, lastName, phone, organizationName, timeZone, language, notifications } = draft;
+    try {
+      const value = await apiService.updateCustomerProfile(companySlug, { firstName, lastName, phone, organizationName, timeZone, language, notifications });
+      if (!currentSession()) return;
+      const current = verifiedProfile(value, customerEmail);
+      setProfile(current);
+      setDraft(current);
+      onNameChange(`${current.firstName} ${current.lastName}`.trim());
+      setSaved(true);
+    } catch (failure) {
+      if (currentSession()) setError(`${errorMessage(failure, 'Unable to save your profile.')} Your unsaved changes have been kept.`);
+    } finally {
+      if (currentSession()) { saveBusy.current = false; setSaving(false); }
+    }
+  };
+
+  return (
+    <form onSubmit={save} className="mb-4" aria-label="Customer profile" aria-busy={loading || saving}>
+      {loading && <p className="small text-muted" role="status">Loading your profile...</p>}
+      {error && <div className="alert alert-danger small" role="alert">{error}</div>}
+      {!loading && !profile && <button type="button" className="btn btn-sm btn-outline-primary" disabled={disabled} onClick={() => setRetry(value => value + 1)}>Retry Profile</button>}
+      {draft && <>
+        <fieldset disabled={loading || saving || disabled}>
+          <legend className="h6 fw-bold text-dark mb-3">Contact Details</legend>
+          <div className="row g-3 mb-4">
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-first-name" className="form-label small fw-bold text-secondary">First Name *</label>
+              <input id="portal-profile-first-name" name="given-name" type="text" autoComplete="given-name" className="form-control form-control-sm" required minLength={1} maxLength={100} value={draft.firstName} onChange={event => updateDraft({ firstName: event.target.value })} />
+            </div>
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-last-name" className="form-label small fw-bold text-secondary">Last Name (Optional)</label>
+              <input id="portal-profile-last-name" name="family-name" type="text" autoComplete="family-name" className="form-control form-control-sm" minLength={1} maxLength={100} value={draft.lastName} onChange={event => updateDraft({ lastName: event.target.value })} />
+            </div>
+            <div className="col-12">
+              <label htmlFor="portal-profile-email" className="form-label small fw-bold text-secondary">Registered Email (Read-Only)</label>
+              <input id="portal-profile-email" type="email" autoComplete="email" className="form-control form-control-sm bg-light" readOnly value={draft.email} aria-describedby="portal-profile-email-help" />
+              <p id="portal-profile-email-help" className="small text-muted mt-1 mb-0">This verified email identifies your account and tickets. It cannot be changed here.</p>
+            </div>
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-phone" className="form-label small fw-bold text-secondary">Phone Number (Optional)</label>
+              <input id="portal-profile-phone" name="tel" type="tel" autoComplete="tel" className="form-control form-control-sm" minLength={1} maxLength={30} value={draft.phone} onChange={event => updateDraft({ phone: event.target.value })} />
+            </div>
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-organization" className="form-label small fw-bold text-secondary">Organization (Optional)</label>
+              <input id="portal-profile-organization" name="organization" type="text" autoComplete="organization" className="form-control form-control-sm" minLength={1} maxLength={150} value={draft.organizationName} onChange={event => updateDraft({ organizationName: event.target.value })} aria-describedby="portal-profile-organization-help" />
+              <p id="portal-profile-organization-help" className="small text-muted mt-1 mb-0">A contact detail only. This does not change membership or ticket access.</p>
+            </div>
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-time-zone" className="form-label small fw-bold text-secondary">Time Zone *</label>
+              <input id="portal-profile-time-zone" type="text" autoComplete="off" className="form-control form-control-sm" list="portal-profile-time-zones" required minLength={1} maxLength={64} value={draft.timeZone} onChange={event => updateDraft({ timeZone: event.target.value })} aria-describedby="portal-profile-time-zone-help" />
+              <datalist id="portal-profile-time-zones"><option value="UTC" /><option value="Asia/Kolkata" /><option value="Europe/London" /><option value="America/New_York" /></datalist>
+              <p id="portal-profile-time-zone-help" className="small text-muted mt-1 mb-0">Use a time zone such as Asia/Kolkata. This preference is saved; ticket dates still use your browser settings.</p>
+            </div>
+            <div className="col-12 col-sm-6">
+              <label htmlFor="portal-profile-language" className="form-label small fw-bold text-secondary">Language</label>
+              <select id="portal-profile-language" autoComplete="language" className="form-select form-select-sm" value={draft.language} onChange={event => updateDraft({ language: event.target.value })} aria-describedby="portal-profile-language-help"><option value="en">English</option></select>
+              <p id="portal-profile-language-help" className="small text-muted mt-1 mb-0">English is currently the only supported portal language.</p>
+            </div>
+          </div>
+        </fieldset>
+        <fieldset disabled={loading || saving || disabled} className="bg-light p-3 rounded-3 mb-3" aria-describedby="portal-profile-notifications-help">
+          <legend className="h6 fw-bold text-dark">Communication Preferences</legend>
+          <p id="portal-profile-notifications-help" className="small text-muted">These choices are saved to your profile. Delivery depends on the support team's configured notifications; not all notification types are available.</p>
+          {(['replies', 'resolved', 'surveys'] as const).map(choice => <div className="form-check mb-2" key={choice}>
+            <input id={`portal-profile-${choice}`} className="form-check-input" type="checkbox" checked={draft.notifications[choice]} onChange={event => updateDraft({ notifications: { ...draft.notifications, [choice]: event.target.checked } })} />
+            <label className="form-check-label small text-dark" htmlFor={`portal-profile-${choice}`}>{choice === 'replies' ? 'Ticket reply emails' : choice === 'resolved' ? 'Ticket resolution emails' : 'Customer satisfaction surveys'}</label>
+          </div>)}
+        </fieldset>
+        {saved && <p className="small text-success" role="status">Profile and communication preferences saved.</p>}
+        {dirty && <p className="small text-muted">Unsaved changes stay here when you switch portal sections. Reloading or signing out clears them.</p>}
+        <div className="d-flex flex-wrap gap-2">
+          <button type="submit" className="btn btn-primary btn-sm px-4 fw-semibold" disabled={loading || saving || disabled || !dirty}>{saving ? 'Saving Profile...' : 'Save Profile Preferences'}</button>
+          <button type="button" className="btn btn-outline-secondary btn-sm" disabled={loading || saving || disabled || !dirty} onClick={() => { setDraft(profile); setError(null); setSaved(false); }}>Discard Changes</button>
+        </div>
+      </>}
+    </form>
+  );
+};
+
+// A tenant switch unmounts every personal view and draft before its next session check.
+export const CustomerPortal: React.FC<CustomerPortalProps> = props => <CustomerPortalContent key={props.companySlug} {...props} />;
+
+const CustomerPortalContent: React.FC<CustomerPortalProps> = ({
   companySlug,
   subView,
   onNavigate,
   onNavigateToAdmin,
   onNavigateToSuperAdmin,
 }) => {
-  const [company, setCompany] = useState<Company | null>(null);
+  const [company, setCompany] = useState<PortalCompany | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
+  const [portalError, setPortalError] = useState<string | null>(null);
   const [logoFailed, setLogoFailed] = useState(false);
+  const mounted = useRef(false);
+  const sessionGeneration = useRef(0);
+  const portalRequest = useRef(0);
+  const kbRequest = useRef(0);
+  const ticketRequest = useRef(0);
+  const detailRequest = useRef(0);
+  const authBusy = useRef(false);
+  const submitBusy = useRef(false);
+  const replyBusy = useRef(false);
+  const actionBusy = useRef(false);
+  const signOutBusy = useRef(false);
+  const csatBusy = useRef(false);
+  const exportBusy = useRef(false);
+  const authDialog = useRef<HTMLDialogElement>(null);
+  const authReturnFocus = useRef<HTMLElement | null>(null);
+  const mainContent = useRef<HTMLElement>(null);
   const [portalMetadata, setPortalMetadata] = useState<{
     supportEmail?: string;
     supportPhone?: string;
@@ -37,20 +222,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     announcementBanner?: string;
   }>({});
 
-  // Customer Authentication State (Screen 10)
-  const [customerEmail, setCustomerEmail] = useState<string>(() => {
-    return localStorage.getItem('kuwy_cust_email') || '';
-  });
-  const [customerName, setCustomerName] = useState<string>(() => {
-    return localStorage.getItem('kuwy_cust_name') || '';
-  });
-  const [customerPhone, setCustomerPhone] = useState<string>('+91 98765 43210');
-  const [customerOrg, setCustomerOrg] = useState<string>('Apex Auto Dealers Ltd');
-
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return !!localStorage.getItem('kuwy_cust_email') && !!localStorage.getItem('kuwy_cust_token');
-  });
-
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [sessionStatus, setSessionStatus] = useState<'checking' | 'authenticated' | 'anonymous' | 'error'>('checking');
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const isAuthenticated = sessionStatus === 'authenticated';
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -58,8 +235,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [otpNotice, setOtpNotice] = useState<string | null>(null);
-  const [otpCountdown, setOtpCountdown] = useState<number>(60);
-  const [isRequestingOtp, setIsRequestingOtp] = useState<boolean>(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpCountdown, setOtpCountdown] = useState(0);
+  const [authPending, setAuthPending] = useState<'request' | 'verify' | null>(null);
 
   // Active View Tab: 'home' | 'submit' | 'tickets' | 'ticket-detail' | 'kb' | 'article' | 'profile'
   const [activeTab, setActiveTab] = useState<'home' | 'submit' | 'tickets' | 'ticket-detail' | 'kb' | 'article' | 'profile'>(() => {
@@ -72,9 +250,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   useEffect(() => {
     if (subView === 'ticket') {
       setActiveTab('submit');
-      setSubmitSuccess(null);
     } else if (subView === 'ticketstatus') {
-      setActiveTab('tickets');
+      setActiveTab(current => current === 'ticket-detail' ? current : 'tickets');
     } else if (subView === 'home') {
       setActiveTab('home');
     }
@@ -90,6 +267,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   // Knowledge Base State (Screen 14)
   const [kbArticles, setKbArticles] = useState<KbArticle[]>([]);
+  const [kbLoading, setKbLoading] = useState(true);
+  const [kbError, setKbError] = useState<string | null>(null);
+  const [articleError, setArticleError] = useState<string | null>(null);
+  const [votingArticle, setVotingArticle] = useState<number | null>(null);
   const [selectedArticle, setSelectedArticle] = useState<KbArticle | null>(null);
   const [selectedKbCategory, setSelectedKbCategory] = useState<string | null>(null);
   const [articleVoted, setArticleVoted] = useState<{ [id: number]: 'yes' | 'no' }>({});
@@ -97,334 +278,542 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   // Submit Ticket Form State (Screen 11)
   const [subject, setSubject] = useState('');
-  const [deptId, setDeptId] = useState<number>(1);
+  const [deptId, setDeptId] = useState<number | ''>('');
   const [priority, setPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('MEDIUM');
   const [description, setDescription] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [honeypot, setHoneypot] = useState('');
-  const [agreedToPrivacy, setAgreedToPrivacy] = useState(true);
+  const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<Ticket | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // My Tickets State (Screen 12)
   const [myTickets, setMyTickets] = useState<Ticket[]>([]);
-  const [ticketFilter, setTicketFilter] = useState<'ALL' | 'OPEN' | 'WAITING' | 'RESOLVED' | 'CLOSED'>('ALL');
-  const [ticketSearchTerm, setTicketSearchTerm] = useState('');
+  const [ticketQuery, setTicketQuery] = useState({ page: 0, q: '', status: 'ALL' });
+  const ticketFilter = ticketQuery.status;
+  const ticketSearchTerm = ticketQuery.q;
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [ticketPage, setTicketPage] = useState({ number: 0, size: 25, totalElements: 0, totalPages: 0 });
+  const [allTicketTotal, setAllTicketTotal] = useState<number | null>(null);
+  const [ticketRevision, setTicketRevision] = useState(0);
 
   // Ticket Detail & Conversation View State (Screen 13)
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [ticketThreads, setTicketThreads] = useState<TicketThread[]>([]);
-  const [customerReplyText, setCustomerReplyText] = useState('');
+  const [selectedTicketNumber, setSelectedTicketNumber] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [ticketActionError, setTicketActionError] = useState<string | null>(null);
+  const [isUpdatingTicket, setIsUpdatingTicket] = useState(false);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, ReplyDraft>>({});
+  const replyDraft = selectedTicketNumber ? replyDrafts[selectedTicketNumber] : undefined;
+  const customerReplyText = replyDraft?.text || '';
+  const ticketThreads = selectedTicket?.threads || [];
   const [isReplying, setIsReplying] = useState(false);
+  const [downloadingAttachment, setDownloadingAttachment] = useState<number | null>(null);
 
   // CSAT Rating State
-  const [csatRating, setCsatRating] = useState<number>(5);
+  const [csatRating, setCsatRating] = useState(0);
   const [csatComment, setCsatComment] = useState<string>('');
   const [csatSubmitted, setCsatSubmitted] = useState<boolean>(false);
+  const [csatError, setCsatError] = useState<string | null>(null);
+  const [isSubmittingCsat, setIsSubmittingCsat] = useState(false);
 
-  // Customer Profile & Privacy Preferences (Screen 15)
-  const [notifReply, setNotifReply] = useState(true);
-  const [notifResolved, setNotifResolved] = useState(true);
-  const [notifCsat, setNotifCsat] = useState(true);
-  const [profileSaved, setProfileSaved] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const isCurrentSession = (generation: number) => mounted.current && generation === sessionGeneration.current;
+
+  const clearPersonalState = () => {
+    sessionGeneration.current += 1;
+    ticketRequest.current += 1;
+    detailRequest.current += 1;
+    authBusy.current = submitBusy.current = replyBusy.current = actionBusy.current = signOutBusy.current = csatBusy.current = exportBusy.current = false;
+    setCustomerEmail('');
+    setCustomerName('');
+    setSessionStatus('anonymous');
+    setShowAuthModal(false);
+    setShowUserMenu(false);
+    setMobileMenuOpen(false);
+    setAuthStep('input');
+    setAuthEmailInput('');
+    setOtpCode('');
+    setOtpNotice(null);
+    setOtpError(null);
+    setOtpCountdown(0);
+    setAuthPending(null);
+    setIsSigningOut(false);
+    setSubject('');
+    setDescription('');
+    setAttachments([]);
+    setDeptId('');
+    setPriority('MEDIUM');
+    setHoneypot('');
+    setAgreedToPrivacy(false);
+    setSubmitSuccess(null);
+    setSubmitError(null);
+    setIsSubmitting(false);
+    setMyTickets([]);
+    setAllTicketTotal(null);
+    setTicketQuery({ page: 0, q: '', status: 'ALL' });
+    setTicketPage({ number: 0, size: 25, totalElements: 0, totalPages: 0 });
+    setTicketsError(null);
+    setTicketsLoading(false);
+    setSelectedTicket(null);
+    setSelectedTicketNumber(null);
+    setDetailLoading(false);
+    setDetailError(null);
+    setTicketActionError(null);
+    setReplyDrafts({});
+    setIsReplying(false);
+    setIsUpdatingTicket(false);
+    setDownloadingAttachment(null);
+    setCsatRating(0);
+    setCsatComment('');
+    setCsatSubmitted(false);
+    setCsatError(null);
+    setIsSubmittingCsat(false);
+    setIsExporting(false);
+    setExportError(null);
+    setArticleVoted({});
+    setArticleError(null);
+    setVotingArticle(null);
+    setCopiedLink(false);
+  };
+
+  const acceptSession = (session: CustomerSession) => {
+    if (session.browserSession !== true || !session.email?.trim() || !session.companyId || !session.csrfToken || (company && session.companyId !== company.id)) {
+      throw new Error('The customer session could not be verified for this portal. Please sign in again.');
+    }
+    setCustomerEmail(session.email);
+    setCustomerName(session.name || '');
+    setTicketsLoading(true);
+    setSessionStatus('authenticated');
+    setSessionError(null);
+  };
+
+  const checkSession = async () => {
+    const generation = ++sessionGeneration.current;
+    setSessionStatus('checking');
+    setSessionError(null);
+    try {
+      const session = await apiService.getCustomerSession(companySlug);
+      if (isCurrentSession(generation)) acceptSession(session);
+    } catch (error) {
+      if (!isCurrentSession(generation)) return;
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      setSessionStatus(status === 401 ? 'anonymous' : 'error');
+      if (status !== 401) setSessionError(errorMessage(error, 'Unable to check your customer session. Please retry.'));
+    }
+  };
 
   // Load Portal Info & KB
   useEffect(() => {
-    loadPortalData();
-    loadKbArticles();
+    mounted.current = true;
+    void loadPortalData();
+    void loadKbArticles();
+    void checkSession();
+    const handleSessionExpired = (event: Event) => {
+      if ((event as CustomEvent).detail !== 'CUSTOMER') return;
+      clearPersonalState();
+      setSessionError('Your customer session has expired. Please sign in again.');
+    };
+    window.addEventListener('kuwy-session-expired', handleSessionExpired);
+    return () => {
+      mounted.current = false;
+      sessionGeneration.current += 1;
+      portalRequest.current += 1;
+      kbRequest.current += 1;
+      window.removeEventListener('kuwy-session-expired', handleSessionExpired);
+    };
   }, [companySlug]);
 
-  // Load Customer Tickets when authenticated
   useEffect(() => {
-    if (isAuthenticated && customerEmail) {
-      loadCustomerTickets();
-    }
-  }, [isAuthenticated, customerEmail, companySlug]);
+    if (!isAuthenticated) return;
+    const request = ++ticketRequest.current;
+    const generation = sessionGeneration.current;
+    setTicketsLoading(true);
+    setTicketsError(null);
+    const timer = window.setTimeout(async () => {
+      try {
+        const page = await apiService.getCustomerPortalTicketPage(companySlug, {
+          page: ticketQuery.page, size: 25,
+          q: ticketQuery.q.trim() || undefined,
+          status: ticketQuery.status === 'ALL' ? undefined : ticketQuery.status,
+        });
+        if (!isCurrentSession(generation) || request !== ticketRequest.current) return;
+        if (!Array.isArray(page.content)) throw new Error('The ticket list response was incomplete. Please retry.');
+        if (page.number > 0 && page.number >= Math.max(1, page.totalPages)) {
+          ticketRequest.current += 1;
+          setTicketQuery(current => ({ ...current, page: Math.max(0, page.totalPages - 1) }));
+          return;
+        }
+        setMyTickets(page.content);
+        setTicketPage(page);
+      } catch (error) {
+        if (isCurrentSession(generation) && request === ticketRequest.current) {
+          setTicketsError(errorMessage(error, 'Unable to load your tickets. Please retry.'));
+        }
+      } finally {
+        if (isCurrentSession(generation) && request === ticketRequest.current) setTicketsLoading(false);
+      }
+    }, 200);
+    return () => { window.clearTimeout(timer); ticketRequest.current += 1; };
+  }, [isAuthenticated, companySlug, ticketQuery, ticketRevision]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    const generation = sessionGeneration.current;
+    setAllTicketTotal(null);
+    apiService.getCustomerPortalTicketPage(companySlug, { page: 0, size: 1 })
+      .then(page => { if (!cancelled && isCurrentSession(generation)) setAllTicketTotal(page.totalElements); })
+      .catch(() => { /* The ticket list exposes its own retryable error; do not invent a count. */ });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, companySlug, ticketRevision]);
 
   // OTP Countdown Timer
   useEffect(() => {
-    let timer: any = null;
-    if (authStep === 'otp' && otpCountdown > 0) {
-      timer = setInterval(() => setOtpCountdown(c => c - 1), 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
+    if (authStep !== 'otp' || otpCountdown <= 0) return;
+    const timer = window.setTimeout(() => setOtpCountdown(count => Math.max(0, count - 1)), 1000);
+    return () => window.clearTimeout(timer);
   }, [authStep, otpCountdown]);
 
+  useEffect(() => {
+    const dialog = authDialog.current;
+    if (!showAuthModal || !dialog) return;
+    const previousFocus = authReturnFocus.current;
+    dialog.showModal();
+    dialog.querySelector<HTMLInputElement>('input')?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+      window.requestAnimationFrame(() => {
+        if (!mounted.current || dialog.open) return;
+        if (previousFocus?.isConnected && previousFocus.getClientRects().length && !previousFocus.matches(':disabled')) previousFocus.focus();
+        else mainContent.current?.focus();
+      });
+    };
+  }, [showAuthModal]);
+
   const loadPortalData = async () => {
+    const request = ++portalRequest.current;
     setLoading(true);
+    setPortalError(null);
     try {
       const data = await apiService.getPortalInfo(companySlug);
+      if (!mounted.current || request !== portalRequest.current) return;
+      if (!data.companyId || !data.companyName) throw new Error('This support portal is unavailable.');
       setCompany({
         id: data.companyId,
         name: data.companyName,
         companyCode: data.companyCode,
         subdomain: data.subdomain,
         primaryColor: data.primaryColor || '#0d6efd',
-        status: 'ACTIVE',
-        planName: 'ENTERPRISE',
         logoUrl: data.logoUrl
       });
       setDepartments(data.departments || []);
       setPortalMetadata({
-        supportEmail: (data as any).supportEmail || `support@${companySlug}.kuwy.in`,
-        supportPhone: (data as any).supportPhone || '+91 44 6612 8000',
-        businessHours: (data as any).businessHours || 'Mon - Sat: 09:00 AM - 07:00 PM IST',
-        announcementBanner: (data as any).announcementBanner || 'Helpdesk Advisory: All systems operating normally. Average first response under 15 minutes.'
+        supportEmail: data.supportEmail || undefined,
+        supportPhone: data.supportPhone || undefined,
+        businessHours: data.businessHours || undefined,
+        announcementBanner: data.announcementBanner || undefined,
       });
       if (data.departments && data.departments.length > 0) {
         setDeptId(data.departments[0].id);
       }
-    } catch {
-      setCompany({
-        id: 1,
-        name: companySlug.toUpperCase() + ' Customer Support',
-        companyCode: companySlug.toUpperCase(),
-        subdomain: companySlug,
-        primaryColor: '#0d6efd',
-        status: 'ACTIVE',
-        planName: 'PRO'
-      });
+    } catch (error) {
+      if (!mounted.current || request !== portalRequest.current) return;
+      setPortalError(errorMessage(error, 'Unable to load this support portal. Please retry.'));
     } finally {
-      setLoading(false);
+      if (mounted.current && request === portalRequest.current) setLoading(false);
     }
   };
 
   const loadKbArticles = async (query?: string) => {
+    const request = ++kbRequest.current;
+    setKbLoading(true);
+    setKbError(null);
     try {
       const articles = await apiService.getPublicKbArticles(companySlug, query);
+      if (!mounted.current || request !== kbRequest.current) return;
       setKbArticles(articles);
-    } catch {
-      setKbArticles([]);
+    } catch (error) {
+      if (mounted.current && request === kbRequest.current) setKbError(errorMessage(error, 'Unable to load help articles. Please retry.'));
+    } finally {
+      if (mounted.current && request === kbRequest.current) setKbLoading(false);
     }
   };
 
-  const loadCustomerTickets = async () => {
-    try {
-      const tickets = await apiService.getCustomerPortalTickets(companySlug, customerEmail);
-      setMyTickets(tickets);
-    } catch (err: any) {
-      if (err.response?.status === 401) {
-        setIsAuthenticated(false);
-        localStorage.removeItem('kuwy_cust_token');
-      }
-      setMyTickets([]);
-    }
+  const loadCustomerTickets = () => {
+    ticketRequest.current += 1;
+    setTicketsLoading(true);
+    setTicketRevision(revision => revision + 1);
   };
 
-  // Auth Handlers (Screen 10)
-  const handleRequestOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!authEmailInput.trim()) return;
+  const openAuthModal = (event: React.MouseEvent<HTMLButtonElement>) => {
+    authReturnFocus.current = event.currentTarget;
+    setShowAuthModal(true);
+  };
 
-    setIsRequestingOtp(true);
+  const openTicketForm = () => {
+    if (submitSuccess && attachments.length === 0 && !submitBusy.current) {
+      setSubmitSuccess(null);
+      setSubmitError(null);
+      setSubject('');
+      setDescription('');
+      setAgreedToPrivacy(false);
+    }
+    setActiveTab('submit');
+    setShowUserMenu(false);
+    setMobileMenuOpen(false);
+    onNavigate?.('/' + companySlug + '/ticket');
+  };
+
+  const updateTicketQuery = (patch: Partial<typeof ticketQuery>) => {
+    ticketRequest.current += 1;
+    setTicketsLoading(true);
+    setTicketsError(null);
+    setTicketQuery(current => ({ ...current, ...patch }));
+  };
+
+  const handleRequestOtp = async () => {
+    if (authBusy.current || !authEmailInput.trim() || (authStep === 'otp' && otpCountdown > 0)) return;
+    authBusy.current = true;
+    const generation = sessionGeneration.current;
+    setAuthPending('request');
     setOtpNotice(null);
+    setOtpError(null);
     try {
       const res = await apiService.requestPortalOtp(companySlug, authEmailInput.trim());
+      if (!isCurrentSession(generation)) return;
+      setAuthEmailInput(authEmailInput.trim());
       setAuthStep('otp');
+      setOtpCode('');
       setOtpCountdown(60);
-      setOtpNotice(res.message || 'One-Time sign-in code dispatched to your email.');
-    } catch (err: any) {
-      setOtpNotice(err.response?.data?.error || 'Failed to dispatch code. Please try again.');
+      setOtpNotice(res.message || 'Your sign-in code request has been queued. Check your inbox and spam folder.');
+    } catch (error) {
+      if (isCurrentSession(generation)) setOtpError(errorMessage(error, 'Unable to request a sign-in code. Please try again.'));
     } finally {
-      setIsRequestingOtp(false);
+      if (isCurrentSession(generation)) { authBusy.current = false; setAuthPending(null); }
     }
   };
 
-  const handleQuickCustomerLogin = async (email: string, name: string) => {
-    try {
-      const res = await apiService.demoCustomerLogin(companySlug, email);
-      const token = res.token || ('cust_token_' + Date.now());
-      localStorage.setItem('kuwy_cust_email', email);
-      localStorage.setItem('kuwy_cust_name', name);
-      localStorage.setItem('kuwy_cust_token', token);
-      setCustomerEmail(email);
-      setCustomerName(name);
-      setIsAuthenticated(true);
-      setShowAuthModal(false);
-      setTimeout(() => loadCustomerTickets(), 50);
-    } catch {
-      localStorage.setItem('kuwy_cust_email', email);
-      localStorage.setItem('kuwy_cust_name', name);
-      localStorage.setItem('kuwy_cust_token', 'cust_demo_' + Date.now());
-      setCustomerEmail(email);
-      setCustomerName(name);
-      setIsAuthenticated(true);
-      setShowAuthModal(false);
-      loadCustomerTickets();
-    }
-  };
-
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleVerifyOtp = async () => {
+    if (authBusy.current || !/^\d{6}$/.test(otpCode)) return;
+    authBusy.current = true;
+    const generation = sessionGeneration.current;
+    setAuthPending('verify');
+    setOtpError(null);
     try {
       const res = await apiService.verifyPortalOtp(companySlug, authEmailInput.trim(), otpCode.trim());
-      const verifiedEmail = res.email || authEmailInput.trim();
-      const verifiedName = customerName || authEmailInput.split('@')[0];
-      localStorage.setItem('kuwy_cust_email', verifiedEmail);
-      localStorage.setItem('kuwy_cust_name', verifiedName);
-      localStorage.setItem('kuwy_cust_token', res.token || 'cust_token');
-
-      setCustomerEmail(verifiedEmail);
-      setCustomerName(verifiedName);
-      setIsAuthenticated(true);
+      if (!isCurrentSession(generation)) return;
+      acceptSession(res);
       setShowAuthModal(false);
       setAuthStep('input');
       setOtpCode('');
       setOtpNotice(null);
-      loadCustomerTickets();
-    } catch (err: any) {
-      setOtpNotice(err.response?.data?.error || 'Invalid OTP code. Use test code 123456');
+      setAuthEmailInput('');
+    } catch (error) {
+      if (isCurrentSession(generation)) setOtpError(errorMessage(error, 'That code could not be verified. Check the code or request a new one.'));
+    } finally {
+      if (isCurrentSession(generation)) { authBusy.current = false; setAuthPending(null); }
     }
   };
 
-  const handleOAuthLogin = async (provider: 'Google' | 'Microsoft') => {
-    const demoEmail = provider === 'Google' ? 'priya.customer@gmail.com' : 'loan.applicant@gmail.com';
-    const demoName = provider === 'Google' ? 'Priya Sharma' : 'Rajesh Kannan';
+  const handleSignOut = async () => {
+    if (!isAuthenticated || signOutBusy.current) return;
+    const generation = sessionGeneration.current;
+    signOutBusy.current = true;
+    setIsSigningOut(true);
+    setSessionError(null);
     try {
-      const res = await apiService.demoCustomerLogin(companySlug, demoEmail);
-      const token = res.token || ('cust_token_' + Date.now());
-      localStorage.setItem('kuwy_cust_email', demoEmail);
-      localStorage.setItem('kuwy_cust_name', demoName);
-      localStorage.setItem('kuwy_cust_token', token);
-      setCustomerEmail(demoEmail);
-      setCustomerName(demoName);
-      setIsAuthenticated(true);
-      setShowAuthModal(false);
-      setTimeout(() => loadCustomerTickets(), 50);
-    } catch {
-      localStorage.setItem('kuwy_cust_email', demoEmail);
-      localStorage.setItem('kuwy_cust_name', demoName);
-      localStorage.setItem('kuwy_cust_token', 'cust_oauth_' + Date.now());
-      setCustomerEmail(demoEmail);
-      setCustomerName(demoName);
-      setIsAuthenticated(true);
-      setShowAuthModal(false);
-      loadCustomerTickets();
+      await apiService.logoutCustomer(companySlug);
+      if (isCurrentSession(generation)) clearPersonalState();
+    } catch (error) {
+      if (isCurrentSession(generation)) setSessionError(`Sign-out failed. ${errorMessage(error, 'Please retry. Your session has not been cleared.')}`);
+    } finally {
+      if (isCurrentSession(generation)) { signOutBusy.current = false; setIsSigningOut(false); }
     }
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem('kuwy_cust_email');
-    localStorage.removeItem('kuwy_cust_name');
-    localStorage.removeItem('kuwy_cust_token');
-    setIsAuthenticated(false);
-    setCustomerEmail('');
-    setCustomerName('');
-    setMyTickets([]);
-    setShowUserMenu(false);
+  const validateFiles = (files: File[]) => {
+    if (files.some(file => !/\.(png|pdf|jpe?g|txt)$/i.test(file.name) || file.size > 25 * 1024 * 1024)) {
+      throw new Error('Choose PNG, PDF, JPG, JPEG or TXT files of 25 MB or less each. Your selected files have been kept.');
+    }
   };
 
-  // Submit Ticket Handler (Screen 11)
-  const handleSubmitTicket = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!subject.trim() || !description.trim()) return;
+  // Track each successful file separately so a retry never re-creates a ticket or reply.
+  const uploadFiles = async (ticketNumber: string, files: File[], generation: number, onUploaded: (file: File) => void, threadId?: number) => {
+    for (const file of files) {
+      if (!isCurrentSession(generation)) return;
+      const uploaded = await apiService.uploadCustomerAttachments(companySlug, ticketNumber, [file], threadId);
+      if (!isCurrentSession(generation)) return;
+      if (!Array.isArray(uploaded) || uploaded.length !== 1 || !uploaded[0].id) throw new Error('The attachment upload was not confirmed. The selected file has been kept.');
+      onUploaded(file);
+    }
+  };
 
+  const handleSubmitTicket = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (!isAuthenticated || signOutBusy.current || submitBusy.current || !company) return;
+    if (!submitSuccess && (!subject.trim() || !description.trim() || !deptId || !agreedToPrivacy)) return;
+    const generation = sessionGeneration.current;
+    let savedTicket = submitSuccess;
+    submitBusy.current = true;
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
-      const ticket = await apiService.submitPortalTicket(companySlug, {
-        requesterName: customerName,
-        requesterEmail: customerEmail,
-        departmentId: deptId,
-        subject: subject.trim(),
-        description: description.trim(),
-        priority,
-        websiteUrl: honeypot || undefined,
-      });
-
-      setSubmitSuccess(ticket);
-      loadCustomerTickets();
+      validateFiles(attachments);
+      if (!savedTicket) {
+        savedTicket = await apiService.submitPortalTicket(companySlug, {
+          departmentId: deptId, subject: subject.trim(), description: description.trim(),
+          priority, websiteUrl: honeypot || undefined,
+        });
+        if (!isCurrentSession(generation)) return;
+        setSubmitSuccess(savedTicket);
+        loadCustomerTickets();
+      }
+      await uploadFiles(savedTicket.ticketNumber, attachments, generation, file => setAttachments(files => files.filter(item => item !== file)));
+      if (!isCurrentSession(generation)) return;
       setSubject('');
       setDescription('');
-      setAttachments([]);
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to submit ticket. Please verify inputs.');
+      setHoneypot('');
+    } catch (error) {
+      if (!isCurrentSession(generation)) return;
+      setSubmitError(savedTicket
+        ? `Ticket #${savedTicket.ticketNumber} was saved, but some attachments were not uploaded. Retry the remaining uploads below; do not submit the ticket again. ${errorMessage(error, 'Upload failed.')}`
+        : errorMessage(error, 'Unable to submit your ticket. Your text and selected files have been kept.'));
     } finally {
-      setIsSubmitting(false);
+      if (isCurrentSession(generation)) { submitBusy.current = false; setIsSubmitting(false); }
     }
   };
 
-  // Open Ticket Detail (Screen 13)
-  const handleOpenTicketDetail = async (ticket: Ticket) => {
-    setSelectedTicket(ticket);
+  const handleOpenTicketDetail = async (ticket: Pick<Ticket, 'ticketNumber'>) => {
+    if (!isAuthenticated || signOutBusy.current) return;
+    const generation = sessionGeneration.current;
+    const request = ++detailRequest.current;
+    setSelectedTicketNumber(ticket.ticketNumber);
+    setSelectedTicket(null);
+    setDetailLoading(true);
+    setDetailError(null);
+    setTicketActionError(null);
     setActiveTab('ticket-detail');
     setCsatSubmitted(false);
+    setCsatRating(0);
+    setCsatComment('');
+    setCsatError(null);
     try {
       const detail = await apiService.getCustomerPortalTicketDetail(companySlug, ticket.ticketNumber, customerEmail);
-      setTicketThreads(detail.threads || []);
-      setSelectedTicket(detail);
-    } catch {
-      // Fallback
-    }
-  };
-
-  // Reply Handler (Screen 13)
-  const handleSendReply = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedTicket || !customerReplyText.trim()) return;
-
-    setIsReplying(true);
-    try {
-      const savedThread = await apiService.sendCustomerPortalReply(
-        companySlug,
-        selectedTicket.ticketNumber,
-        customerEmail,
-        customerReplyText.trim()
-      );
-
-      setTicketThreads(prev => [...prev, savedThread]);
-      setCustomerReplyText('');
-      // Update ticket status locally to OPEN
-      setSelectedTicket(prev => prev ? { ...prev, status: 'OPEN' } : null);
-      loadCustomerTickets();
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to send reply.');
+      if (!Array.isArray(detail.threads)) throw new Error('The conversation response was incomplete. Please retry.');
+      if (isCurrentSession(generation) && request === detailRequest.current) setSelectedTicket(detail);
+    } catch (error) {
+      if (isCurrentSession(generation) && request === detailRequest.current) setDetailError(errorMessage(error, 'Unable to load this conversation. Please retry.'));
     } finally {
-      setIsReplying(false);
+      if (isCurrentSession(generation) && request === detailRequest.current) setDetailLoading(false);
     }
   };
 
-  // Close / Mark as Resolved Handler (Screen 13)
-  const handleCloseTicket = async () => {
-    if (!selectedTicket) return;
+  const updateReplyDraft = (ticketNumber: string, patch: Partial<ReplyDraft>) => {
+    setReplyDrafts(drafts => ({ ...drafts, [ticketNumber]: { ...(drafts[ticketNumber] ?? { text: '', files: [] }), ...patch } }));
+  };
+
+  const handleSendReply = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!isAuthenticated || signOutBusy.current || !selectedTicket || replyBusy.current || actionBusy.current || !customerReplyText.trim()) return;
+    const generation = sessionGeneration.current;
+    const request = detailRequest.current;
+    const number = selectedTicket.ticketNumber;
+    const files = replyDraft?.files || [];
+    let saved = replyDraft?.saved || false;
+    let threadId = replyDraft?.threadId;
+    replyBusy.current = true;
+    setIsReplying(true);
+    updateReplyDraft(number, { error: undefined, notice: undefined });
     try {
-      const updated = await apiService.closeTicketByCustomer(companySlug, selectedTicket.ticketNumber, customerEmail);
-      setSelectedTicket(updated);
+      validateFiles(files);
+      if (!saved) {
+        const updated = await apiService.sendCustomerPortalReply(companySlug, number, customerEmail, customerReplyText.trim());
+        if (!isCurrentSession(generation)) return;
+        saved = true;
+        const previousIds = new Set(ticketThreads.map(thread => thread.id));
+        const added = updated.threads?.filter(thread => thread.senderType === 'CUSTOMER' && thread.threadType === 'CUSTOMER_REPLY' && !previousIds.has(thread.id)) || [];
+        threadId = added.length === 1 ? added[0].id : undefined;
+        updateReplyDraft(number, { saved: true, threadId });
+        if (request === detailRequest.current) setSelectedTicket(updated);
+        loadCustomerTickets();
+      }
+      await uploadFiles(number, files, generation, file => {
+        setReplyDrafts(drafts => ({ ...drafts, [number]: { ...drafts[number], files: drafts[number].files.filter(item => item !== file) } }));
+      }, threadId);
+      if (!isCurrentSession(generation)) return;
+      updateReplyDraft(number, { text: '', files: [], saved: false, threadId: undefined, notice: files.length ? 'Reply saved and attachments uploaded to this ticket.' : 'Reply saved.' });
+      if (files.length && request === detailRequest.current) {
+        try {
+          const detail = await apiService.getCustomerPortalTicketDetail(companySlug, number, customerEmail);
+          if (isCurrentSession(generation) && request === detailRequest.current) setSelectedTicket(detail);
+        } catch (error) {
+          if (isCurrentSession(generation) && request === detailRequest.current) setTicketActionError(`Your reply and uploads were saved, but the conversation could not refresh. ${errorMessage(error, 'Reload the conversation to see the latest attachments.')}`);
+        }
+      }
+    } catch (error) {
+      if (isCurrentSession(generation)) updateReplyDraft(number, { error: saved
+        ? `Your reply was saved, but some attachments were not uploaded. Retry uploads only; the reply will not be sent again. ${errorMessage(error, 'Upload failed.')}`
+        : errorMessage(error, 'Unable to send your reply. Your text and selected files have been kept.') });
+    } finally {
+      if (isCurrentSession(generation)) { replyBusy.current = false; setIsReplying(false); }
+    }
+  };
+
+  const handleTicketStatus = async (reopen: boolean) => {
+    if (!isAuthenticated || signOutBusy.current || !selectedTicket || actionBusy.current || replyBusy.current) return;
+    const generation = sessionGeneration.current;
+    const request = detailRequest.current;
+    actionBusy.current = true;
+    setIsUpdatingTicket(true);
+    setTicketActionError(null);
+    try {
+      const updated = reopen
+        ? await apiService.reopenCustomerPortalTicket(companySlug, selectedTicket.ticketNumber)
+        : await apiService.closeTicketByCustomer(companySlug, selectedTicket.ticketNumber, customerEmail);
+      if (!isCurrentSession(generation)) return;
+      if (request === detailRequest.current) setSelectedTicket(updated);
       loadCustomerTickets();
-    } catch {
-      alert('Failed to resolve ticket.');
+    } catch (error) {
+      if (isCurrentSession(generation) && request === detailRequest.current) setTicketActionError(errorMessage(error, `Unable to ${reopen ? 'reopen' : 'resolve'} this ticket. Please retry.`));
+    } finally {
+      if (isCurrentSession(generation)) { actionBusy.current = false; setIsUpdatingTicket(false); }
     }
   };
 
-  // Reopen Handler (Screen 13)
-  const handleReopenTicket = async () => {
-    if (!selectedTicket) return;
+  const handleSubmitCsat = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!isAuthenticated || signOutBusy.current || !selectedTicket || csatBusy.current || csatRating < 1 || csatRating > 5 || !['RESOLVED', 'CLOSED'].includes(selectedTicket.status)) return;
+    const generation = sessionGeneration.current;
+    const request = detailRequest.current;
+    csatBusy.current = true;
+    setIsSubmittingCsat(true);
+    setCsatError(null);
     try {
-      const updated = await apiService.reopenCustomerPortalTicket(companySlug, selectedTicket.ticketNumber);
-      setSelectedTicket(updated);
-      loadCustomerTickets();
-    } catch {
-      alert('Failed to reopen ticket.');
-    }
-  };
-
-  // CSAT Feedback Handler (Screen 13)
-  const handleSubmitCsat = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedTicket) return;
-    try {
-      await apiService.submitCsat(companySlug, selectedTicket.ticketNumber, csatRating, csatComment);
-      setCsatSubmitted(true);
-    } catch {
-      alert('Failed to submit satisfaction rating.');
+      const result = await apiService.submitCsat(companySlug, selectedTicket.ticketNumber, csatRating, csatComment);
+      if (result.success === false) throw new Error(result.message || 'Your rating could not be saved.');
+      if (isCurrentSession(generation) && request === detailRequest.current) setCsatSubmitted(true);
+    } catch (error) {
+      if (isCurrentSession(generation) && request === detailRequest.current) setCsatError(errorMessage(error, 'Unable to submit your rating. Please retry.'));
+    } finally {
+      if (isCurrentSession(generation)) { csatBusy.current = false; setIsSubmittingCsat(false); }
     }
   };
 
   // KB Voting Handler (Screen 14c)
   const handleVoteArticle = async (articleId: number, helpful: boolean) => {
+    if (votingArticle !== null || articleVoted[articleId]) return;
+    const generation = sessionGeneration.current;
+    setVotingArticle(articleId);
+    setArticleError(null);
     try {
       await apiService.voteKbArticle(companySlug, articleId, helpful);
+      if (!isCurrentSession(generation)) return;
       setArticleVoted(prev => ({ ...prev, [articleId]: helpful ? 'yes' : 'no' }));
       setKbArticles(prev => prev.map(a => {
         if (a.id === articleId) {
@@ -435,47 +824,81 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         }
         return a;
       }));
-    } catch {
-      // Silent catch
+    } catch (error) {
+      if (isCurrentSession(generation)) setArticleError(errorMessage(error, 'Unable to record your article feedback. Please retry.'));
+    } finally {
+      if (isCurrentSession(generation)) setVotingArticle(null);
     }
   };
 
   // Export Data Handler (Screen 15)
   const handleExportData = async () => {
+    if (!isAuthenticated || signOutBusy.current || exportBusy.current) return;
+    const generation = sessionGeneration.current;
+    exportBusy.current = true;
+    setIsExporting(true);
+    setExportError(null);
     try {
       const data = await apiService.exportCustomerData(companySlug, customerEmail);
-      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data, null, 2));
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute('href', dataStr);
-      downloadAnchor.setAttribute('download', `${companySlug}_ticket_history_${customerEmail}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-    } catch {
-      alert('Failed to export ticket history.');
+      if (!data || data.scope !== 'customer' || !Array.isArray(data.tickets)) throw new Error('The ticket export response was incomplete. No export was downloaded.');
+      if (isCurrentSession(generation)) downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `${companySlug}_ticket_history.json`);
+    } catch (error) {
+      if (isCurrentSession(generation)) setExportError(errorMessage(error, 'Unable to export your ticket history. Please retry.'));
+    } finally {
+      if (isCurrentSession(generation)) { exportBusy.current = false; setIsExporting(false); }
     }
   };
 
-  // Filtered tickets
-  const filteredTickets = myTickets.filter(t => {
-    const matchesFilter =
-      ticketFilter === 'ALL' ||
-      (ticketFilter === 'OPEN' && (t.status === 'OPEN' || t.status === 'IN_PROGRESS')) ||
-      (ticketFilter === 'WAITING' && t.status === 'WAITING_ON_CUSTOMER') ||
-      (ticketFilter === 'RESOLVED' && t.status === 'RESOLVED') ||
-      (ticketFilter === 'CLOSED' && t.status === 'CLOSED');
+  const downloadBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
 
-    const matchesSearch =
-      !ticketSearchTerm.trim() ||
-      t.ticketNumber.toLowerCase().includes(ticketSearchTerm.toLowerCase()) ||
-      t.subject.toLowerCase().includes(ticketSearchTerm.toLowerCase());
+  const handleDownloadAttachment = async (attachment: TicketAttachment) => {
+    if (!isAuthenticated || downloadingAttachment !== null || signOutBusy.current) return;
+    const generation = sessionGeneration.current;
+    const request = detailRequest.current;
+    setDownloadingAttachment(attachment.id);
+    setTicketActionError(null);
+    try {
+      const blob = await apiService.downloadCustomerAttachment(companySlug, attachment.id);
+      if (isCurrentSession(generation)) downloadBlob(blob, attachment.fileName);
+    } catch (error) {
+      if (isCurrentSession(generation) && request === detailRequest.current) setTicketActionError(errorMessage(error, 'Unable to download this attachment. Please retry.'));
+    } finally {
+      if (isCurrentSession(generation)) setDownloadingAttachment(null);
+    }
+  };
 
-    return matchesFilter && matchesSearch;
-  });
+  const renderAttachments = (files: TicketAttachment[] = []) => files.length > 0 && (
+    <div className="d-flex flex-wrap gap-2 mt-3" aria-label="Ticket attachments">
+      {files.map(file => <button key={file.id} type="button" className="btn btn-sm btn-light border d-inline-flex align-items-center gap-2 text-start" style={{ maxWidth: '100%' }} disabled={downloadingAttachment !== null || isSigningOut} onClick={() => void handleDownloadAttachment(file)}>
+        <Download size={14} className="flex-shrink-0" aria-hidden="true" />
+        <span style={{ overflowWrap: 'anywhere' }}>{downloadingAttachment === file.id ? 'Downloading...' : file.fileName}</span>
+      </button>)}
+    </div>
+  );
+
+  const renderSignIn = () => <PortalSignIn
+    step={authStep} email={authEmailInput} code={otpCode} notice={otpNotice} error={otpError}
+    countdown={otpCountdown} pending={authPending}
+    onEmailChange={email => { setAuthEmailInput(email); setOtpError(null); }}
+    onCodeChange={code => { setOtpCode(code); setOtpError(null); }}
+    onRequestCode={handleRequestOtp} onVerifyCode={handleVerifyOtp}
+    onChangeEmail={() => { setAuthStep('input'); setOtpCode(''); setOtpNotice(null); setOtpError(null); }}
+  />;
+
+  const visibleArticles = !kbLoading && !kbError ? kbArticles : [];
 
   // Suggested KB articles for deflection on Screen 11
   const suggestedArticles = subject.trim().length > 3
-    ? kbArticles.filter(a =>
+    ? visibleArticles.filter(a =>
       a.title.toLowerCase().includes(subject.toLowerCase()) ||
       a.categoryName.toLowerCase().includes(subject.toLowerCase())
     ).slice(0, 3)
@@ -486,6 +909,18 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   // Dedicated Authentication Barrier for /ticket and /ticketstatus
   const renderAuthBarrier = (target: 'ticket' | 'ticketstatus') => {
     const isTicket = target === 'ticket';
+    if (sessionStatus === 'checking') return (
+      <div className="card border-0 shadow-sm rounded-4 p-4 text-center bg-white mx-auto" style={{ maxWidth: '580px' }} role="status">
+        <span className="spinner-border spinner-border-sm text-primary mx-auto mb-2" aria-hidden="true" />
+        Checking your customer session...
+      </div>
+    );
+    if (sessionStatus === 'error') return (
+      <div className="card border-0 shadow-sm rounded-4 p-4 bg-white mx-auto" style={{ maxWidth: '580px' }}>
+        <p className="text-danger" role="alert">Your customer session could not be checked. Private ticket information is hidden.</p>
+        <button type="button" className="btn btn-outline-primary" onClick={() => void checkSession()}>Retry Session Check</button>
+      </div>
+    );
     return (
       <div className="card border-0 shadow-sm rounded-4 p-3.5 p-sm-4 p-md-5 bg-white mx-auto animate-fade-in my-2 my-md-3 w-100" style={{ maxWidth: '580px' }}>
         <div className="text-center mb-3 mb-md-4">
@@ -497,7 +932,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           </div>
           <div>
             <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-1 mb-2 fw-semibold" style={{ fontSize: '0.72rem' }}>
-              Authentication Required • Access Protected
+              Customer Sign-in Required
             </span>
           </div>
           <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">
@@ -505,163 +940,15 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           </h4>
           <p className="text-muted small mb-0 px-2" style={{ maxWidth: '460px', margin: '0 auto', fontSize: '0.84rem' }}>
             {isTicket
-              ? 'Without sign-in, ticket creation cannot be granted. Whichever email ID you sign in with becomes the locked default "from" email for SLA tracking and notifications.'
-              : 'Without sign-in, access cannot be granted. Sign in with your customer email to view your open requests, SLA countdowns, and engineer replies.'}
+              ? 'Verify your email to submit a support request. Your ticket will be associated with your signed-in email.'
+              : 'Verify your email to view your requests, ticket status, and public support conversations.'}
           </p>
         </div>
 
-        {/* 1. Quick One-Click Demo Logins */}
-        <div className="p-2.5 p-sm-3 rounded-3 bg-light border mb-3 mb-md-4">
-          <div className="d-flex align-items-center justify-content-between mb-2">
-            <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.66rem', letterSpacing: '0.04em' }}>
-              One-Click Demo Customer Access
-            </small>
-            <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.62rem' }}>Instant Sign-in</span>
-          </div>
-          <div className="d-grid gap-2">
-            <button
-              type="button"
-              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-2.5 px-sm-3 rounded-3 hover-shadow transition-all"
-              onClick={() => handleQuickCustomerLogin('loan.applicant@gmail.com', 'Rajesh Kannan')}
-            >
-              <div className="text-truncate me-2">
-                <div className="fw-bold text-dark small text-truncate">Rajesh Kannan</div>
-                <div className="text-muted text-truncate" style={{ fontSize: '0.72rem' }}>loan.applicant@gmail.com • Loan Customer</div>
-              </div>
-              <span className="btn btn-xs btn-primary rounded-pill px-2.5 py-1 fw-bold flex-shrink-0" style={{ fontSize: '0.68rem' }}>
-                Sign In →
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-2.5 px-sm-3 rounded-3 hover-shadow transition-all"
-              onClick={() => handleQuickCustomerLogin('priya.customer@gmail.com', 'Priya Sharma')}
-            >
-              <div className="text-truncate me-2">
-                <div className="fw-bold text-dark small text-truncate">Priya Sharma</div>
-                <div className="text-muted text-truncate" style={{ fontSize: '0.72rem' }}>priya.customer@gmail.com • KYC Applicant</div>
-              </div>
-              <span className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-bold flex-shrink-0" style={{ fontSize: '0.68rem' }}>
-                Sign In →
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div className="position-relative text-center my-3">
-          <hr className="border-secondary-subtle" />
-          <span className="position-absolute top-50 start-50 translate-middle bg-white px-2 small text-muted" style={{ fontSize: '0.72rem' }}>
-            OR VERIFY YOUR EMAIL
-          </span>
-        </div>
-
-        {/* 2. Email OTP Verification */}
-        {authStep === 'input' ? (
-          <form onSubmit={handleRequestOtp} className="mb-3">
-            <label className="form-label small fw-bold text-dark">Your Email Address *</label>
-            <div className="input-group mb-1">
-              <span className="input-group-text bg-light text-muted">
-                <Mail size={16} />
-              </span>
-              <input
-                type="email"
-                className="form-control"
-                placeholder="name@example.com"
-                required
-                value={authEmailInput}
-                onChange={e => setAuthEmailInput(e.target.value)}
-              />
-              <button
-                type="submit"
-                className="btn btn-primary fw-semibold px-3"
-                disabled={isRequestingOtp || !authEmailInput.trim()}
-              >
-                {isRequestingOtp ? 'Sending...' : 'Send OTP'}
-              </button>
-            </div>
-            {otpNotice && (
-              <div className="small text-danger mt-1">{otpNotice}</div>
-            )}
-            <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>
-              We'll send a 6-digit verification code. Test OTP: <code>123456</code>
-            </small>
-          </form>
-        ) : (
-          <form onSubmit={handleVerifyOtp} className="p-3 bg-light rounded-3 border mb-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <span className="small fw-bold text-dark">Enter OTP Code sent to:</span>
-              <button
-                type="button"
-                className="btn btn-link btn-xs p-0 text-primary text-decoration-none"
-                onClick={() => setAuthStep('input')}
-              >
-                Change Email
-              </button>
-            </div>
-            <div className="badge bg-info-subtle text-info mb-2 text-wrap text-start w-100">
-              {authEmailInput}
-            </div>
-            <div className="input-group mb-2">
-              <input
-                type="text"
-                className="form-control text-center fw-bold fs-5"
-                maxLength={6}
-                placeholder="123456"
-                required
-                value={otpCode}
-                onChange={e => setOtpCode(e.target.value)}
-              />
-              <button type="submit" className="btn btn-success fw-bold px-3">
-                Verify & Sign In
-              </button>
-            </div>
-            {otpNotice && (
-              <div className="small text-danger mb-1">{otpNotice}</div>
-            )}
-            <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>
-              For test verification, enter default OTP: <strong>123456</strong>
-            </small>
-          </form>
-        )}
-
-        {/* 3. Social SSO */}
-        <div className="row g-2 mb-3">
-          <div className="col-12 col-sm-6">
-            <button
-              type="button"
-              className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-              onClick={() => handleOAuthLogin('Google')}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3.03h3.88c2.27-2.09 3.665-5.17 3.665-9.12z" />
-                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.03c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.13C3.27 21.43 7.33 24 12 24z" />
-                <path fill="#FBBC05" d="M5.28 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.13z" />
-                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.27 2.57 1.25 6.58l4.03 3.13c.95-2.83 3.6-4.96 6.72-4.96z" />
-              </svg>
-              <span>Google SSO</span>
-            </button>
-          </div>
-          <div className="col-12 col-sm-6">
-            <button
-              type="button"
-              className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-              onClick={() => handleOAuthLogin('Microsoft')}
-            >
-              <svg width="15" height="15" viewBox="0 0 23 23">
-                <path fill="#f35325" d="M1 1h10v10H1z" />
-                <path fill="#81bc06" d="M12 1h10v10H12z" />
-                <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                <path fill="#ffba08" d="M12 12h10v10H12z" />
-              </svg>
-              <span>Microsoft SSO</span>
-            </button>
-          </div>
-        </div>
+        {!showAuthModal && renderSignIn()}
 
         {/* Back Link */}
-        <div className="text-center pt-2 border-top">
+        <div className="text-center pt-2 mt-3 border-top">
           <button
             type="button"
             className="btn btn-link btn-sm text-secondary text-decoration-none"
@@ -678,14 +965,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   };
 
   return (
-    <div className="min-vh-100 d-flex flex-column bg-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+    <div className="customer-portal min-vh-100 d-flex flex-column bg-slate-50" style={{ backgroundColor: '#f8fafc' }}>
       {/* 0. Top Operational Announcement Banner (Screen 9) */}
       {portalMetadata.announcementBanner && (
         <div
           className="py-1.5 px-3 text-center small text-white fw-medium d-flex align-items-center justify-content-center gap-2"
           style={{ background: 'linear-gradient(90deg, #1e293b 0%, #0f172a 100%)', fontSize: '0.8rem' }}
         >
-          <span className="badge bg-success rounded-pill px-2 py-0.5" style={{ fontSize: '0.68rem' }}>LIVE ADVISORY</span>
+          <span className="badge bg-success rounded-pill px-2 py-0.5" style={{ fontSize: '0.68rem' }}>SUPPORT NOTICE</span>
           <span>{portalMetadata.announcementBanner}</span>
         </div>
       )}
@@ -738,7 +1025,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             )}
             <div className="text-truncate">
               <h5 className="fw-bolder mb-0 text-dark text-truncate" style={{ letterSpacing: '-0.02em', fontSize: '0.96rem' }}>
-                {company?.name || (companySlug === 'kuwy' ? 'Kuwy Technology Services Pvt Ltd' : 'Customer Support')}
+                {company?.name || 'Customer Support'}
               </h5>
               <small className="text-muted d-none d-sm-block text-truncate" style={{ fontSize: '0.7rem', marginTop: '-2px' }}>
                 Official Help Center & Support Portal
@@ -768,11 +1055,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             <button
               type="button"
               className={`btn btn-sm rounded-3 fw-semibold ${activeTab === 'submit' ? 'btn-primary shadow-xs' : 'btn-outline-primary'}`}
-              onClick={() => {
-                setActiveTab('submit');
-                setSubmitSuccess(null);
-                onNavigate?.('/' + companySlug + '/ticket');
-              }}
+              onClick={openTicketForm}
             >
               Submit Ticket
             </button>
@@ -785,9 +1068,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               }}
             >
               My Tickets
-              {myTickets.length > 0 && (
+              {isAuthenticated && allTicketTotal !== null && allTicketTotal > 0 && (
                 <span className="badge rounded-pill bg-primary ms-1.5" style={{ fontSize: '0.65rem' }}>
-                  {myTickets.length}
+                  {allTicketTotal}
                 </span>
               )}
             </button>
@@ -832,17 +1115,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         onNavigate?.('/' + companySlug + '/ticketstatus');
                       }}
                     >
-                      <Clock size={14} /> My Tickets ({myTickets.length})
+                      <Clock size={14} /> My Tickets{allTicketTotal !== null ? ` (${allTicketTotal})` : ''}
                     </button>
                     <button
                       type="button"
                       className="btn btn-sm btn-light w-100 text-start d-flex align-items-center gap-2"
-                      onClick={() => {
-                        setShowUserMenu(false);
-                        setActiveTab('submit');
-                        setSubmitSuccess(null);
-                        onNavigate?.('/' + companySlug + '/ticket');
-                      }}
+                      onClick={openTicketForm}
                     >
                       <Send size={14} /> Submit New Ticket
                     </button>
@@ -860,12 +1138,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     <button
                       type="button"
                       className="btn btn-sm btn-outline-danger w-100 text-start d-flex align-items-center gap-2 text-danger"
-                      onClick={() => {
-                        setShowUserMenu(false);
-                        handleSignOut();
-                      }}
+                      disabled={isSigningOut}
+                      onClick={() => void handleSignOut()}
                     >
-                      <LogOut size={14} /> Sign Out
+                      <LogOut size={14} /> {isSigningOut ? 'Signing Out...' : 'Sign Out'}
                     </button>
                   </div>
                 )}
@@ -874,9 +1150,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-outline-secondary rounded-pill px-3 fw-semibold ms-2"
-                onClick={() => { setAuthStep('input'); setShowAuthModal(true); }}
+                disabled={sessionStatus !== 'anonymous' || !company}
+                onClick={openAuthModal}
               >
-                Sign In
+                {sessionStatus === 'checking' ? 'Checking...' : 'Sign In'}
               </button>
             )}
           </div>
@@ -903,9 +1180,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 type="button"
                 className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-semibold"
                 style={{ fontSize: '0.74rem' }}
-                onClick={() => { setAuthStep('input'); setShowAuthModal(true); }}
+                disabled={sessionStatus !== 'anonymous' || !company}
+                onClick={openAuthModal}
               >
-                Sign In
+                {sessionStatus === 'checking' ? 'Checking...' : 'Sign In'}
               </button>
             )}
 
@@ -942,12 +1220,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   type="button"
                   className="btn btn-xs btn-outline-danger rounded-pill px-2 py-0.5 flex-shrink-0"
                   style={{ fontSize: '0.7rem' }}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    handleSignOut();
-                  }}
+                  disabled={isSigningOut}
+                  onClick={() => void handleSignOut()}
                 >
-                  Sign Out
+                  {isSigningOut ? 'Signing Out...' : 'Sign Out'}
                 </button>
               </div>
             ) : (
@@ -955,13 +1231,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <button
                   type="button"
                   className="btn btn-primary w-100 py-2 fw-semibold rounded-3 d-flex align-items-center justify-content-center gap-2 shadow-xs"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    setAuthStep('input');
-                    setShowAuthModal(true);
-                  }}
+                  disabled={sessionStatus !== 'anonymous' || !company}
+                  onClick={openAuthModal}
                 >
-                  <User size={16} /> Sign In to Your Account
+                  <User size={16} /> {sessionStatus === 'checking' ? 'Checking Customer Session...' : 'Sign In to Your Account'}
                 </button>
               </div>
             )}
@@ -986,12 +1259,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <button
                 type="button"
                 className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center justify-content-between ${activeTab === 'submit' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
-                onClick={() => {
-                  setActiveTab('submit');
-                  setSubmitSuccess(null);
-                  setMobileMenuOpen(false);
-                  onNavigate?.('/' + companySlug + '/ticket');
-                }}
+                onClick={openTicketForm}
               >
                 <div className="d-flex align-items-center gap-2">
                   <Send size={16} />
@@ -1016,9 +1284,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <span className="fw-semibold">Track Tickets & Status</span>
                 </div>
                 <div className="d-flex align-items-center gap-1.5">
-                  {myTickets.length > 0 && (
+                  {isAuthenticated && allTicketTotal !== null && allTicketTotal > 0 && (
                     <span className="badge rounded-pill bg-danger" style={{ fontSize: '0.68rem' }}>
-                      {myTickets.length}
+                      {allTicketTotal}
                     </span>
                   )}
                   <span className="small opacity-75">/ticketstatus</span>
@@ -1072,20 +1340,21 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         >
           <div className="container" style={{ maxWidth: '720px' }}>
             <span className="badge bg-white text-dark fw-bold mb-2 shadow-xs" style={{ fontSize: '0.72rem' }}>
-              Screen 9 • Public Customer Portal
+              Customer Support Portal
             </span>
             <h2 className="fw-bolder mb-2 text-white fs-3 fs-md-2" style={{ letterSpacing: '-0.02em' }}>
               How can we assist you today?
             </h2>
             <p className="text-white-50 mb-3 mb-md-4 small px-2" style={{ fontSize: '0.9rem' }}>
-              Search help articles, check ticket status, or submit a request directly to our verified engineers.
+              Search help articles, check ticket status, or submit a request to our support team.
             </p>
 
             {/* Knowledge Base Instant Search Box */}
             <div className="position-relative mx-auto" style={{ maxWidth: '580px' }}>
               <Search size={18} className="position-absolute text-muted" style={{ top: '14px', left: '16px' }} />
-              <input
-                type="text"
+                <input
+                  type="text"
+                  aria-label="Search help articles"
                 className="form-control form-control-lg rounded-pill ps-5 pe-4 shadow-lg border-0"
                 style={{ fontSize: '0.92rem' }}
                 placeholder="Search solutions, loan disbursals, KYC, or error codes..."
@@ -1097,7 +1366,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               />
 
               {/* Instant Search Dropdown Suggestions */}
-              {searchQuery.trim().length > 1 && kbArticles.length > 0 && (
+              {searchQuery.trim().length > 1 && visibleArticles.length > 0 && (
                 <div
                   className="position-absolute w-100 bg-white rounded-4 shadow-2xl border text-start mt-2 p-2"
                   style={{ zIndex: 1050 }}
@@ -1105,7 +1374,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <small className="text-muted fw-bold px-3 py-1 d-block text-uppercase" style={{ fontSize: '0.68rem' }}>
                     Matching Help Articles
                   </small>
-                  {kbArticles.slice(0, 5).map(art => (
+                  {visibleArticles.slice(0, 5).map(art => (
                     <div
                       key={art.id}
                       className="p-2.5 rounded-3 hover-bg-light cursor-pointer transition-all d-flex align-items-center justify-content-between"
@@ -1114,6 +1383,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         setSelectedArticle(art);
                         setActiveTab('article');
                         setSearchQuery('');
+                        void loadKbArticles();
                       }}
                     >
                       <div className="text-truncate me-2">
@@ -1131,7 +1401,25 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       )}
 
       {/* MAIN CONTENT CONTAINER */}
-      <main className="container py-3 py-md-4 flex-grow-1 pb-5 mb-5 mb-md-0 px-2 px-sm-3" style={{ maxWidth: '1100px' }}>
+      <main ref={mainContent} tabIndex={-1} className="container py-3 py-md-4 flex-grow-1 pb-5 mb-5 mb-md-0 px-2 px-sm-3" style={{ maxWidth: '1100px', minWidth: 0 }}>
+        {loading && !company && <div className="card border-0 shadow-sm rounded-4 p-4 bg-white text-center" role="status">Loading support portal...</div>}
+        {portalError && <div className="alert alert-danger" role="alert">
+          <p className="mb-2">{portalError}</p>
+          <button type="button" className="btn btn-sm btn-outline-danger" disabled={loading} onClick={() => void loadPortalData()}>Retry Portal</button>
+        </div>}
+        {sessionError && <div className="alert alert-warning" role="alert">
+          {sessionError}
+          {sessionStatus === 'error' && <button type="button" className="btn btn-sm btn-outline-secondary d-block mt-2" onClick={() => void checkSession()}>Retry Session Check</button>}
+        </div>}
+        {company && <>
+        {(activeTab === 'home' || activeTab === 'kb') && kbLoading && <div className="alert alert-light border small" role="status">Loading help articles...</div>}
+        {(activeTab === 'home' || activeTab === 'kb') && kbError && <div className="alert alert-warning small" role="alert"><p className="mb-2">{kbError}</p><button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => void loadKbArticles(searchQuery)}>Retry Help Articles</button></div>}
+        {(activeTab === 'home' || activeTab === 'kb') && !kbLoading && !kbError && visibleArticles.length === 0 && <div className="alert alert-light border small">{searchQuery ? 'No help articles match this search.' : 'No help articles have been published yet.'}</div>}
+        {sessionStatus === 'checking' && activeTab === 'home' && <div className="alert alert-light border" role="status">Checking your customer session...</div>}
+        {isAuthenticated && submitSuccess && attachments.length > 0 && activeTab !== 'submit' && <div className="alert alert-warning small" role="status">
+          Ticket #{submitSuccess.ticketNumber} was saved. {attachments.length} attachment(s) still need upload.
+          <button type="button" className="btn btn-sm btn-outline-secondary d-block mt-2" onClick={openTicketForm}>Resume Attachment Uploads</button>
+        </div>}
 
         {/* ==============================================================
             SCREEN 9: PORTAL HOME BODY
@@ -1143,21 +1431,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <div className="card border-0 shadow-sm rounded-4 p-3 p-md-4 mb-3 mb-md-4 bg-white border-start border-4 border-primary">
                 <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
                   <div>
-                    <h5 className="fw-bold text-dark mb-1 fs-6 fs-md-5">Welcome back, {customerName}!</h5>
+                    <h5 className="fw-bold text-dark mb-1 fs-6 fs-md-5">{customerName ? `Welcome back, ${customerName}` : 'Welcome back'}</h5>
                     <p className="text-muted small mb-0">
-                      Logged in as <code>{customerEmail}</code> • {myTickets.length} ticket(s) recorded in {company?.name}.
+                      Signed in as <strong style={{ overflowWrap: 'anywhere' }}>{customerEmail}</strong>{allTicketTotal !== null ? ` | ${allTicketTotal} ticket(s) in ${company.name}.` : ''}
                     </p>
                   </div>
                   <div className="d-flex flex-wrap align-items-center gap-1.5 gap-md-2 mt-1 mt-sm-0">
-                    <span className="badge bg-primary-subtle text-primary px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
-                      {myTickets.filter(t => t.status === 'OPEN').length} Open
-                    </span>
-                    <span className="badge bg-warning-subtle text-warning-emphasis px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
-                      {myTickets.filter(t => t.status === 'WAITING_ON_CUSTOMER').length} Waiting on you
-                    </span>
-                    <span className="badge bg-success-subtle text-success px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
-                      {myTickets.filter(t => t.status === 'RESOLVED').length} Resolved
-                    </span>
                     <button
                       className="btn btn-sm btn-outline-primary fw-semibold rounded-pill ms-auto ms-sm-2 px-3 py-1"
                       onClick={() => {
@@ -1177,11 +1456,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <div className="col-12 col-md-6">
                 <div
                   className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
-                  onClick={() => {
-                    setActiveTab('submit');
-                    setSubmitSuccess(null);
-                    onNavigate?.('/' + companySlug + '/ticket');
-                  }}
+                  onClick={openTicketForm}
                   style={{ cursor: 'pointer' }}
                 >
                   <div className="d-flex align-items-center gap-3 mb-2.5 mb-md-3">
@@ -1194,7 +1469,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </div>
                   </div>
                   <p className="text-secondary small mb-3" style={{ fontSize: '0.82rem' }}>
-                    Raise an inquiry with documents, loan contracts, proof receipts, or error logs. You receive an immediate tracking ticket number e.g. <code>#KUWY-1042</code>.
+                    Raise an inquiry with supporting documents or error logs. After submission, use your tracking number to follow the request.
                   </p>
                   <span className="text-primary fw-bold small d-inline-flex align-items-center gap-1">
                     Open submission form →
@@ -1217,14 +1492,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </div>
                     <div>
                       <h5 className="fw-bold mb-0 text-dark fs-6 fs-md-5">Track Your Tickets</h5>
-                      <small className="text-muted" style={{ fontSize: '0.75rem' }}>Check live status, SLAs and engineer replies</small>
+                      <small className="text-muted" style={{ fontSize: '0.75rem' }}>Check ticket status and support replies</small>
                     </div>
                   </div>
                   <p className="text-secondary small mb-3" style={{ fontSize: '0.82rem' }}>
                     Access conversation threads, download attachments sent by our team, reply with more details, or reopen resolved requests.
                   </p>
                   <span className="text-success fw-bold small d-inline-flex align-items-center gap-1">
-                    {isAuthenticated ? `View your ${myTickets.length} ticket(s) →` : 'Sign in to track →'}
+                    {isAuthenticated ? 'View your tickets' : 'Sign in to track'}
                   </span>
                 </div>
               </div>
@@ -1274,7 +1549,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               </div>
 
               <div className="row g-2.5 g-md-3">
-                {kbArticles.slice(0, 4).map(art => (
+                {visibleArticles.slice(0, 4).map(art => (
                   <div key={art.id} className="col-12 col-md-6">
                     <div
                       className="p-3 border rounded-3 bg-light hover-bg-white cursor-pointer transition-all h-100"
@@ -1313,7 +1588,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </div>
                     <div className="text-truncate">
                       <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Support Email</small>
-                      <span className="fw-bold text-dark small text-truncate d-block">{portalMetadata.supportEmail}</span>
+                      <span className="fw-bold text-dark small text-truncate d-block">{portalMetadata.supportEmail || 'Not provided'}</span>
                     </div>
                   </div>
                 </div>
@@ -1324,7 +1599,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </div>
                     <div>
                       <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Helpline Phone</small>
-                      <span className="fw-bold text-dark small d-block">{portalMetadata.supportPhone}</span>
+                      <span className="fw-bold text-dark small d-block">{portalMetadata.supportPhone || 'Not provided'}</span>
                     </div>
                   </div>
                 </div>
@@ -1335,7 +1610,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     </div>
                     <div>
                       <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Business Hours</small>
-                      <span className="fw-bold text-dark small d-block">{portalMetadata.businessHours}</span>
+                      <span className="fw-bold text-dark small d-block">{portalMetadata.businessHours || 'Not provided'}</span>
                     </div>
                   </div>
                 </div>
@@ -1355,14 +1630,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
                 onClick={() => {
                   setActiveTab('home');
-                  setSubmitSuccess(null);
                   onNavigate?.('/' + companySlug);
                 }}
               >
                 <ArrowLeft size={15} /> Back to Home
               </button>
-              <span className="small text-muted">Screen 11 • Public Ticket Submission</span>
+              <span className="small text-muted">Customer Support Request</span>
             </div>
+            {submitError && isAuthenticated && <div className="alert alert-danger small" role="alert">{submitError}</div>}
 
             {!isAuthenticated ? (
               renderAuthBarrier('ticket')
@@ -1371,17 +1646,32 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <div className="rounded-circle bg-success-subtle text-success mx-auto d-flex align-items-center justify-content-center mb-3" style={{ width: '56px', height: '56px' }}>
                   <CheckCircle2 size={32} />
                 </div>
-                <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">Ticket Submitted Successfully!</h4>
+                <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">Your Ticket Has Been Saved</h4>
                 <p className="text-muted small mb-3">
-                  We've emailed a confirmation receipt to <strong>{customerEmail}</strong>.
+                  {submitSuccess.emailNotification === 'queued'
+                    ? 'A confirmation email has been queued. Delivery to your inbox is not yet confirmed.'
+                    : submitSuccess.emailNotification === 'not_configured'
+                      ? 'Email notifications are not configured. Track your request here in the portal.'
+                      : 'Use the tracking number below to follow your request in this portal.'}
                 </p>
 
                 <div className="p-3 bg-light rounded-3 border mx-auto mb-4 w-100" style={{ maxWidth: '420px' }}>
                   <div className="small text-secondary mb-1">Your Tracking Number</div>
                   <h3 className="fw-bolder text-primary mb-1 fs-4 fs-md-3">#{submitSuccess.ticketNumber}</h3>
                   <div className="small text-muted text-truncate">Subject: "{submitSuccess.subject}"</div>
-                  <div className="badge bg-info-subtle text-info mt-2">Expected Response: Under 15 Minutes</div>
+                  <div className="badge bg-info-subtle text-info mt-2">{submitSuccess.status}</div>
                 </div>
+
+                {attachments.length > 0 && <div className="border rounded-3 p-3 mb-3 text-start bg-light">
+                  <p className="small mb-2" role="status">{isSubmitting ? 'Uploading attachments...' : 'These files still need to be uploaded:'}</p>
+                  <ul className="list-unstyled small mb-3">
+                    {attachments.map((file, index) => <li key={`${file.name}-${index}`} className="d-flex align-items-center justify-content-between gap-2 mb-1">
+                      <span style={{ overflowWrap: 'anywhere', minWidth: 0 }}>{file.name}</span>
+                      <button type="button" className="btn btn-sm btn-link text-danger flex-shrink-0" disabled={isSubmitting || isSigningOut} aria-label={`Remove pending attachment ${file.name}`} onClick={() => setAttachments(files => files.filter(item => item !== file))}>Remove</button>
+                    </li>)}
+                  </ul>
+                  <button type="button" className="btn btn-outline-primary btn-sm" disabled={isSubmitting || isSigningOut} onClick={() => void handleSubmitTicket()}>{isSubmitting ? 'Uploading...' : 'Retry Remaining Uploads Only'}</button>
+                </div>}
 
                 <div className="d-flex flex-column flex-sm-row justify-content-center gap-2">
                   <button
@@ -1397,8 +1687,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <button
                     type="button"
                     className="btn btn-outline-secondary px-3 px-sm-4 py-2 fw-semibold rounded-3"
+                    disabled={isSubmitting || attachments.length > 0 || isSigningOut}
                     onClick={() => {
                       setSubmitSuccess(null);
+                      setSubmitError(null);
+                      setSubject('');
+                      setDescription('');
+                      setAgreedToPrivacy(false);
                       setActiveTab('submit');
                       onNavigate?.('/' + companySlug + '/ticket');
                     }}
@@ -1420,11 +1715,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         </span>
                       </div>
                       <p className="text-muted small mb-0" style={{ fontSize: '0.82rem' }}>
-                        Fill in details below. Our support agents respond in accordance with your category SLA.
+                        Describe your request and choose a support category. You can track the response in this portal.
                       </p>
                     </div>
 
-                    <form onSubmit={handleSubmitTicket}>
+                    <form onSubmit={handleSubmitTicket} aria-busy={isSubmitting}>
+                      <fieldset disabled={isSubmitting || isSigningOut || !!portalError} style={{ minWidth: 0 }}>
                       {/* Honeypot field */}
                       <div style={{ display: 'none', position: 'absolute', left: '-9999px' }} aria-hidden="true">
                         <input
@@ -1440,19 +1736,22 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                       {/* Requester Identity */}
                       <div className="row g-2.5 g-md-3 mb-3">
                         <div className="col-12 col-md-6">
-                          <label className="form-label small fw-bold text-dark">Your Name *</label>
+                          <label htmlFor="portal-requester-name" className="form-label small fw-bold text-dark">Your Name (Read-Only)</label>
                           <input
+                            id="portal-requester-name"
+                            name="name"
                             type="text"
+                            autoComplete="name"
+                            maxLength={100}
                             className="form-control"
-                            required
-                            placeholder="e.g. Rajesh Kannan"
+                            readOnly
+                            placeholder="Not provided"
                             value={customerName}
-                            onChange={e => setCustomerName(e.target.value)}
                           />
                         </div>
                         <div className="col-12 col-md-6">
                           <div className="d-flex flex-wrap justify-content-between align-items-center gap-1 mb-1">
-                            <label className="form-label small fw-bold text-dark mb-0">Your Email Address *</label>
+                            <label htmlFor="portal-requester-email" className="form-label small fw-bold text-dark mb-0">Your Email Address *</label>
                             <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.66rem' }}>
                               <CheckCircle2 size={10} /> Verified Sign-in
                             </span>
@@ -1462,6 +1761,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                               <Lock size={15} />
                             </span>
                             <input
+                              id="portal-requester-email"
+                              name="email"
+                              autoComplete="email"
                               type="email"
                               className="form-control bg-light text-dark fw-semibold"
                               required
@@ -1471,7 +1773,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             />
                           </div>
                           <small className="text-muted d-block mt-1" style={{ fontSize: '0.72rem' }}>
-                            Default from email: <strong>{customerEmail}</strong>. SLA responses will be delivered here.
+                            This request belongs to your verified email. Email notifications depend on the portal's configuration.
                           </small>
                         </div>
                       </div>
@@ -1479,25 +1781,31 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                       {/* Category & Priority */}
                       <div className="row g-2.5 g-md-3 mb-3">
                         <div className="col-12 col-md-7">
-                          <label className="form-label small fw-bold text-dark">Category / Department *</label>
+                          <label htmlFor="portal-department" className="form-label small fw-bold text-dark">Category / Department *</label>
                           <select
+                            id="portal-department"
                             className="form-select"
+                            required
+                            disabled={departments.length === 0}
                             value={deptId}
                             onChange={e => setDeptId(Number(e.target.value))}
                           >
+                            <option value="" disabled>Select a category</option>
                             {departments.map(d => (
                               <option key={d.id} value={d.id}>
-                                {d.name} ({d.code})
+                                {d.name}{d.code ? ` (${d.code})` : ''}
                               </option>
                             ))}
                           </select>
+                          {departments.length === 0 && <p className="small text-danger mt-1 mb-0">No support categories are available. Ticket submission is unavailable until a category is configured.</p>}
                         </div>
                         <div className="col-12 col-md-5">
-                          <label className="form-label small fw-bold text-dark">Priority *</label>
+                          <label htmlFor="portal-priority" className="form-label small fw-bold text-dark">Priority *</label>
                           <select
+                            id="portal-priority"
                             className="form-select"
                             value={priority}
-                            onChange={e => setPriority(e.target.value as any)}
+                            onChange={e => setPriority(e.target.value as Ticket['priority'])}
                           >
                             <option value="LOW">Low (Standard Question)</option>
                             <option value="MEDIUM">Medium (General Support)</option>
@@ -1509,8 +1817,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
                       {/* Subject */}
                       <div className="mb-3">
-                        <label className="form-label small fw-bold text-dark">Ticket Subject *</label>
+                        <label htmlFor="portal-subject" className="form-label small fw-bold text-dark">Ticket Subject *</label>
                         <input
+                          id="portal-subject"
+                          maxLength={200}
                           type="text"
                           className="form-control"
                           required
@@ -1522,12 +1832,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
                       {/* Description */}
                       <div className="mb-3">
-                        <label className="form-label small fw-bold text-dark">Detailed Description *</label>
+                        <label htmlFor="portal-description" className="form-label small fw-bold text-dark">Detailed Description *</label>
                         <textarea
+                          id="portal-description"
+                          maxLength={100000}
                           className="form-control font-sans"
                           rows={5}
                           required
-                          placeholder="Provide details: applicant PAN, contract ID, step where error occurred, screenshots..."
+                          placeholder="Describe what happened and the steps you tried. Do not include passwords or sign-in codes."
                           value={description}
                           onChange={e => setDescription(e.target.value)}
                         />
@@ -1535,15 +1847,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
                       {/* Attachments Dropzone */}
                       <div className="mb-4">
-                        <label className="form-label small fw-bold text-dark d-flex justify-content-between">
+                        <label htmlFor="portal-attachments" className="form-label small fw-bold text-dark d-flex flex-wrap justify-content-between gap-1">
                           <span>Supporting Attachments</span>
                           <span className="text-muted fw-normal">PNG, PDF, JPG, JPEG, TXT up to 25MB</span>
                         </label>
 
                         <div className="p-3 border-2 border-dashed rounded-3 text-center bg-light">
                           <Paperclip size={20} className="text-muted mb-1" />
-                          <div className="small text-muted mb-2">Drag files here or select from device</div>
+                          <div className="small text-muted mb-2">Select files from your device</div>
                           <input
+                            id="portal-attachments"
                             type="file"
                             multiple
                             accept=".png,.pdf,.jpg,.jpeg,.txt"
@@ -1551,7 +1864,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             style={{ maxWidth: '280px' }}
                             onChange={e => {
                               if (e.target.files) {
-                                setAttachments(Array.from(e.target.files));
+                                const added = Array.from(e.target.files);
+                                setAttachments(files => [...files, ...added.filter(file => !files.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
+                                e.target.value = '';
                               }
                             }}
                           />
@@ -1560,10 +1875,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         {attachments.length > 0 && (
                           <div className="d-flex flex-wrap gap-2 mt-2">
                             {attachments.map((file, idx) => (
-                              <span key={idx} className="badge bg-white text-dark border p-2 d-inline-flex align-items-center gap-1.5">
+                              <span key={idx} className="badge bg-white text-dark border p-2 d-inline-flex align-items-center gap-1.5 text-wrap" style={{ maxWidth: '100%' }}>
                                 <FileText size={14} className="text-primary" />
-                                <span>{file.name}</span>
+                                <span style={{ overflowWrap: 'anywhere', minWidth: 0 }}>{file.name}</span>
                                 <small className="text-muted">({(file.size / 1024).toFixed(0)} KB)</small>
+                                <button type="button" className="btn btn-sm btn-link p-0 text-danger" aria-label={`Remove ${file.name}`} onClick={() => setAttachments(files => files.filter(item => item !== file))}><X size={14} aria-hidden="true" /></button>
                               </span>
                             ))}
                           </div>
@@ -1587,7 +1903,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
                       <button
                         type="submit"
-                        disabled={isSubmitting || !agreedToPrivacy}
+                        disabled={isSubmitting || !agreedToPrivacy || !deptId || departments.length === 0}
                         className="btn btn-primary w-100 py-2.5 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
                         style={{ backgroundColor: primaryColor, borderColor: primaryColor }}
                       >
@@ -1603,6 +1919,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                           </>
                         )}
                       </button>
+                      </fieldset>
                     </form>
                   </div>
                 </div>
@@ -1639,8 +1956,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                                 type="button"
                                 className="btn btn-xs btn-outline-success py-1 px-2"
                                 onClick={() => {
-                                  alert('Glad we could help! Ticket submission cancelled.');
                                   setActiveTab('home');
+                                  onNavigate?.('/' + companySlug);
                                 }}
                               >
                                 Solved my issue!
@@ -1670,17 +1987,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <div>
                     <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">My Support Tickets</h4>
                     <p className="text-muted small mb-0" style={{ fontSize: '0.82rem' }}>
-                      Showing inquiries associated with <strong>{customerEmail}</strong> in {company?.name}.
+                      Showing inquiries associated with <strong style={{ overflowWrap: 'anywhere' }}>{customerEmail}</strong> in {company?.name}.
                     </p>
                   </div>
                   <button
                     type="button"
                     className="btn btn-primary btn-sm fw-semibold d-flex align-items-center justify-content-center gap-1.5 px-3 py-2 shadow-xs w-100 w-sm-auto"
-                    onClick={() => {
-                      setActiveTab('submit');
-                      setSubmitSuccess(null);
-                      onNavigate?.('/' + companySlug + '/ticket');
-                    }}
+                    onClick={openTicketForm}
                   >
                     <Send size={15} />
                     <span>Submit a New Ticket</span>
@@ -1691,15 +2004,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <div className="card border-0 shadow-sm rounded-4 p-2.5 p-sm-3 mb-3 mb-md-4 bg-white">
                   <div className="d-flex flex-column flex-md-row justify-content-between align-items-stretch align-items-md-center gap-2.5">
                     <div className="d-flex align-items-center gap-1.5 overflow-x-auto text-nowrap pb-1 pb-md-0 w-100" style={{ WebkitOverflowScrolling: 'touch' }}>
-                      {(['ALL', 'OPEN', 'WAITING', 'RESOLVED', 'CLOSED'] as const).map(f => (
+                      {(['ALL', 'OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'WAITING_ON_THIRD_PARTY', 'RESOLVED', 'CLOSED'] as const).map(f => (
                         <button
                           key={f}
                           type="button"
                           className={`btn btn-sm rounded-pill px-3 py-1 fw-semibold flex-shrink-0 ${ticketFilter === f ? 'btn-primary shadow-xs' : 'btn-light text-muted border-0'}`}
-                          onClick={() => setTicketFilter(f)}
+                          onClick={() => updateTicketQuery({ status: f, page: 0 })}
+                          aria-pressed={ticketFilter === f}
                           style={{ fontSize: '0.78rem' }}
                         >
-                          {f === 'WAITING' ? 'Waiting on You' : f}
+                          {f === 'WAITING_ON_CUSTOMER' ? 'Waiting on You' : f.replace(/_/g, ' ')}
                         </button>
                       ))}
                     </div>
@@ -1709,16 +2023,24 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         <Search size={14} className="text-muted" />
                       </span>
                       <input
-                        type="text"
+                        type="search"
+                        aria-label="Search your tickets by number or subject"
+                        maxLength={250}
                         className="form-control bg-light border-start-0"
                         placeholder="Search ticket # or subject..."
                         value={ticketSearchTerm}
-                        onChange={e => setTicketSearchTerm(e.target.value)}
+                        onChange={e => updateTicketQuery({ q: e.target.value, page: 0 })}
                       />
                     </div>
                   </div>
                 </div>
 
+                {ticketsLoading ? <div className="card border-0 shadow-sm rounded-4 p-4 text-center bg-white" role="status">Loading your tickets...</div> : ticketsError ? (
+                  <div className="alert alert-danger" role="alert">
+                    <p className="mb-2">{ticketsError}</p>
+                    <button type="button" className="btn btn-sm btn-outline-danger" onClick={loadCustomerTickets}>Retry Tickets</button>
+                  </div>
+                ) : <>
                 {/* Desktop Tickets Table (Hidden on mobile) */}
                 <div className="d-none d-md-block card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
                   <div className="table-responsive">
@@ -1734,7 +2056,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredTickets.length === 0 ? (
+                        {myTickets.length === 0 ? (
                           <tr>
                             <td colSpan={6} className="text-center py-5 text-muted">
                               <LifeBuoy size={36} className="text-muted opacity-50 mb-2 d-block mx-auto" />
@@ -1743,7 +2065,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             </td>
                           </tr>
                         ) : (
-                          filteredTickets.map(t => (
+                          myTickets.map(t => (
                             <tr
                               key={t.id}
                               className="cursor-pointer"
@@ -1751,7 +2073,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                               style={{ cursor: 'pointer' }}
                             >
                               <td className="ps-4">
-                                <span className="fw-bolder font-monospace text-primary">#{t.ticketNumber}</span>
+                                <button type="button" className="btn btn-link p-0 fw-bolder font-monospace text-primary text-start" onClick={event => { event.stopPropagation(); void handleOpenTicketDetail(t); }}>#{t.ticketNumber}</button>
                               </td>
                               <td>
                                 <div className="fw-semibold text-dark">{t.subject}</div>
@@ -1763,7 +2085,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                               </td>
                               <td>
                                 <span className="badge bg-light text-dark border">
-                                  {t.department?.name || 'General'}
+                                  {t.department?.name || 'Not provided'}
                                 </span>
                               </td>
                               <td>
@@ -1781,7 +2103,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                                 </span>
                               </td>
                               <td className="pe-4 text-end text-muted small">
-                                {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Today'}
+                                {formatDate(t.updatedAt || t.createdAt)}
                               </td>
                             </tr>
                           ))
@@ -1793,21 +2115,22 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
                 {/* Mobile Ticket Cards Stack (Screen 12 Mobile - Hidden on desktop) */}
                 <div className="d-md-none d-flex flex-column gap-2.5">
-                  {filteredTickets.length === 0 ? (
+                  {myTickets.length === 0 ? (
                     <div className="card border-0 shadow-sm rounded-4 p-4 text-center text-muted bg-white">
                       <LifeBuoy size={36} className="text-muted opacity-50 mb-2 mx-auto" />
                       <div className="fw-semibold">No tickets found in this view</div>
                       <small className="text-muted">Submit an inquiry or change the filter tab.</small>
                     </div>
                   ) : (
-                    filteredTickets.map(t => (
-                      <div
+                    myTickets.map(t => (
+                      <button
+                        type="button"
                         key={t.id}
-                        className="card border-0 shadow-sm rounded-3 p-3 bg-white cursor-pointer hover-shadow transition-all"
+                        className="card border-0 shadow-sm rounded-3 p-3 bg-white cursor-pointer hover-shadow transition-all text-start w-100"
                         onClick={() => handleOpenTicketDetail(t)}
                         style={{ cursor: 'pointer' }}
                       >
-                        <div className="d-flex align-items-center justify-content-between mb-2">
+                        <div className="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
                           <span className="badge bg-primary-subtle text-primary border border-primary-subtle font-monospace fw-bold" style={{ fontSize: '0.75rem' }}>
                             #{t.ticketNumber}
                           </span>
@@ -1821,7 +2144,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                           </span>
                         </div>
 
-                        <div className="fw-bold text-dark mb-1.5" style={{ fontSize: '0.92rem', lineHeight: '1.35' }}>
+                        <div className="fw-bold text-dark mb-1.5" style={{ fontSize: '0.92rem', lineHeight: '1.35', overflowWrap: 'anywhere' }}>
                           {t.subject}
                         </div>
 
@@ -1835,21 +2158,32 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         <div className="d-flex align-items-center justify-content-between pt-2 border-top mt-1">
                           <div className="d-flex align-items-center gap-1.5 text-truncate me-2">
                             <span className="badge bg-light text-secondary border text-truncate" style={{ fontSize: '0.68rem', maxWidth: '140px' }}>
-                              {t.department?.name || 'General'}
+                              {t.department?.name || 'Not provided'}
                             </span>
                             <span className="badge bg-light text-muted border" style={{ fontSize: '0.65rem' }}>
                               {t.priority}
                             </span>
                           </div>
-                          <div className="d-flex align-items-center gap-1 text-muted flex-shrink-0" style={{ fontSize: '0.72rem' }}>
-                            <span>{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Today'}</span>
+                          <div className="d-flex align-items-center gap-1 text-muted text-end" style={{ fontSize: '0.72rem', minWidth: 0 }}>
+                            <span>{formatDate(t.updatedAt || t.createdAt)}</span>
                             <ChevronRight size={14} className="text-muted" />
                           </div>
                         </div>
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 p-3 border rounded-3 bg-white">
+                  <p className="small text-muted mb-0" aria-live="polite">
+                    {ticketPage.totalElements === 0 ? '0 matching tickets' : `${ticketPage.number * ticketPage.size + 1}-${ticketPage.number * ticketPage.size + myTickets.length} of ${ticketPage.totalElements} matching tickets`}
+                  </p>
+                  <nav className="d-flex flex-wrap align-items-center gap-2" aria-label="Ticket pagination">
+                    <button type="button" className="btn btn-sm btn-outline-secondary" aria-label="Previous ticket page" disabled={ticketQuery.page === 0} onClick={() => updateTicketQuery({ page: ticketQuery.page - 1 })}>Previous</button>
+                    <span className="small">Page {ticketPage.totalPages ? ticketPage.number + 1 : 0} of {ticketPage.totalPages}</span>
+                    <button type="button" className="btn btn-sm btn-outline-secondary" aria-label="Next ticket page" disabled={ticketPage.totalPages === 0 || ticketQuery.page + 1 >= ticketPage.totalPages} onClick={() => updateTicketQuery({ page: ticketQuery.page + 1 })}>Next</button>
+                  </nav>
+                </div>
+                </>}
               </div>
             )}
           </div>
@@ -1862,6 +2196,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           <div>
             {!isAuthenticated ? (
               renderAuthBarrier('ticketstatus')
+            ) : detailLoading ? (
+              <div className="card border-0 shadow-sm rounded-4 p-4 bg-white text-center" role="status">Loading ticket conversation...</div>
+            ) : detailError ? (
+              <div className="card border-0 shadow-sm rounded-4 p-4 bg-white">
+                <p className="text-danger" role="alert">{detailError}</p>
+                <div className="d-flex flex-wrap gap-2">
+                  <button type="button" className="btn btn-outline-primary" disabled={!selectedTicketNumber} onClick={() => selectedTicketNumber && void handleOpenTicketDetail({ ticketNumber: selectedTicketNumber })}>Retry Conversation</button>
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => { detailRequest.current += 1; setActiveTab('tickets'); onNavigate?.('/' + companySlug + '/ticketstatus'); }}>Back to My Tickets</button>
+                </div>
+              </div>
             ) : selectedTicket ? (
               <div>
                 <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
@@ -1869,6 +2213,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     type="button"
                     className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
                     onClick={() => {
+                      detailRequest.current += 1;
                       setSelectedTicket(null);
                       setActiveTab('tickets');
                       onNavigate?.('/' + companySlug + '/ticketstatus');
@@ -1877,31 +2222,37 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                     <ArrowLeft size={15} /> Back to My Tickets
                   </button>
                   <div className="d-flex align-items-center gap-2">
-                    {selectedTicket.status === 'OPEN' && (
+                    {['OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'WAITING_ON_THIRD_PARTY'].includes(selectedTicket.status) && (
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-success fw-semibold"
-                        onClick={handleCloseTicket}
+                        disabled={isUpdatingTicket || isReplying || isSigningOut || isSubmittingCsat}
+                        onClick={() => void handleTicketStatus(false)}
                       >
-                        Mark as Resolved
+                        {isUpdatingTicket ? 'Updating...' : 'Mark as Resolved'}
                       </button>
                     )}
                     {(selectedTicket.status === 'RESOLVED' || selectedTicket.status === 'CLOSED') && (
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-primary fw-semibold d-flex align-items-center gap-1"
-                        onClick={handleReopenTicket}
+                        disabled={isUpdatingTicket || isReplying || isSigningOut || isSubmittingCsat}
+                        onClick={() => void handleTicketStatus(true)}
                       >
-                        <RotateCcw size={14} /> Reopen Ticket
+                        <RotateCcw size={14} /> {isUpdatingTicket ? 'Updating...' : 'Reopen Ticket'}
                       </button>
                     )}
                   </div>
                 </div>
+                {ticketActionError && <div className="alert alert-danger small" role="alert">
+                  {ticketActionError}
+                  <button type="button" className="btn btn-sm btn-outline-danger d-block mt-2" disabled={isReplying || isUpdatingTicket} onClick={() => void handleOpenTicketDetail(selectedTicket)}>Reload Conversation</button>
+                </div>}
 
                 {/* Ticket Header Card */}
                 <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 mb-3 mb-md-4 bg-white">
                   <div className="d-flex flex-column flex-sm-row justify-content-between align-items-start gap-2.5">
-                    <div>
+                    <div style={{ minWidth: 0, maxWidth: '100%' }}>
                       <div className="d-flex flex-wrap align-items-center gap-1.5 mb-1.5">
                         <span className="badge bg-primary text-white font-monospace">#{selectedTicket.ticketNumber}</span>
                         <span className="badge bg-light text-dark border">{selectedTicket.department?.name || 'Support'}</span>
@@ -1912,11 +2263,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                           'bg-secondary-subtle text-secondary'
                         }`}>{selectedTicket.status}</span>
                       </div>
-                      <h4 className="fw-bolder text-dark mb-0 fs-5 fs-md-4">{selectedTicket.subject}</h4>
+                      <h4 className="fw-bolder text-dark mb-0 fs-5 fs-md-4" style={{ overflowWrap: 'anywhere' }}>{selectedTicket.subject}</h4>
                     </div>
                     <div className="text-start text-sm-end text-muted small mt-1 mt-sm-0 flex-shrink-0">
-                      <div>Opened: {selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleDateString() : 'Today'}</div>
-                      <div>SLA Status: <span className="text-success fw-bold">Within SLA</span></div>
+                      <div>Opened: {formatDate(selectedTicket.createdAt)}</div>
+                      {selectedTicket.updatedAt && <div>Updated: {formatDate(selectedTicket.updatedAt)}</div>}
                     </div>
                   </div>
                 </div>
@@ -1935,11 +2286,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                           <small className="text-muted" style={{ fontSize: '0.7rem' }}>Requester</small>
                         </div>
                       </div>
-                      <small className="text-muted">{selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '09:00 AM'}</small>
+                      <small className="text-muted text-end">{formatDate(selectedTicket.createdAt)}</small>
                     </div>
-                    <div className="text-secondary small mt-2 lh-base" style={{ wordBreak: 'break-word' }}>
-                      {selectedTicket.descriptionText || selectedTicket.descriptionHtml || 'Original ticket description provided during intake.'}
-                    </div>
+                    {selectedTicket.descriptionText ? <div className="text-secondary small mt-2 lh-base" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{selectedTicket.descriptionText}</div>
+                      : <div className="text-secondary small mt-2 lh-base" style={{ overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedTicket.descriptionHtml || '') }} />}
+                    {renderAttachments(selectedTicket.attachments)}
                   </div>
 
                   {/* Dynamic Conversation Threads */}
@@ -1962,18 +2313,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                               <div className="fw-bold text-dark small">
                                 {isCustomer ? 'You' : `${th.fromName || 'Support Team'}`}
                               </div>
-                              <small className="text-muted" style={{ fontSize: '0.7rem' }}>{isCustomer ? 'Customer' : 'Certified Support Engineer'}</small>
+                              <small className="text-muted" style={{ fontSize: '0.7rem' }}>{isCustomer ? 'Customer' : 'Support Team'}</small>
                             </div>
                           </div>
                           <small className="text-muted">
-                            {th.createdAt ? new Date(th.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                            {formatDate(th.createdAt)}
                           </small>
                         </div>
-                        <div
-                          className="text-secondary small mt-2 lh-base"
-                          style={{ wordBreak: 'break-word' }}
-                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(th.bodyHtml || th.bodyText || '') }}
-                        />
+                        {th.bodyHtml ? <div className="text-secondary small mt-2 lh-base" style={{ overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(th.bodyHtml) }} />
+                          : <div className="text-secondary small mt-2 lh-base" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{th.bodyText}</div>}
+                        {renderAttachments(th.attachments)}
                       </div>
                     );
                   })}
@@ -1987,12 +2336,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                       <h6 className="fw-bold text-dark mb-0">How satisfied were you with this resolution?</h6>
                     </div>
                     {csatSubmitted ? (
-                      <div className="alert alert-success py-2 px-3 small d-flex align-items-center gap-2 mb-0">
+                      <div className="alert alert-success py-2 px-3 small d-flex align-items-center gap-2 mb-0" role="status">
                         <CheckCircle2 size={16} />
-                        <span>Thank you for rating our support team! Your feedback helps us maintain strict SLAs.</span>
+                        <span>Your feedback has been recorded. Thank you for rating our support.</span>
                       </div>
                     ) : (
-                      <form onSubmit={handleSubmitCsat}>
+                      <form onSubmit={handleSubmitCsat} aria-busy={isSubmittingCsat}>
+                        {csatError && <div className="alert alert-danger small" role="alert">{csatError}</div>}
                         <p className="text-muted small mb-2.5">Rate your experience with our engineering support:</p>
                         <div className="d-flex flex-wrap gap-2 mb-3">
                           {[1, 2, 3, 4, 5].map(star => (
@@ -2000,21 +2350,28 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                               key={star}
                               type="button"
                               className={`btn btn-sm ${csatRating >= star ? 'btn-warning text-dark' : 'btn-outline-secondary'}`}
+                              aria-label={`Rate ${star} out of 5`}
+                              aria-pressed={csatRating === star}
+                              disabled={isSubmittingCsat || isSigningOut || isUpdatingTicket}
                               onClick={() => setCsatRating(star)}
                             >
                               ★ {star}
                             </button>
                           ))}
                         </div>
+                        <label htmlFor="portal-csat-comment" className="form-label small">Feedback Comment (Optional)</label>
                         <textarea
+                          id="portal-csat-comment"
+                          maxLength={2000}
+                          disabled={isSubmittingCsat || isSigningOut || isUpdatingTicket}
                           className="form-control form-control-sm mb-3"
                           rows={2}
                           placeholder="Optional feedback comment on agent helpfulness and response speed..."
                           value={csatComment}
                           onChange={e => setCsatComment(e.target.value)}
                         />
-                        <button type="submit" className="btn btn-warning btn-sm fw-bold w-100 w-sm-auto">
-                          Submit Feedback
+                        <button type="submit" className="btn btn-warning btn-sm fw-bold w-100 w-sm-auto" disabled={isSubmittingCsat || isSigningOut || isUpdatingTicket || csatRating < 1}>
+                          {isSubmittingCsat ? 'Saving Feedback...' : 'Submit Feedback'}
                         </button>
                       </form>
                     )}
@@ -2024,18 +2381,38 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 {/* Reply Box */}
                 <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white">
                   <h6 className="fw-bold text-dark mb-2.5">Post a Reply to this Thread</h6>
-                  <form onSubmit={handleSendReply}>
+                  <form onSubmit={handleSendReply} aria-busy={isReplying}>
+                    {replyDraft?.error && <div className="alert alert-danger small" role="alert">{replyDraft.error}</div>}
+                    {replyDraft?.notice && <div className="alert alert-success small" role="status">{replyDraft.notice}</div>}
+                    <fieldset disabled={isReplying || isSigningOut || isUpdatingTicket} style={{ minWidth: 0 }}>
+                    <label htmlFor="portal-reply" className="form-label small fw-semibold">Your Reply</label>
                     <textarea
+                      id="portal-reply"
+                      maxLength={100000}
+                      readOnly={replyDraft?.saved}
                       className="form-control mb-3"
                       rows={3}
                       required
-                      placeholder="Type your response here... Replying automatically marks this ticket Open."
+                      placeholder="Add details for the support team. Do not include passwords or sign-in codes."
                       value={customerReplyText}
-                      onChange={e => setCustomerReplyText(e.target.value)}
+                      onChange={e => updateReplyDraft(selectedTicket.ticketNumber, { text: e.target.value, error: undefined, notice: undefined })}
                     />
+                    <label htmlFor="portal-reply-files" className="form-label small fw-semibold">Reply Attachments</label>
+                    <input id="portal-reply-files" type="file" multiple accept=".png,.pdf,.jpg,.jpeg,.txt" className="form-control form-control-sm mb-2" disabled={replyDraft?.saved} onChange={event => {
+                      if (!event.target.files) return;
+                      const added = Array.from(event.target.files);
+                      const files = replyDraft?.files || [];
+                      updateReplyDraft(selectedTicket.ticketNumber, { files: [...files, ...added.filter(file => !files.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))] });
+                      event.target.value = '';
+                    }} />
+                    <p className="small text-muted mb-2">PNG, PDF, JPG, JPEG or TXT; up to 25 MB per file.</p>
+                    {(replyDraft?.files || []).map((file, index) => <div key={`${file.name}-${index}`} className="d-flex align-items-center justify-content-between gap-2 small mb-2">
+                      <span style={{ overflowWrap: 'anywhere', minWidth: 0 }}>{file.name}</span>
+                      <button type="button" className="btn btn-sm btn-link text-danger flex-shrink-0" aria-label={`Remove reply attachment ${file.name}`} onClick={() => updateReplyDraft(selectedTicket.ticketNumber, { files: replyDraft!.files.filter(item => item !== file) })}>Remove</button>
+                    </div>)}
                     <div className="d-flex flex-column flex-sm-row justify-content-between align-items-stretch align-items-sm-center gap-2">
                       <span className="small text-muted" style={{ fontSize: '0.78rem' }}>
-                        Your message will be sent to the assigned engineer.
+                        {replyDraft?.saved ? 'Your reply is already saved. Only remaining attachments will be uploaded.' : 'Your reply is visible to the support team in this ticket.'}
                       </span>
                       <button
                         type="submit"
@@ -2045,20 +2422,21 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         {isReplying ? (
                           <>
                             <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                            <span>Sending...</span>
+                            <span>{replyDraft?.saved ? 'Uploading...' : 'Sending...'}</span>
                           </>
                         ) : (
                           <>
-                            <span>Send Reply</span>
+                            <span>{replyDraft?.saved ? 'Retry Uploads Only' : 'Send Reply'}</span>
                             <Send size={15} />
                           </>
                         )}
                       </button>
                     </div>
+                    </fieldset>
                   </form>
                 </div>
               </div>
-            ) : null}
+            ) : <div className="card border-0 shadow-sm rounded-4 p-4 bg-white text-center"><p>No ticket is selected.</p><button type="button" className="btn btn-outline-primary" onClick={() => { setActiveTab('tickets'); onNavigate?.('/' + companySlug + '/ticketstatus'); }}>View My Tickets</button></div>}
           </div>
         )}
 
@@ -2067,7 +2445,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             ============================================================== */}
         {activeTab === 'kb' && (
           <div>
-            <div className="d-flex align-items-center justify-content-between mb-4">
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
               <div>
                 <nav aria-label="breadcrumb">
                   <ol className="breadcrumb small mb-1">
@@ -2080,7 +2458,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <button
                 type="button"
                 className="btn btn-outline-primary btn-sm rounded-pill fw-semibold"
-                onClick={() => { setActiveTab('submit'); setSubmitSuccess(null); }}
+                onClick={openTicketForm}
               >
                 Still stuck? Submit a ticket
               </button>
@@ -2092,9 +2470,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 className={`btn btn-sm rounded-pill px-3 py-1 fw-semibold ${!selectedKbCategory ? 'btn-primary' : 'btn-light text-muted'}`}
                 onClick={() => setSelectedKbCategory(null)}
               >
-                All Articles ({kbArticles.length})
+                  All Articles ({visibleArticles.length})
               </button>
-              {Array.from(new Set(kbArticles.map(a => a.categoryName))).map(cat => (
+              {Array.from(new Set(visibleArticles.map(a => a.categoryName))).map(cat => (
                 <button
                   key={cat}
                   className={`btn btn-sm rounded-pill px-3 py-1 fw-semibold ${selectedKbCategory === cat ? 'btn-primary' : 'btn-light text-muted'}`}
@@ -2107,7 +2485,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
             {/* Articles Grid */}
             <div className="row g-3">
-              {kbArticles
+              {visibleArticles
                 .filter(a => !selectedKbCategory || a.categoryName === selectedKbCategory)
                 .map(art => (
                   <div key={art.id} className="col-md-6">
@@ -2144,7 +2522,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             ============================================================== */}
         {activeTab === 'article' && selectedArticle && (
           <div className="mx-auto" style={{ maxWidth: '820px' }}>
-            <div className="d-flex align-items-center justify-content-between mb-3">
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
               <button
                 type="button"
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
@@ -2163,13 +2541,20 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 <button
                   type="button"
                   className="btn btn-sm btn-light border d-flex align-items-center gap-1"
-                  onClick={() => {
-                    navigator.clipboard.writeText(window.location.href);
-                    setCopiedLink(true);
-                    setTimeout(() => setCopiedLink(false), 3000);
+                  onClick={async () => {
+                    const generation = sessionGeneration.current;
+                    setArticleError(null);
+                    try {
+                      await navigator.clipboard.writeText(new URL('/' + encodeURIComponent(companySlug), window.location.origin).href);
+                      if (!isCurrentSession(generation)) return;
+                      setCopiedLink(true);
+                      window.setTimeout(() => { if (isCurrentSession(generation)) setCopiedLink(false); }, 3000);
+                    } catch (error) {
+                      if (isCurrentSession(generation)) setArticleError(errorMessage(error, 'Unable to copy the portal link.'));
+                    }
                   }}
                 >
-                  <Copy size={14} /> {copiedLink ? 'Copied!' : 'Copy Link'}
+                  <Copy size={14} /> {copiedLink ? 'Copied!' : 'Copy Portal Link'}
                 </button>
               </div>
             </div>
@@ -2180,7 +2565,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               </span>
               <h3 className="fw-bolder text-dark mb-3">{selectedArticle.title}</h3>
               <div className="d-flex align-items-center gap-3 text-muted small pb-3 mb-4 border-bottom">
-                <span>Views: {selectedArticle.viewCount || 100}</span>
+                <span>Views: {selectedArticle.viewCount ?? 'Not available'}</span>
                 <span>•</span>
                 <span>Helpful votes: {selectedArticle.helpfulVotes}</span>
               </div>
@@ -2193,11 +2578,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
               {/* Feedback Thumbs */}
               <div className="mt-5 pt-4 border-top text-center bg-light p-4 rounded-3">
+                {articleError && <div className="alert alert-danger small" role="alert">{articleError}</div>}
                 <h6 className="fw-bold text-dark mb-2">Was this article helpful?</h6>
                 <div className="d-flex justify-content-center gap-2 mb-2">
                   <button
                     type="button"
                     className={`btn btn-sm d-flex align-items-center gap-1.5 px-3 py-1.5 ${articleVoted[selectedArticle.id] === 'yes' ? 'btn-success' : 'btn-outline-secondary'}`}
+                    disabled={votingArticle !== null || !!articleVoted[selectedArticle.id]}
                     onClick={() => handleVoteArticle(selectedArticle.id, true)}
                   >
                     <ThumbsUp size={15} /> Yes
@@ -2205,6 +2592,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   <button
                     type="button"
                     className={`btn btn-sm d-flex align-items-center gap-1.5 px-3 py-1.5 ${articleVoted[selectedArticle.id] === 'no' ? 'btn-danger' : 'btn-outline-secondary'}`}
+                    disabled={votingArticle !== null || !!articleVoted[selectedArticle.id]}
                     onClick={() => handleVoteArticle(selectedArticle.id, false)}
                   >
                     <ThumbsDown size={15} /> No
@@ -2222,8 +2610,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   type="button"
                   className="btn btn-sm btn-outline-primary fw-semibold"
                   onClick={() => {
-                    setSubject(`Inquiry regarding: ${selectedArticle.title}`);
-                    setActiveTab('submit');
+                    openTicketForm();
+                    if ((!submitSuccess && !subject.trim()) || (submitSuccess && attachments.length === 0 && !submitBusy.current)) setSubject(`Inquiry regarding: ${selectedArticle.title}`.slice(0, 200));
                   }}
                 >
                   Submit a Ticket on this Topic →
@@ -2236,9 +2624,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         {/* ==============================================================
             SCREEN 15: CUSTOMER PROFILE & DATA PRIVACY
             ============================================================== */}
-        {activeTab === 'profile' && (
-          <div className="mx-auto" style={{ maxWidth: '720px' }}>
-            <div className="d-flex align-items-center justify-content-between mb-3">
+        {activeTab === 'profile' && !isAuthenticated && renderAuthBarrier('ticketstatus')}
+        {isAuthenticated && (
+          <div key={`${companySlug}:${customerEmail}`} hidden={activeTab !== 'profile'} className="mx-auto" style={{ maxWidth: '720px' }}>
+            <div className="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
               <button
                 type="button"
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
@@ -2249,158 +2638,67 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               >
                 <ArrowLeft size={15} /> Back to Home
               </button>
-              <span className="small text-muted">Screen 15 • Customer Profile & Privacy</span>
+              <span className="small text-muted">Customer Profile & Privacy</span>
             </div>
 
-            <div className="card border-0 shadow-sm rounded-4 p-4 p-md-5 bg-white mb-4">
-              <div className="d-flex align-items-center gap-3 mb-4 pb-3 border-bottom">
+            <div className="card border-0 shadow-sm rounded-4 p-3 p-sm-4 p-md-5 bg-white mb-4">
+              <div className="d-flex flex-wrap align-items-center gap-3 mb-4 pb-3 border-bottom">
                 <div
-                  className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold"
+                  className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold flex-shrink-0"
                   style={{ width: '56px', height: '56px', backgroundColor: primaryColor, fontSize: '1.4rem' }}
                 >
-                  {customerName.charAt(0).toUpperCase()}
+                  {customerName.charAt(0).toUpperCase() || customerEmail.charAt(0).toUpperCase()}
                 </div>
-                <div>
-                  <h5 className="fw-bolder text-dark mb-0">{customerName}</h5>
-                  <span className="text-muted small">{customerEmail}</span>
+                <div style={{ minWidth: 0, flex: '1 1 160px' }}>
+                  <h5 className="fw-bolder text-dark mb-0" style={{ overflowWrap: 'anywhere' }}>{customerName || 'Customer Account'}</h5>
+                  <span className="text-muted small" style={{ overflowWrap: 'anywhere' }}>{customerEmail}</span>
                   <span className="badge bg-success-subtle text-success ms-2" style={{ fontSize: '0.65rem' }}>VERIFIED CUSTOMER</span>
                 </div>
               </div>
 
-              {profileSaved && (
-                <div className="alert alert-success py-2 px-3 small d-flex align-items-center gap-2 mb-3">
-                  <CheckCircle2 size={16} /> Preferences successfully updated.
-                </div>
-              )}
-
-              {/* Profile Details */}
-              <h6 className="fw-bold text-dark mb-3">Contact Details</h6>
-              <div className="row g-3 mb-4">
-                <div className="col-md-6">
-                  <label className="form-label small fw-bold text-secondary">Full Name</label>
-                  <input
-                    type="text"
-                    className="form-control form-control-sm"
-                    value={customerName}
-                    onChange={e => setCustomerName(e.target.value)}
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label small fw-bold text-secondary">Registered Email (Read-Only)</label>
-                  <input
-                    type="email"
-                    className="form-control form-control-sm bg-light"
-                    value={customerEmail}
-                    readOnly
-                    disabled
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label small fw-bold text-secondary">Phone Number</label>
-                  <input
-                    type="text"
-                    className="form-control form-control-sm"
-                    value={customerPhone}
-                    onChange={e => setCustomerPhone(e.target.value)}
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label small fw-bold text-secondary">Company / Organization</label>
-                  <input
-                    type="text"
-                    className="form-control form-control-sm"
-                    value={customerOrg}
-                    onChange={e => setCustomerOrg(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {/* Notification Preferences */}
-              <h6 className="fw-bold text-dark mb-3">Notification Preferences</h6>
-              <div className="mb-4 d-flex flex-column gap-2 bg-light p-3 rounded-3">
-                <div className="form-check">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="notifReplyCheck"
-                    checked={notifReply}
-                    onChange={e => setNotifReply(e.target.checked)}
-                  />
-                  <label className="form-check-label small text-dark" htmlFor="notifReplyCheck">
-                    Email me when an engineer replies to my ticket
-                  </label>
-                </div>
-                <div className="form-check">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="notifResolvedCheck"
-                    checked={notifResolved}
-                    onChange={e => setNotifResolved(e.target.checked)}
-                  />
-                  <label className="form-check-label small text-dark" htmlFor="notifResolvedCheck">
-                    Email me when a ticket status moves to Resolved or Closed
-                  </label>
-                </div>
-                <div className="form-check">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="notifCsatCheck"
-                    checked={notifCsat}
-                    onChange={e => setNotifCsat(e.target.checked)}
-                  />
-                  <label className="form-check-label small text-dark" htmlFor="notifCsatCheck">
-                    Send me CSAT service satisfaction surveys upon resolution
-                  </label>
-                </div>
-              </div>
+              <CustomerProfileForm companySlug={companySlug} customerEmail={customerEmail}
+                active={activeTab === 'profile'} disabled={isSigningOut} onNameChange={setCustomerName} sessionGeneration={sessionGeneration} />
 
               {/* Data & Privacy Actions */}
-              <h6 className="fw-bold text-dark mb-2">My Data & Privacy (DPDPA / GDPR Compliance)</h6>
+              <h6 className="fw-bold text-dark mb-2">My Data & Privacy</h6>
               <p className="text-muted small mb-3">
-                Under data privacy principles, you have the right to download all ticket records or request deletion.
+                Download the first page of your ticket history, up to 100 tickets, with server-provided pagination metadata. This is not a complete-history export when more than 100 tickets exist. Account deletion requests are not configured.
               </p>
+              {exportError && <div className="alert alert-danger small" role="alert">{exportError}</div>}
               <div className="d-flex flex-wrap gap-2 mb-4">
                 <button
                   type="button"
                   className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1.5"
                   onClick={handleExportData}
+                  disabled={isExporting || isSigningOut}
                 >
                   <Download size={14} />
-                  <span>Download My Ticket History (JSON)</span>
+                  <span>{isExporting ? 'Preparing Export...' : 'Download First 100 Tickets (JSON)'}</span>
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-outline-danger"
-                  onClick={() => alert('Deletion request logged. Your account tickets will be scrubbed after the statutory audit retention window.')}
+                  disabled
+                  title="Account deletion requests are not configured"
                 >
-                  Request Account Deletion
+                  Account Deletion (Not Configured)
                 </button>
               </div>
 
-              <div className="d-flex justify-content-between pt-3 border-top">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm px-4 fw-semibold"
-                  onClick={() => {
-                    setProfileSaved(true);
-                    setTimeout(() => setProfileSaved(false), 3000);
-                  }}
-                >
-                  Save Profile Preferences
-                </button>
+              <div className="d-flex flex-wrap gap-2 justify-content-between pt-3 border-top">
                 <button
                   type="button"
                   className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1"
                   onClick={handleSignOut}
+                  disabled={isSigningOut}
                 >
-                  <LogOut size={14} /> Sign Out
+                  <LogOut size={14} /> {isSigningOut ? 'Signing Out...' : 'Sign Out'}
                 </button>
               </div>
             </div>
           </div>
         )}
+        </>}
       </main>
 
       {/* FOOTER */}
@@ -2409,7 +2707,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           <div>
             © 2026 <strong>{company?.name}</strong>. All rights reserved.
           </div>
-          <div className="d-flex align-items-center gap-3">
+          <div className="d-flex flex-wrap justify-content-center align-items-center gap-3">
             <a href="#terms" className="text-decoration-none text-muted">Terms of Service</a>
             <a href="#privacy" className="text-decoration-none text-muted">Privacy Policy</a>
             {onNavigateToAdmin && (
@@ -2463,12 +2761,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             type="button"
             className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 ${activeTab === 'submit' ? 'text-primary fw-bold' : 'text-secondary'}`}
             style={{ fontSize: '0.68rem', minWidth: 0 }}
-            onClick={() => {
-              setActiveTab('submit');
-              setSubmitSuccess(null);
-              setMobileMenuOpen(false);
-              onNavigate?.('/' + companySlug + '/ticket');
-            }}
+            onClick={openTicketForm}
           >
             <Send size={19} className="mb-0.5" />
             <span className="text-truncate">New Ticket</span>
@@ -2486,12 +2779,12 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           >
             <div className="position-relative">
               <Clock size={19} className="mb-0.5" />
-              {myTickets.length > 0 && (
+              {isAuthenticated && allTicketTotal !== null && allTicketTotal > 0 && (
                 <span
                   className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-white"
                   style={{ fontSize: '0.55rem', padding: '0.15em 0.35em' }}
                 >
-                  {myTickets.length}
+                  {allTicketTotal}
                 </span>
               )}
             </div>
@@ -2535,14 +2828,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               type="button"
               className="btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 text-primary fw-semibold"
               style={{ fontSize: '0.68rem', minWidth: 0 }}
-              onClick={() => {
-                setAuthStep('input');
-                setShowAuthModal(true);
+              disabled={sessionStatus !== 'anonymous' || !company}
+              onClick={event => {
+                openAuthModal(event);
                 setMobileMenuOpen(false);
               }}
             >
               <Lock size={19} className="mb-0.5" />
-              <span className="text-truncate">Sign In</span>
+              <span className="text-truncate">{sessionStatus === 'checking' ? 'Checking' : 'Sign In'}</span>
             </button>
           )}
         </div>
@@ -2551,184 +2844,17 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       {/* ==============================================================
           SCREEN 10: CUSTOMER LOGIN MODAL (OTP & OAUTH)
           ============================================================== */}
-      {showAuthModal && (
-        <div
-          className="modal fade show d-block"
-          tabIndex={-1}
-          style={{ backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', zIndex: 1060 }}
-        >
-          <div className="modal-dialog modal-dialog-centered mx-3 mx-sm-auto" style={{ maxWidth: '440px' }}>
-            <div className="modal-content rounded-4 border-0 shadow-2xl overflow-hidden">
-              <div className="bg-primary p-4 text-white text-center position-relative">
-                <button
-                  type="button"
-                  className="btn-close btn-close-white position-absolute top-0 end-0 m-3"
-                  onClick={() => setShowAuthModal(false)}
-                />
-                <div className="d-inline-flex p-3 rounded-circle bg-white bg-opacity-20 mb-2">
-                  <LifeBuoy size={28} className="text-white" />
-                </div>
-                <h5 className="modal-title fw-bold mb-0">Sign In to Customer Portal</h5>
-                <small className="text-white text-opacity-80">Screen 10 • Track your {company?.name} tickets</small>
-              </div>
-
-              <div className="modal-body p-4">
-                {/* Quick 1-Click Demo Logins */}
-                <div className="p-2.5 rounded-3 bg-light border mb-3">
-                  <div className="d-flex align-items-center justify-content-between mb-2">
-                    <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.66rem' }}>
-                      One-Click Demo Customer
-                    </small>
-                    <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.62rem' }}>Instant</span>
-                  </div>
-                  <div className="d-grid gap-1.5">
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-white bg-white border text-start d-flex align-items-center justify-content-between py-1.5 px-2.5 rounded-2"
-                      onClick={() => handleQuickCustomerLogin('loan.applicant@gmail.com', 'Rajesh Kannan')}
-                    >
-                      <div className="small fw-semibold text-dark text-truncate">Rajesh Kannan (loan.applicant@gmail.com)</div>
-                      <span className="text-primary fw-bold small">Sign In →</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-white bg-white border text-start d-flex align-items-center justify-content-between py-1.5 px-2.5 rounded-2"
-                      onClick={() => handleQuickCustomerLogin('priya.customer@gmail.com', 'Priya Sharma')}
-                    >
-                      <div className="small fw-semibold text-dark text-truncate">Priya Sharma (priya.customer@gmail.com)</div>
-                      <span className="text-primary fw-bold small">Sign In →</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Social OAuth Buttons */}
-                <div className="row g-2 mb-3">
-                  <div className="col-6">
-                    <button
-                      type="button"
-                      className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-                      onClick={() => handleOAuthLogin('Google')}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3.03h3.88c2.27-2.09 3.665-5.17 3.665-9.12z" />
-                        <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.03c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.13C3.27 21.43 7.33 24 12 24z" />
-                        <path fill="#FBBC05" d="M5.28 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.13z" />
-                        <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.27 2.57 1.25 6.58l4.03 3.13c.95-2.83 3.6-4.96 6.72-4.96z" />
-                      </svg>
-                      <span>Google</span>
-                    </button>
-                  </div>
-                  <div className="col-6">
-                    <button
-                      type="button"
-                      className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
-                      onClick={() => handleOAuthLogin('Microsoft')}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 23 23">
-                        <path fill="#f35325" d="M1 1h10v10H1z" />
-                        <path fill="#81bc06" d="M12 1h10v10H12z" />
-                        <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                        <path fill="#ffba08" d="M12 12h10v10H12z" />
-                      </svg>
-                      <span>Microsoft</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="d-flex align-items-center my-3 text-muted">
-                  <hr className="flex-grow-1 my-0" />
-                  <span className="px-3 small text-uppercase" style={{ fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-                    or email sign-in code
-                  </span>
-                  <hr className="flex-grow-1 my-0" />
-                </div>
-
-                {otpNotice && (
-                  <div className="alert alert-info py-2 px-3 small d-flex align-items-center gap-2 mb-3">
-                    <AlertCircle size={16} />
-                    <span>{otpNotice}</span>
-                  </div>
-                )}
-
-                {authStep === 'input' ? (
-                  <form onSubmit={handleRequestOtp}>
-                    <div className="mb-3">
-                      <label className="form-label small fw-bold text-dark">Your Email Address</label>
-                      <input
-                        type="email"
-                        className="form-control"
-                        required
-                        placeholder="name@example.com"
-                        value={authEmailInput}
-                        onChange={e => setAuthEmailInput(e.target.value)}
-                        autoFocus
-                      />
-                      <small className="text-muted" style={{ fontSize: '0.72rem' }}>
-                        No password needed! We will email you a secure 6-digit verification code.
-                      </small>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isRequestingOtp || !authEmailInput.trim()}
-                      className="btn btn-primary w-100 py-2.5 fw-semibold d-flex align-items-center justify-content-center gap-2"
-                    >
-                      {isRequestingOtp ? (
-                        <>
-                          <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                          <span>Sending Code...</span>
-                        </>
-                      ) : (
-                        <span>Send Sign-in Code</span>
-                      )}
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={handleVerifyOtp}>
-                    <div className="mb-3">
-                      <label className="form-label small fw-bold text-dark">Enter 6-Digit Code</label>
-                      <input
-                        type="text"
-                        className="form-control form-control-lg text-center font-monospace fw-bold letter-spacing-2"
-                        placeholder="000000"
-                        maxLength={6}
-                        required
-                        value={otpCode}
-                        onChange={e => setOtpCode(e.target.value)}
-                        autoFocus
-                      />
-                      <small className="text-muted d-block mt-1 text-center" style={{ fontSize: '0.75rem' }}>
-                        Dev test code: <code>123456</code>
-                      </small>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={!otpCode.trim()}
-                      className="btn btn-primary w-100 py-2.5 fw-semibold mb-3"
-                    >
-                      Verify & Sign In
-                    </button>
-
-                    <div className="d-flex justify-content-between align-items-center small">
-                      <button
-                        type="button"
-                        className="btn btn-link btn-sm text-decoration-none p-0 text-muted"
-                        onClick={() => { setAuthStep('input'); setOtpCode(''); }}
-                      >
-                        Use different email
-                      </button>
-                      <span className="text-muted">
-                        Resend in {otpCountdown}s
-                      </span>
-                    </div>
-                  </form>
-                )}
-              </div>
-            </div>
+      <dialog ref={authDialog} className="account-flow-dialog" aria-labelledby="portal-sign-in-title" onCancel={event => { event.preventDefault(); setShowAuthModal(false); }} onClose={() => setShowAuthModal(false)}>
+        <div className="account-flow-header position-relative">
+          <span className="account-flow-mark"><LifeBuoy size={24} aria-hidden="true" /></span>
+          <div>
+            <h2 id="portal-sign-in-title">Customer Sign In</h2>
+            <p>Access your {company?.name || 'support'} tickets securely.</p>
           </div>
+          <button type="button" className="btn-close position-absolute top-0 end-0 m-3" aria-label="Close customer sign-in" onClick={() => setShowAuthModal(false)} />
         </div>
-      )}
+        <div className="modal-body p-4">{showAuthModal && renderSignIn()}</div>
+      </dialog>
     </div>
   );
 };

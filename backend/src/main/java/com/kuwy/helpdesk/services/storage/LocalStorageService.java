@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.LinkOption;
 import java.util.UUID;
 
 @Slf4j
@@ -35,15 +36,16 @@ public class LocalStorageService implements FileStorageService {
 
     @Override
     public StoredFileResult storeFile(MultipartFile file, Long companyId, Long ticketId) throws IOException {
+        if (companyId == null || companyId <= 0 || ticketId == null || ticketId <= 0) throw new IllegalArgumentException("A valid workspace and ticket are required for attachment storage.");
         String originalFilename = StringUtils.cleanPath(file.getOriginalFilename() != null ? file.getOriginalFilename() : "document");
         if (originalFilename.contains("..")) {
             throw new IllegalArgumentException("Cannot store file with relative path outside current directory: " + originalFilename);
         }
 
         // Subdirectory partitioned by company and ticket: company_{id}/ticket_{id}
-        Path targetDir = uploadRoot.resolve("company_" + (companyId != null ? companyId : 1))
-                                   .resolve("ticket_" + (ticketId != null ? ticketId : 0));
+        Path targetDir = uploadRoot.resolve("company_" + companyId).resolve("ticket_" + ticketId);
         Files.createDirectories(targetDir);
+        if (!targetDir.toRealPath().startsWith(uploadRoot.toRealPath())) throw new IOException("Attachment directory is outside private storage.");
 
         // Unique filename: e.g. 1793684829_a3f81e_document.pdf
         String extension = "";
@@ -51,12 +53,11 @@ public class LocalStorageService implements FileStorageService {
         if (dotIdx >= 0) {
             extension = originalFilename.substring(dotIdx);
         }
-        String baseName = dotIdx >= 0 ? originalFilename.substring(0, dotIdx) : originalFilename;
-        String safeBaseName = baseName.replaceAll("[^a-zA-Z0-9._-]", "_");
-        String uniqueFileName = System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8) + "_" + safeBaseName + extension;
+        if (!extension.matches("\\.[A-Za-z0-9]{1,8}")) throw new IllegalArgumentException("Attachment extension is invalid.");
+        String uniqueFileName = UUID.randomUUID() + extension.toLowerCase(java.util.Locale.ROOT);
 
         Path targetPath = targetDir.resolve(uniqueFileName);
-        Files.copy(file.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+        try (java.io.InputStream input = file.getInputStream()) { Files.copy(input, targetPath); }
 
         String relativePath = uploadRoot.relativize(targetPath).toString().replace('\\', '/');
 
@@ -75,25 +76,25 @@ public class LocalStorageService implements FileStorageService {
     @Override
     public Resource loadFileAsResource(String storagePath) throws IOException {
         try {
-            Path filePath = uploadRoot.resolve(storagePath).normalize();
+            Path filePath = checkedPath(storagePath);
             Resource resource = new UrlResource(filePath.toUri());
             if (resource.exists() && resource.isReadable()) {
                 return resource;
             } else {
-                throw new IOException("File not found or unreadable: " + storagePath);
+                throw new IOException("Attachment not found or unreadable.");
             }
         } catch (MalformedURLException e) {
-            throw new IOException("Malformed file URL: " + storagePath, e);
+            throw new IOException("Attachment path is invalid.");
         }
     }
 
     @Override
     public boolean deleteFile(String storagePath) {
         try {
-            Path filePath = uploadRoot.resolve(storagePath).normalize();
+            Path filePath = checkedPath(storagePath);
             return Files.deleteIfExists(filePath);
         } catch (IOException e) {
-            log.warn("Failed to delete local attachment: {}", storagePath, e);
+            log.warn("Private attachment could not be deleted.");
             return false;
         }
     }
@@ -102,5 +103,15 @@ public class LocalStorageService implements FileStorageService {
     public String getStorageType() {
         return "LOCAL_DISK";
     }
-}
 
+    private Path checkedPath(String storagePath) throws IOException {
+        if (storagePath == null || storagePath.isBlank()) throw new IOException("Attachment path is invalid.");
+        Path relative;
+        try { relative = Paths.get(storagePath); } catch (RuntimeException invalid) { throw new IOException("Attachment path is invalid."); }
+        if (relative.isAbsolute()) throw new IOException("Absolute attachment paths are not allowed.");
+        Path result = uploadRoot.resolve(relative).normalize();
+        if (!result.startsWith(uploadRoot) || result.equals(uploadRoot) || !Files.isRegularFile(result, LinkOption.NOFOLLOW_LINKS)
+                || !result.toRealPath().startsWith(uploadRoot.toRealPath())) throw new IOException("Attachment path is outside private storage or unavailable.");
+        return result;
+    }
+}

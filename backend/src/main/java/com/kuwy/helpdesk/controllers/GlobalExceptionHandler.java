@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -23,6 +24,12 @@ import java.util.Set;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleStatus(ResponseStatusException ex) {
+        return ResponseEntity.status(ex.getStatusCode()).body(Map.of("status", ex.getStatusCode().value(),
+                "message", ex.getReason() == null ? "The request could not be completed." : ex.getReason()));
+    }
 
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<Map<String, Object>> handleAuthentication(AuthenticationException ex) {
@@ -68,9 +75,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
+        if (Set.of("CAPTCHA_NOT_CONFIGURED", "CAPTCHA_UNAVAILABLE").contains(ex.getMessage() == null ? "" : ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", "Verification unavailable", "message", "Verification is not available right now. Please try again later or contact support."));
+        }
         if ("PASSWORD_RESET_RATE_LIMITED".equals(ex.getMessage())) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", "60").body(Map.of(
                     "error", "Rate limit", "message", "Too many recovery requests. Please try again later."));
+        }
+        if ("ATTACHMENT_SCAN_UNAVAILABLE".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", "Attachment scanning unavailable", "message", "Attachments cannot be accepted until the malware scanner is configured and available."));
         }
         if (Set.of("ACCOUNT_EMAIL_NOT_READY", "ACCOUNT_EMAIL_ENQUEUE_FAILED", "AUTHENTICATION_TOKEN_NOT_AVAILABLE").contains(ex.getMessage() == null ? "" : ex.getMessage())) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(

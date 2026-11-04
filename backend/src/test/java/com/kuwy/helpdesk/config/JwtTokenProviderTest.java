@@ -64,7 +64,7 @@ class JwtTokenProviderTest {
             assertContextsCleared();
             return Optional.of(user);
         });
-        filter = new TenantFilter(tokenProvider, userRepository);
+        filter = new TenantFilter(tokenProvider, userRepository, mock(com.kuwy.helpdesk.services.BrowserSessionService.class), mock(com.kuwy.helpdesk.config.BrowserSessionCookies.class));
     }
 
     @AfterEach

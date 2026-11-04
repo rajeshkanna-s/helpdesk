@@ -79,6 +79,9 @@ export interface TicketThread {
 }
 
 export interface Ticket {
+  attachments?: TicketAttachment[];
+  emailNotification?: 'queued' | 'not_configured';
+  updatedAt?: string;
   id: number;
   ticketNumber: string;
   subject: string;
@@ -123,6 +126,7 @@ export interface DashboardStats {
 }
 
 export interface AuthUser {
+  mfaSetupRequired?: boolean;
   userId: number;
   email: string;
   firstName: string;
@@ -142,6 +146,9 @@ export interface AuthUser {
 }
 
 export interface LoginResponse extends Partial<AuthUser> {
+  browserSession?: boolean;
+  csrfToken?: string;
+  sessionId?: string;
   token?: string;
   twoFactorRequired?: boolean;
   tempToken?: string;

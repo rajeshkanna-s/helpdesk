@@ -488,7 +488,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
         <div className="sidebar-footer">
           <div className="workspace-user">
             <div className="workspace-avatar">{currentUser.firstName?.charAt(0) || 'S'}{currentUser.lastName?.charAt(0)}</div>
-            <div className="workspace-user-info"><strong title={currentUser.displayName}>{currentUser.displayName || 'Platform owner'}</strong><span>Super admin</span></div>
+            <button type="button" className="workspace-user-info workspace-profile-button" aria-label="Account security" onClick={() => window.dispatchEvent(new Event('kuwy-open-account-security'))}><strong title={currentUser.displayName}>{currentUser.displayName || 'Platform owner'}</strong><span>Super admin</span></button>
             <button type="button" className="workspace-icon-button" onClick={onLogout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
           </div>
         </div>

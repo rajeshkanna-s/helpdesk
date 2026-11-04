@@ -2,6 +2,8 @@ package com.kuwy.helpdesk.controllers;
 
 import com.kuwy.helpdesk.services.AuthService;
 import com.kuwy.helpdesk.services.PasswordResetService;
+import com.kuwy.helpdesk.services.BrowserSessionService;
+import com.kuwy.helpdesk.config.BrowserSessionCookies;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,7 +31,7 @@ class AuthControllerResponseTest {
     void setUp() {
         authentication = mock(AuthService.class);
         recovery = mock(PasswordResetService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new AuthController(authentication, recovery))
+        mvc = MockMvcBuilders.standaloneSetup(new AuthController(authentication, recovery, mock(BrowserSessionService.class), mock(BrowserSessionCookies.class)))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
         TenantContext.clear();
     }

@@ -35,10 +35,10 @@ public class WebhookController {
     private final SubscriptionService subscriptionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${kuwy.razorpay.webhook-secret:whsec_live_razorpay_default_2026}")
+    @Value("${kuwy.razorpay.webhook-secret:}")
     private String razorpayWebhookSecret;
 
-    @Value("${kuwy.stripe.webhook-secret:whsec_live_stripe_default_2026}")
+    @Value("${kuwy.stripe.webhook-secret:}")
     private String stripeWebhookSecret;
 
     // Idempotency cache: prevents duplicate processing of re-sent webhook events

@@ -13,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.ContentDisposition;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -51,22 +52,7 @@ public class AttachmentController {
             throw new IllegalStateException("Workspace is locked. File uploads are disabled.");
         }
 
-        List<TicketAttachment> uploaded = new ArrayList<>();
-
-        for (MultipartFile file : files) {
-            if (!file.isEmpty()) {
-                TicketAttachment saved = attachmentService.saveAttachment(
-                        file,
-                        ticket.getCompany().getId(),
-                        ticketId,
-                        threadId,
-                        isInline
-                );
-                uploaded.add(saved);
-            }
-        }
-
-        return ResponseEntity.ok(uploaded);
+        return ResponseEntity.ok(attachmentService.saveAttachments(files, ticket.getCompany().getId(), ticketId, threadId));
     }
 
     @GetMapping("/tickets/{ticketId}/attachments")
@@ -90,17 +76,10 @@ public class AttachmentController {
 
         Resource resource = attachmentService.getResourceForAttachment(attachment);
 
-        String encodedFileName = URLEncoder.encode(attachment.getFileName(), StandardCharsets.UTF_8).replace("+", "%20");
-        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
-        try {
-            if (attachment.getContentType() != null) {
-                mediaType = MediaType.parseMediaType(attachment.getContentType());
-            }
-        } catch (Exception ignored) {}
-
         return ResponseEntity.ok()
-                .contentType(mediaType)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + attachment.getFileName() + "\"; filename*=UTF-8''" + encodedFileName)
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(attachment.getFileName(), StandardCharsets.UTF_8).build().toString())
+                .header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
                 .body(resource);
     }
 
@@ -113,14 +92,15 @@ public class AttachmentController {
 
         MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
         try {
-            if (attachment.getContentType() != null) {
+            if (java.util.Set.of("image/png", "image/jpeg", "image/gif", "image/webp").contains(attachment.getContentType())) {
                 mediaType = MediaType.parseMediaType(attachment.getContentType());
             }
         } catch (Exception ignored) {}
 
         return ResponseEntity.ok()
                 .contentType(mediaType)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + attachment.getFileName() + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, (mediaType.equals(MediaType.APPLICATION_OCTET_STREAM) ? ContentDisposition.attachment() : ContentDisposition.inline()).filename(attachment.getFileName(), StandardCharsets.UTF_8).build().toString())
+                .header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").header("Content-Security-Policy", "default-src 'none'; sandbox")
                 .body(resource);
     }
 

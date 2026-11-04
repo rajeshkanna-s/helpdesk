@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Users, Plus, Search, RefreshCw, Power, Phone,
   CheckCircle2, AlertCircle, Send, Clock,
-  Copy, Trash2, Shield
+  Trash2, Shield
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { SupportEngineer, DepartmentDetail, Company, AgentInvitation } from '../types';
@@ -28,8 +28,8 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
   const [newLastName, setNewLastName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
-  const [newDeptId, setNewDeptId] = useState<number>(1);
-  const [newPassword, setNewPassword] = useState('Password@123');
+  const [newDeptId, setNewDeptId] = useState<number>(0);
+  const [newPassword, setNewPassword] = useState('');
   const [newRoleType, setNewRoleType] = useState('AGENT');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -37,15 +37,35 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
-  const [inviteRoleId, setInviteRoleId] = useState<number>(2);
+  const [inviteRoleId, setInviteRoleId] = useState<number>(0);
+  const [roles, setRoles] = useState<Array<{ id: number; name: string; roleType: string }>>([]);
   const [isInviting, setIsInviting] = useState(false);
-  const [latestInviteUrl, setLatestInviteUrl] = useState<string | null>(null);
-  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [inviteQueued, setInviteQueued] = useState(false);
+  const invitationDialog = useRef<HTMLDialogElement>(null);
+  const createDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     loadEngineers();
     loadInvitations();
   }, [activeCompany.id]);
+
+  useEffect(() => {
+    let active = true;
+    apiService.getCompanyRoles(activeCompany.id).then(list => {
+      if (!active) return;
+      setRoles(list);
+      setInviteRoleId((list.find(role => role.roleType === 'AGENT') || list[0])?.id || 0);
+    }).catch(() => { if (active) setNotice({ type: 'danger', message: 'Staff roles could not be loaded. Refresh before inviting a teammate.' }); });
+    return () => { active = false; };
+  }, [activeCompany.id]);
+
+  useEffect(() => {
+    if (!showInviteModal && !showAddModal) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = showInviteModal ? invitationDialog.current : createDialog.current;
+    dialog?.showModal();
+    return () => { dialog?.close(); window.requestAnimationFrame(() => { if (previous?.isConnected) previous.focus(); }); };
+  }, [showInviteModal, showAddModal]);
 
   const loadEngineers = async () => {
     setIsLoading(true);
@@ -56,11 +76,11 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
       ]);
       setEngineers(engList);
       setDepartments(deptList);
-      if (deptList.length > 0 && !newDeptId) {
+      if (deptList.length > 0 && !deptList.some(department => department.id === newDeptId)) {
         setNewDeptId(deptList[0].id);
       }
-    } catch (err) {
-      console.error('Failed to load support engineers:', err);
+    } catch {
+      setNotice({ type: 'danger', message: 'Team information could not be loaded. Please refresh.' });
     } finally {
       setIsLoading(false);
     }
@@ -91,6 +111,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
 
   const handleCreateEngineer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setIsSubmitting(true);
     try {
       await apiService.createSupportEngineer({
@@ -113,6 +134,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
       setNewLastName('');
       setNewEmail('');
       setNewPhone('');
+      setNewPassword('');
       loadEngineers();
       setTimeout(() => setNotice(null), 6000);
     } catch (err: any) {
@@ -128,22 +150,22 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
   // Section B Invitation Handlers
   const handleInviteAgent = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isInviting || !inviteRoleId) return;
     setIsInviting(true);
     try {
       const res = await apiService.inviteAgent(
         { email: inviteEmail.trim(), name: inviteName.trim(), roleId: inviteRoleId },
-        1,
         activeCompany.id
       );
 
-      setLatestInviteUrl(res.inviteUrl || null);
+      setInviteQueued(true);
       setNotice({
         type: 'success',
-        message: `Invitation created and link generated for ${inviteName} (${inviteEmail}). Valid for 7 days.`,
+        message: res.message || 'Invitation email queued. The teammate can join using the link in their email.',
       });
       loadInvitations();
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.message || 'Failed to send invitation.';
+      const msg = err.response?.data?.message || err.response?.data?.error || 'The invitation could not be queued. Please try again.';
       setNotice({ type: 'danger', message: msg });
     } finally {
       setIsInviting(false);
@@ -152,7 +174,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
 
   const handleResendInvitation = async (id: number) => {
     try {
-      const res = await apiService.resendInvitation(id, 1);
+      const res = await apiService.resendInvitation(id);
       setNotice({
         type: 'success',
         message: res.message || 'Invitation refreshed with a new 7-day validity token.',
@@ -167,7 +189,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
   const handleRevokeInvitation = async (id: number) => {
     if (!confirm('Are you sure you want to revoke this invitation? The link will immediately stop working.')) return;
     try {
-      await apiService.revokeInvitation(id, 1);
+      await apiService.revokeInvitation(id);
       setNotice({
         type: 'success',
         message: 'Invitation has been revoked.',
@@ -177,12 +199,6 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
     } catch (err: any) {
       setNotice({ type: 'danger', message: err.response?.data?.error || 'Failed to revoke invite.' });
     }
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 3000);
   };
 
   const getDeptColor = (code: string) => {
@@ -246,7 +262,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
           <button
             className="btn btn-outline-primary btn-sm d-flex align-items-center gap-1.5 fw-semibold px-3 py-1.5 shadow-sm"
             onClick={() => {
-              setLatestInviteUrl(null);
+              setInviteQueued(false);
               setShowInviteModal(true);
             }}
             style={{ borderRadius: '8px' }}
@@ -525,7 +541,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
             <button
               className="btn btn-primary btn-sm d-flex align-items-center gap-1.5 fw-semibold px-3 py-1.5"
               onClick={() => {
-                setLatestInviteUrl(null);
+                setInviteQueued(false);
                 setShowInviteModal(true);
               }}
               style={{ borderRadius: '8px' }}
@@ -637,16 +653,16 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
           MODAL 1: INVITE AGENT MODAL (SCREEN 8 & 27)
           ============================================================== */}
       {showInviteModal && (
-        <div className="modal fade show d-block" tabIndex={-1} style={{ backgroundColor: 'rgba(15, 23, 42, 0.75)' }}>
+        <dialog ref={invitationDialog} className="account-flow-dialog" aria-label="Invite team member" onCancel={event => { if (isInviting) event.preventDefault(); else setShowInviteModal(false); }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '480px' }}>
             <div className="modal-content rounded-4 border-0 shadow-2xl overflow-hidden">
               <div className="bg-primary p-4 text-white">
                 <div className="d-flex align-items-center justify-content-between mb-1">
                   <h5 className="modal-title fw-bold mb-0">Invite Team Member</h5>
-                  <button type="button" className="btn-close btn-close-white" onClick={() => setShowInviteModal(false)} />
+                  <button type="button" className="btn-close btn-close-white" aria-label="Close invitation" disabled={isInviting} onClick={() => setShowInviteModal(false)} />
                 </div>
                 <small className="text-white text-opacity-80">
-                  Screen 8 & 27 • Send secure single-use invitation
+                  Invite a teammate to this workspace
                 </small>
               </div>
 
@@ -662,38 +678,23 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                   </div>
                 </div>
 
-                {latestInviteUrl ? (
+                {notice?.type === 'danger' && <div className="alert alert-danger small" role="alert">{notice.message}</div>}
+                {inviteQueued ? (
                   <div className="text-center py-2">
                     <div className="d-inline-flex p-3 rounded-circle bg-success bg-opacity-10 text-success mb-3">
                       <CheckCircle2 size={40} />
                     </div>
-                    <h5 className="fw-bold text-dark mb-2">Invitation Created!</h5>
+                    <h5 className="fw-bold text-dark mb-2">Invitation queued</h5>
                     <p className="text-muted small mb-3">
-                      The link has been registered with strict single-use SHA-256 token security.
+                      A single-use invitation link will be delivered to {inviteEmail}. The link is not exposed in this console.
                     </p>
-
-                    <div className="input-group mb-3">
-                      <input
-                        type="text"
-                        className="form-control font-monospace small bg-light"
-                        readOnly
-                        value={latestInviteUrl}
-                      />
-                      <button
-                        className="btn btn-outline-primary d-flex align-items-center gap-1"
-                        onClick={() => copyToClipboard(latestInviteUrl)}
-                      >
-                        <Copy size={14} />
-                        <span>{copiedUrl ? 'Copied!' : 'Copy'}</span>
-                      </button>
-                    </div>
 
                     <div className="d-flex gap-2">
                       <button
                         type="button"
                         className="btn btn-outline-secondary w-50 py-2 fw-semibold"
                         onClick={() => {
-                          setLatestInviteUrl(null);
+                          setInviteQueued(false);
                           setInviteEmail('');
                           setInviteName('');
                         }}
@@ -717,6 +718,9 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                         type="text"
                         className="form-control"
                         placeholder="e.g. Priyadharshini K"
+                        aria-label="Invitee full name"
+                        autoComplete="name"
+                        maxLength={150}
                         required
                         value={inviteName}
                         onChange={e => setInviteName(e.target.value)}
@@ -730,6 +734,9 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                         type="email"
                         className="form-control"
                         placeholder="name@company.com"
+                        aria-label="Invitee email"
+                        autoComplete="email"
+                        maxLength={254}
                         required
                         value={inviteEmail}
                         onChange={e => setInviteEmail(e.target.value)}
@@ -740,12 +747,12 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                       <label className="form-label fw-bold small">Assigned Role</label>
                       <select
                         className="form-select"
+                        aria-label="Invitation role"
                         value={inviteRoleId}
                         onChange={e => setInviteRoleId(Number(e.target.value))}
                       >
-                        <option value={2}>Technical Support Engineer (Agent)</option>
-                        <option value={3}>Category Lead / Department Head</option>
-                        <option value={1}>Workspace Administrator</option>
+                        <option value={0} disabled>Select a staff role</option>
+                        {roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
                       </select>
                     </div>
 
@@ -759,13 +766,13 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                       </button>
                       <button
                         type="submit"
-                        disabled={isInviting || seatsRemaining === 0}
+                        disabled={isInviting || seatsRemaining === 0 || !inviteRoleId}
                         className="btn btn-primary w-50 py-2 fw-semibold d-flex align-items-center justify-content-center gap-2"
                       >
                         {isInviting ? (
                           <>
                             <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                            <span>Generating...</span>
+                            <span>Queuing...</span>
                           </>
                         ) : (
                           <>
@@ -780,14 +787,14 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
               </div>
             </div>
           </div>
-        </div>
+        </dialog>
       )}
 
       {/* ==============================================================
           MODAL 2: QUICK CREATE STAFF (DIRECT)
           ============================================================== */}
       {showAddModal && (
-        <div className="modal fade show d-block" tabIndex={-1} style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <dialog ref={createDialog} className="account-flow-dialog" aria-label="Create staff account" onCancel={event => { if (isSubmitting) event.preventDefault(); else setShowAddModal(false); }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content rounded-3 border-0 shadow">
               <div className="modal-header">
@@ -809,6 +816,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                     </select>
                   </div>
 
+                  {notice?.type === 'danger' && <div className="alert alert-danger small" role="alert">{notice.message}</div>}
                   <div className="row g-2 mb-3">
                     <div className="col">
                       <label className="form-label fw-bold small">First Name *</label>
@@ -858,9 +866,13 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
                       />
                     </div>
                     <div className="col">
-                      <label className="form-label fw-bold small">Temporary Password</label>
+                      <label className="form-label fw-bold small">Initial password</label>
                       <input
-                        type="text"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={10}
+                        maxLength={1024}
+                        aria-label="Initial staff password"
                         className="form-control"
                         required
                         value={newPassword}
@@ -897,7 +909,7 @@ export const SupportEngineersView: React.FC<SupportEngineersViewProps> = ({ acti
               </form>
             </div>
           </div>
-        </div>
+        </dialog>
       )}
     </div>
   );

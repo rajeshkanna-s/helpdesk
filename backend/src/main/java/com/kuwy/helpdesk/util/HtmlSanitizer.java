@@ -4,19 +4,19 @@ import org.jsoup.Jsoup;
 import org.jsoup.safety.Safelist;
 
 /**
- * Whitelist-based HTML Sanitizer (OWASP compliant) to defeat Stored XSS,
- * DOM injection, and malicious attribute-based exploits (e.g. <img onerror=...>).
+ * Allowlisted formatting without executable or remotely fetched content.
  */
 public final class HtmlSanitizer {
 
     private static final Safelist SAFE_HTML_WHITELIST = Safelist.relaxed()
             // Strictly exclude execution and dangerous embedded elements
-            .removeTags("script", "iframe", "object", "embed", "applet", "form", "input", "button", "link", "style", "meta", "base")
+            .removeTags("script", "iframe", "object", "embed", "applet", "form", "input", "button", "link", "style", "meta", "base", "img")
             // Strip any JavaScript event listeners or expression styles from all tags
             .removeAttributes(":all", "onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur", "style")
             // Safe protocols only
             .addProtocols("a", "href", "http", "https", "mailto")
-            .addProtocols("img", "src", "http", "https", "data");
+            .removeProtocols("a", "href", "ftp")
+            .addEnforcedAttribute("a", "rel", "noopener noreferrer nofollow");
 
     private HtmlSanitizer() {}
 
@@ -37,7 +37,6 @@ public final class HtmlSanitizer {
         if (input == null || input.isBlank()) {
             return "";
         }
-        return Jsoup.clean(input, Safelist.none());
+        return Jsoup.parse(Jsoup.clean(input, "", Safelist.none(), new org.jsoup.nodes.Document.OutputSettings().prettyPrint(false))).body().wholeText();
     }
 }
-

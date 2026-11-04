@@ -7,43 +7,109 @@ import type { TicketAttachment,
   Verify2FaRequest, ForgotPasswordRequest, ResetPasswordRequest, InvitationValidationResponse, AcceptInvitationRequest, AgentInvitation,
   CustomerContact, NotificationItem } from '../types';
 
-const API_BASE = 'http://localhost:8080/api/v1';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1').replace(/\/$/, '');
 
 let currentCompanyId = 1;
-let authToken: string | null = localStorage.getItem('kuwy_auth_token');
+type SessionKind = 'STAFF' | 'CUSTOMER';
+const csrfTokens: Record<SessionKind, string | null> = { STAFF: null, CUSTOMER: null };
+const refreshRequests: Partial<Record<SessionKind, Promise<LoginResponse | CustomerSession>>> = {};
+let staffBootstrap: Promise<LoginResponse> | null = null;
+type CustomerSession = { browserSession: boolean; email: string; name?: string; companyId: number; csrfToken: string };
+const customerBootstraps = new Map<string, Promise<CustomerSession>>();
+const isApiUrl = (url: string) => url === API_BASE || url.startsWith(`${API_BASE}/`);
+export interface PageResult<T> { content: T[]; number: number; size: number; totalElements: number; totalPages: number; }
+export interface TicketQueryFilters {
+  q?: string; priority?: string; departmentId?: number; agentId?: number; unassigned?: boolean;
+  customerEmail?: string; contactId?: number; channel?: string; slaStatus?: string; from?: string; to?: string;
+}
+export interface CustomerProfile {
+  firstName: string; lastName: string; email: string; phone: string; organizationName: string; timeZone: string; language: string;
+  notifications: { replies: boolean; resolved: boolean; surveys: boolean };
+}
+export interface PublicPlan {
+  code: string; displayName: string; description: string; baseTier: string; status: string; currency: 'INR'; gstExclusive: boolean;
+  monthlyPrice: number; yearlyPrice: number; includedAgents: number; ticketLimitMonthly: number; trialDays: number; storageBytes: number;
+  features: Record<string, boolean>; revision: number;
+}
+
+// Old bearer credentials are deliberately discarded, never migrated into JavaScript sessions.
+try {
+  for (const key of ['kuwy_auth_token', 'kuwy_user', 'kuwy_cust_token', 'kuwy_cust_email', 'kuwy_cust_name']) localStorage.removeItem(key);
+} catch { /* Cookie authentication also works when browser storage is unavailable. */ }
+
+function rememberBrowserSession(data: { browserSession?: boolean; csrfToken?: string }, kind: SessionKind) {
+  if (!data.browserSession || !data.csrfToken) throw new Error('A secure browser session could not be established. Please sign in again.');
+  csrfTokens[kind] = data.csrfToken;
+}
+
+function refreshBrowserSession(kind: SessionKind, url: string) {
+  if (!refreshRequests[kind]) {
+    const refresh = async () => {
+      const response = await axios.post(url, {});
+      rememberBrowserSession(response.data, kind);
+      return response.data as LoginResponse | CustomerSession;
+    };
+    // Serialize rotation across tabs as well as requests so a parallel tab does not replay the previous cookie.
+    const request = navigator.locks ? navigator.locks.request(`kuwy-session-refresh:${kind}`, refresh) : refresh();
+    refreshRequests[kind] = request.catch(error => {
+      csrfTokens[kind] = null;
+      window.dispatchEvent(new CustomEvent('kuwy-session-expired', { detail: kind }));
+      throw error;
+    }).finally(() => { delete refreshRequests[kind]; });
+  }
+  return refreshRequests[kind]!;
+}
+
+const requestInterceptor = axios.interceptors.request.use(config => {
+  if (config.url && isApiUrl(config.url)) {
+    config.withCredentials = true;
+    config.headers.set('X-Browser-Session', '1');
+    const kind: SessionKind = config.url.startsWith(`${API_BASE}/portal/`) ? 'CUSTOMER' : 'STAFF';
+    if (csrfTokens[kind]) config.headers.set('X-Session-CSRF', csrfTokens[kind]);
+  }
+  return config;
+});
+
+const responseInterceptor = axios.interceptors.response.use(response => response, async error => {
+  const config = error.config;
+  const url = typeof config?.url === 'string' ? config.url : '';
+  const route = url.slice(API_BASE.length).split('?')[0];
+  const publicAuthRoute = /^\/auth\/(?:login|verify-2fa|forgot-password|reset-password|validate-reset-token|lookup-workspace|session|refresh|logout)$/.test(route)
+    || /^\/invitations\/(?:accept|validate)$/.test(route) || route.startsWith('/onboarding/');
+  if (error.response?.status !== 401 || !config || !isApiUrl(url) || config.sessionRetried
+    || publicAuthRoute || /\/(?:session|refresh|logout|request-otp|verify-otp|demo-login)(?:\?|$)/.test(url)) throw error;
+  const kind: SessionKind = url.startsWith(`${API_BASE}/portal/`) ? 'CUSTOMER' : 'STAFF';
+  if (!csrfTokens[kind]) throw error;
+  config.sessionRetried = true;
+  const portal = kind === 'CUSTOMER' ? url.slice(`${API_BASE}/portal/`.length).split('/')[0] : '';
+  const refreshUrl = kind === 'CUSTOMER' ? `${API_BASE}/portal/${portal}/refresh` : `${API_BASE}/auth/refresh`;
+  await refreshBrowserSession(kind, refreshUrl);
+  return axios(config);
+});
+if (import.meta.hot) import.meta.hot.dispose(() => {
+  axios.interceptors.request.eject(requestInterceptor);
+  axios.interceptors.response.eject(responseInterceptor);
+});
 
 export const setApiTenantId = (companyId: number) => {
   currentCompanyId = companyId;
 };
 
-export const setAuthToken = (token: string | null) => {
-  authToken = token;
-  if (token) {
-    localStorage.setItem('kuwy_auth_token', token);
-  } else {
-    localStorage.removeItem('kuwy_auth_token');
-  }
-};
+export const clearStaffSession = () => { csrfTokens.STAFF = null; };
+export const clearCustomerSession = () => { csrfTokens.CUSTOMER = null; };
 
 const getHeaders = () => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Company-ID': String(currentCompanyId),
   };
-  if (authToken) {
-    headers['Authorization'] = `Bearer ${authToken}`;
-  }
   return headers;
 };
 
 const getCustomerHeaders = () => {
-  const custToken = localStorage.getItem('kuwy_cust_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (custToken) {
-    headers['Authorization'] = `Bearer ${custToken}`;
-  }
   return headers;
 };
 
@@ -51,64 +117,84 @@ export const apiService = {
   // Auth
   async login(credentials: { email: string; password: string; companyCode?: string }): Promise<LoginResponse> {
     const res = await axios.post(`${API_BASE}/auth/login`, credentials);
-    if (res.data?.token) {
-      setAuthToken(res.data.token);
-    }
+    if (!res.data?.twoFactorRequired) rememberBrowserSession(res.data, 'STAFF');
     return res.data;
+  },
+
+  async getStaffSession(): Promise<LoginResponse> {
+    if (!staffBootstrap) {
+      staffBootstrap = axios.get(`${API_BASE}/auth/session`).then(async response => {
+        rememberBrowserSession(response.data, 'STAFF');
+        return await refreshBrowserSession('STAFF', `${API_BASE}/auth/refresh`) as LoginResponse;
+      }).catch(error => { clearStaffSession(); throw error; }).finally(() => { staffBootstrap = null; });
+    }
+    return staffBootstrap;
+  },
+
+  async logoutStaff(): Promise<void> {
+    await axios.post(`${API_BASE}/auth/logout`, {});
+    clearStaffSession();
+  },
+
+  async getStaffAccount(): Promise<{ email: string; displayName: string; twoFactorEnabled: boolean; twoFactorRequired: boolean; sessionId: string }> {
+    return (await axios.get(`${API_BASE}/auth/account`)).data;
+  },
+
+  async getCompanyRoles(companyId: number): Promise<Array<{ id: number; name: string; roleType: string }>> {
+    return (await axios.get(`${API_BASE}/companies/${companyId}/roles`, { headers: getHeaders() })).data;
+  },
+
+  async getStaffSessions(): Promise<Array<{ sessionId: string; current: boolean; deviceLabel: string; remoteAddr: string; createdAt: string; lastSeenAt: string; absoluteExpiresAt: string; idleExpiresAt: string }>> {
+    return (await axios.get(`${API_BASE}/auth/sessions`)).data;
+  },
+
+  async revokeStaffSession(id: string): Promise<void> {
+    await axios.delete(`${API_BASE}/auth/sessions/${encodeURIComponent(id)}`);
+  },
+
+  async logoutAllStaffSessions(): Promise<void> {
+    await axios.post(`${API_BASE}/auth/logout-all`, {});
+    clearStaffSession();
+  },
+
+  async changeOwnPassword(currentPassword: string, newPassword: string, code?: string): Promise<void> {
+    await axios.post(`${API_BASE}/auth/change-password`, { currentPassword, newPassword, code });
+    clearStaffSession();
+  },
+
+  async getCustomerSession(subdomain: string): Promise<CustomerSession> {
+    if (!customerBootstraps.has(subdomain)) {
+      const promise = axios.get(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/session`).then(async response => {
+        rememberBrowserSession(response.data, 'CUSTOMER');
+        return await refreshBrowserSession('CUSTOMER', `${API_BASE}/portal/${encodeURIComponent(subdomain)}/refresh`) as CustomerSession;
+      }).catch(error => { clearCustomerSession(); throw error; }).finally(() => { customerBootstraps.delete(subdomain); });
+      customerBootstraps.set(subdomain, promise);
+    }
+    return customerBootstraps.get(subdomain)!;
+  },
+
+  async logoutCustomer(subdomain: string): Promise<void> {
+    await axios.post(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/logout`, {});
+    clearCustomerSession();
+  },
+
+  async getCustomerProfile(subdomain: string): Promise<CustomerProfile> {
+    return (await axios.get(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/profile`)).data;
+  },
+
+  async updateCustomerProfile(subdomain: string, profile: Omit<CustomerProfile, 'email'>): Promise<CustomerProfile> {
+    return (await axios.patch(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/profile`, profile)).data;
   },
 
   // Admin APIs (Project Owner)
   async getAdminOverview(): Promise<AdminOverview> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/overview`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return {
-        totalCompanies: 2,
-        activeCompanies: 2,
-        suspendedCompanies: 0,
-        totalTickets: 3,
-        totalAgents: 6,
-      };
-    }
+    const res = await axios.get(`${API_BASE}/admin/overview`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getAdminCompanies(): Promise<CompanyDetail[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/companies`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        {
-          id: 1,
-          companyCode: 'KUWY',
-          name: 'Kuwy Technology Services Pvt Ltd',
-          subdomain: 'kuwy',
-          customDomain: 'helpdesk.kuwy.in',
-          status: 'ACTIVE',
-          planName: 'ENTERPRISE',
-          maxAgents: 50,
-          primaryColor: '#0d6efd',
-          createdAt: '2026-11-02T23:00:00',
-          userCount: 4,
-          ticketCount: 3,
-        },
-        {
-          id: 2,
-          companyCode: 'ACME',
-          name: 'Acme Global Logistics',
-          subdomain: 'acme',
-          customDomain: 'support.acmelogistics.com',
-          status: 'ACTIVE',
-          planName: 'PROFESSIONAL',
-          maxAgents: 50,
-          primaryColor: '#198754',
-          createdAt: '2026-11-02T23:00:00',
-          userCount: 1,
-          ticketCount: 0,
-        },
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/admin/companies`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createAdminCompany(data: CompanyCreateInput): Promise<Company> {
@@ -130,12 +216,8 @@ export const apiService = {
   },
 
   async getAdminUsers(): Promise<User[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/users`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/admin/users`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createUserCredential(data: UserCredentialInput): Promise<User> {
@@ -153,49 +235,14 @@ export const apiService = {
   },
   // Companies
   async getCompanies(): Promise<Company[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies`);
-      return res.data;
-    } catch {
-      return [
-        {
-          id: 1,
-          companyCode: 'KUWY',
-          name: 'Kuwy Technology Services Pvt Ltd',
-          subdomain: 'kuwy',
-          primaryColor: '#0d6efd',
-          status: 'ACTIVE',
-          planName: 'ENTERPRISE',
-        },
-        {
-          id: 2,
-          companyCode: 'ACME',
-          name: 'Acme Global Logistics',
-          subdomain: 'acme',
-          primaryColor: '#198754',
-          status: 'ACTIVE',
-          planName: 'PROFESSIONAL',
-        },
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/companies`);
+    return res.data;
   },
 
   // Dashboard Stats
   async getDashboardStats(companyId: number): Promise<DashboardStats> {
-    try {
-      const res = await axios.get(`${API_BASE}/dashboard/stats?companyId=${companyId}`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return {
-        totalTickets: companyId === 1 ? 2 : 1,
-        openTickets: 1,
-        inProgressTickets: companyId === 1 ? 1 : 0,
-        resolvedTickets: 0,
-        breachedSlaTickets: 0,
-        activeAgents: companyId === 1 ? 3 : 1,
-        connectedMailboxes: companyId === 1 ? 2 : 1,
-      };
-    }
+    const res = await axios.get(`${API_BASE}/dashboard/stats?companyId=${companyId}`, { headers: getHeaders() });
+    return res.data;
   },
 
   // Tickets
@@ -203,131 +250,21 @@ export const apiService = {
     return (await apiService.getTicketPage(companyId, status)).content;
   },
 
-  async getTicketPage(companyId: number, status?: string, page = 0, size = 25, order: 'asc' | 'desc' = 'desc'): Promise<{ content: Ticket[]; number: number; size: number; totalElements: number; totalPages: number }> {
-    try {
-      const res = await axios.get(`${API_BASE}/tickets`, {
-        headers: getHeaders(),
-        params: { companyId, status: status && status !== 'ALL' ? status : undefined, page, size, sortBy: 'createdAt', order },
-      });
-      const data = res.data;
-      return Array.isArray(data)
-        ? { content: data, number: 0, size: data.length || size, totalElements: data.length, totalPages: data.length ? 1 : 0 }
-        : { content: data.content, number: data.number, size: data.size, totalElements: data.totalElements, totalPages: data.totalPages };
-    } catch {
-      const tickets: Ticket[] = companyId === 1 ? [
-          {
-            id: 1,
-            ticketNumber: 'KUWY-1001',
-            subject: 'Dealer Portal: CIBIL Score Pull Failure for Application #KW-98421',
-            descriptionText: 'We are encountering a timeout error when trying to fetch the bureau score for loan application #KW-98421.',
-            status: 'IN_PROGRESS',
-            priority: 'HIGH',
-            channel: 'MICROSOFT_365',
-            department: { id: 2, name: 'IT & Engineering Support', isActive: true },
-            contact: { id: 1, firstName: 'Rajesh', lastName: 'Sundaram', email: 'testrajesh.sundaram@srivariauto.com' },
-            assignedAgent: { id: 2, email: 'testkarthik.agent@kuwy.in', firstName: 'Karthik', displayName: 'Karthik N (Support)', role: { name: 'Agent', roleType: 'AGENT' }, isActive: true },
-            slaStatus: 'WITHIN_SLA',
-            createdAt: '2026-11-02T16:45:00',
-            tags: [{ id: 1, name: 'Bureau-Issue', colorHex: '#dc3545' }, { id: 3, name: 'Dealer-Portal', colorHex: '#198754' }],
-          },
-          {
-            id: 2,
-            ticketNumber: 'KUWY-1002',
-            subject: 'Disbursement verification required for 3 sanctioned contracts',
-            descriptionText: 'Attached are the signed loan sanction letters for dealer code D-402. Kindly initiate verification.',
-            status: 'OPEN',
-            priority: 'MEDIUM',
-            channel: 'EMAIL',
-            department: { id: 1, name: 'Loan Origination & Ops', isActive: true },
-            contact: { id: 2, firstName: 'Pooja', lastName: 'Menon', email: 'testpooja.menon@cholafinance.com' },
-            assignedAgent: { id: 3, email: 'testdivya.ops@kuwy.in', firstName: 'Divya', displayName: 'Divya P (Operations)', role: { name: 'Agent', roleType: 'AGENT' }, isActive: true },
-            slaStatus: 'WITHIN_SLA',
-            createdAt: '2026-11-02T16:50:00',
-            tags: [{ id: 2, name: 'Loan-Ops', colorHex: '#0d6efd' }],
-          },
-        ] : [
-          {
-            id: 3,
-            ticketNumber: 'ACME-1001',
-            subject: 'Customs clearance delay at Chennai Port (Container #CN-884)',
-            descriptionText: 'Port authorities are requesting updated bill of lading documents.',
-            status: 'OPEN',
-            priority: 'URGENT',
-            channel: 'MICROSOFT_365',
-            department: { id: 4, name: 'Fleet & Freight Support', isActive: true },
-            contact: { id: 3, firstName: 'Mark', lastName: 'Spencer', email: 'testmark@freightline.org' },
-            slaStatus: 'WITHIN_SLA',
-            createdAt: '2026-11-02T15:30:00',
-          },
-        ];
-      const filtered = tickets.filter(ticket => !status || status === 'ALL' || ticket.status === status);
-      filtered.sort((a, b) => (order === 'asc' ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()));
-      return { content: filtered.slice(page * size, (page + 1) * size), number: page, size, totalElements: filtered.length, totalPages: Math.ceil(filtered.length / size) };
-    }
+  async getTicketPage(companyId: number, status?: string, page = 0, size = 25, order: 'asc' | 'desc' = 'desc', filters: TicketQueryFilters = {}, sortBy: 'createdAt' | 'updatedAt' | 'priority' = 'createdAt'): Promise<PageResult<Ticket>> {
+    const res = await axios.get(`${API_BASE}/tickets`, {
+      headers: getHeaders(),
+      params: { ...filters, companyId, status: status && status !== 'ALL' ? status : undefined, page, size, sortBy, order },
+    });
+    return res.data;
   },
 
   // Ticket Detail + Threads
   async getTicketDetail(id: number): Promise<Ticket> {
-    try {
-      const [ticketRes, threadsRes] = await Promise.all([
-        axios.get(`${API_BASE}/tickets/${id}`, { headers: getHeaders() }),
-        axios.get(`${API_BASE}/tickets/${id}/threads`, { headers: getHeaders() }).catch(() => ({ data: [] })),
-      ]);
-      return {
-        ...ticketRes.data,
-        threads: threadsRes.data || [],
-      };
-    } catch {
-      return {
-        id: 1,
-        ticketNumber: 'KUWY-1001',
-        subject: 'Dealer Portal: CIBIL Score Pull Failure for Application #KW-98421',
-        descriptionText: 'We are encountering a timeout error when trying to fetch the bureau score for loan application #KW-98421.',
-        descriptionHtml: '<p>Hello Kuwy Team,</p><p>We are encountering a timeout error when trying to fetch the bureau score for loan application <b>#KW-98421</b>. Could you please check if the bureau integration is operational?</p><p>Regards,<br/>Rajesh Sundaram<br/>Sri Vari Auto</p>',
-        status: 'IN_PROGRESS',
-        priority: 'HIGH',
-        channel: 'MICROSOFT_365',
-        department: { id: 2, name: 'IT & Engineering Support', isActive: true },
-        contact: { id: 1, firstName: 'Rajesh', lastName: 'Sundaram', email: 'testrajesh.sundaram@srivariauto.com' },
-        assignedAgent: { id: 2, email: 'testkarthik.agent@kuwy.in', firstName: 'Karthik', displayName: 'Karthik N (Support)', role: { name: 'Agent', roleType: 'AGENT' }, isActive: true },
-        slaStatus: 'WITHIN_SLA',
-        createdAt: '2026-11-02T16:45:00',
-        tags: [{ id: 1, name: 'Bureau-Issue', colorHex: '#dc3545' }, { id: 3, name: 'Dealer-Portal', colorHex: '#198754' }],
-        threads: [
-          {
-            id: 1,
-            threadType: 'CUSTOMER_REPLY',
-            senderType: 'CUSTOMER',
-            fromEmail: 'testrajesh.sundaram@srivariauto.com',
-            fromName: 'Rajesh Sundaram',
-            subject: 'Dealer Portal: CIBIL Score Pull Failure for Application #KW-98421',
-            bodyHtml: '<p>Hello Kuwy Team,</p><p>We are encountering a timeout error when trying to fetch the bureau score for loan application <b>#KW-98421</b>. Could you please check if the bureau integration is operational?</p>',
-            isPrivate: false,
-            createdAt: '2026-11-02T16:45:00',
-          },
-          {
-            id: 2,
-            threadType: 'PRIVATE_NOTE',
-            senderType: 'AGENT',
-            fromEmail: 'testkarthik.agent@kuwy.in',
-            fromName: 'Karthik N (Support)',
-            bodyHtml: '<p><b>@Seetha</b> I checked the bureau gateway logs. Experian and Equifax endpoints were momentarily slow between 14:10 and 14:25. Re-triggering the token now.</p>',
-            isPrivate: true,
-            createdAt: '2026-11-02T17:00:00',
-          },
-          {
-            id: 3,
-            threadType: 'REPLY',
-            senderType: 'AGENT',
-            fromEmail: 'testsupport@kuwy.in',
-            fromName: 'Karthik N | Kuwy Support',
-            bodyHtml: '<p>Dear Rajesh,</p><p>Thank you for reaching out. We identified a transient network latency with the bureau service provider. We have re-polled the bureau report for Application <b>#KW-98421</b> and the score is now successfully updated in your portal.</p><p>Please review and let us know if you need anything else.</p><p>Best regards,<br/><b>Kuwy Technical Support</b></p>',
-            isPrivate: false,
-            createdAt: '2026-11-02T17:15:00',
-          },
-        ],
-      };
-    }
+    const [ticketRes, threadsRes] = await Promise.all([
+      axios.get(`${API_BASE}/tickets/${id}`, { headers: getHeaders() }),
+      axios.get(`${API_BASE}/tickets/${id}/threads`, { headers: getHeaders() }),
+    ]);
+    return { ...ticketRes.data, threads: threadsRes.data };
   },
 
   // Create Ticket
@@ -357,12 +294,8 @@ export const apiService = {
   },
 
   async getTicketAttachments(ticketId: number): Promise<TicketAttachment[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/tickets/${ticketId}/attachments`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/tickets/${ticketId}/attachments`, { headers: getHeaders() });
+    return res.data;
   },
 
   async deleteAttachment(attachmentId: number): Promise<void> {
@@ -385,35 +318,8 @@ export const apiService = {
 
   // Mailboxes
   async getMailboxes(companyId: number): Promise<CompanyMailbox[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/mailboxes?companyId=${companyId}`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        {
-          id: 1,
-          mailboxName: 'Kuwy IT & Partner Support',
-          emailAddress: 'testsupport@kuwy.in',
-          providerType: 'MICROSOFT_365',
-          authType: 'OAUTH2_GRAPH_API',
-          syncStatus: 'CONNECTED',
-          department: { id: 2, name: 'IT & Engineering Support', isActive: true },
-          lastSyncedAt: '2 mins ago',
-          isActive: true,
-        },
-        {
-          id: 2,
-          mailboxName: 'Kuwy Loan Processing Mailbox',
-          emailAddress: 'testloans@kuwy.in',
-          providerType: 'MICROSOFT_365',
-          authType: 'OAUTH2_GRAPH_API',
-          syncStatus: 'CONNECTED',
-          department: { id: 1, name: 'Loan Origination & Ops', isActive: true },
-          lastSyncedAt: '5 mins ago',
-          isActive: true,
-        },
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/mailboxes?companyId=${companyId}`, { headers: getHeaders() });
+    return res.data;
   },
 
   // Simulate Incoming MS 365 Email
@@ -438,50 +344,19 @@ export const apiService = {
 
   // Departments & Agents
   async getDepartments(companyId: number): Promise<Department[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/departments`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        { id: 1, name: 'Loan Origination & Ops', isActive: true },
-        { id: 2, name: 'IT & Engineering Support', isActive: true },
-        { id: 3, name: 'Merchant & Dealer Helpdesk', isActive: true },
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/departments`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getAgents(companyId: number): Promise<User[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/agents`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        { id: 1, email: 'testadmin@kuwy.in', firstName: 'Seetha', displayName: 'Seetha Raman (Admin)', role: { name: 'Admin', roleType: 'COMPANY_ADMIN' }, isActive: true },
-        { id: 2, email: 'testkarthik.agent@kuwy.in', firstName: 'Karthik', displayName: 'Karthik N (Support)', role: { name: 'Agent', roleType: 'AGENT' }, isActive: true },
-        { id: 3, email: 'testdivya.ops@kuwy.in', firstName: 'Divya', displayName: 'Divya P (Operations)', role: { name: 'Agent', roleType: 'AGENT' }, isActive: true },
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/agents`, { headers: getHeaders() });
+    return res.data;
   },
 
   // MIS & Large-Scale Export APIs (Supports up to 100,000+ rows)
   async getMisSummary(companyId: number): Promise<MisSummary> {
-    try {
-      const res = await axios.get(`${API_BASE}/mis/summary?companyId=${companyId}`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return {
-        totalTickets: 8,
-        openTickets: 4,
-        inProgressTickets: 2,
-        resolvedTickets: 1,
-        closedTickets: 1,
-        breachedTickets: 0,
-        slaCompliancePercentage: 100.0,
-        avgResolutionHours: 2.4,
-        departmentBreakdown: { 'IT & Engineering': 3, 'Finance': 1, 'Operations': 2, 'HR': 1, 'Legal': 1 },
-        priorityBreakdown: { 'URGENT': 1, 'HIGH': 2, 'MEDIUM': 4, 'LOW': 1 },
-      };
-    }
+    const res = await axios.get(`${API_BASE}/mis/summary?companyId=${companyId}`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getMisTracking(params: {
@@ -530,12 +405,8 @@ export const apiService = {
 
   // Category & Department Management
   async getDepartmentsWithDetails(companyId: number): Promise<DepartmentDetail[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/departments?companyId=${companyId}`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/departments?companyId=${companyId}`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createDepartment(data: DepartmentCreateInput): Promise<Department> {
@@ -550,12 +421,8 @@ export const apiService = {
 
   // Category-Wise Technical Support Engineers
   async getSupportEngineers(companyId: number): Promise<SupportEngineer[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/departments/engineers?companyId=${companyId}`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/departments/engineers?companyId=${companyId}`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createSupportEngineer(data: SupportEngineerCreateInput): Promise<SupportEngineer> {
@@ -599,21 +466,13 @@ export const apiService = {
 
   // Knowledge Base Articles & Manager (Screen 23)
   async getKbArticles(companyId: number): Promise<KbArticle[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-articles`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-articles`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getKbCategories(companyId: number): Promise<any[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-categories`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/kb-categories`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createKbArticle(companyId: number, data: { categoryId: number; title: string; contentHtml: string; status?: string }): Promise<KbArticle> {
@@ -623,12 +482,8 @@ export const apiService = {
 
   // Customers & Organizations Directory (Screens 20 & 21)
   async getCustomers(companyId: number): Promise<CustomerContact[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/customers`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/customers`, { headers: getHeaders() });
+    return res.data;
   },
 
   async createCustomer(companyId: number, data: Partial<CustomerContact>): Promise<CustomerContact> {
@@ -638,15 +493,11 @@ export const apiService = {
 
   // Notification Center (Screen 24)
   async getNotifications(companyId: number, userId?: number): Promise<NotificationItem[]> {
-    try {
-      const url = userId
-        ? `${API_BASE}/companies/${companyId}/notifications?userId=${userId}`
-        : `${API_BASE}/companies/${companyId}/notifications`;
-      const res = await axios.get(url, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const url = userId
+      ? `${API_BASE}/companies/${companyId}/notifications?userId=${userId}`
+      : `${API_BASE}/companies/${companyId}/notifications`;
+    const res = await axios.get(url, { headers: getHeaders() });
+    return res.data;
   },
 
   async markNotificationRead(companyId: number, notifId: number): Promise<void> {
@@ -674,13 +525,9 @@ export const apiService = {
   // CANNED RESPONSES & MACROS
   // -------------------------------------------------------------
   async getCannedResponses(companyId?: number): Promise<CannedResponse[]> {
-    try {
-      const url = companyId ? `${API_BASE}/canned-responses?companyId=${companyId}` : `${API_BASE}/canned-responses`;
-      const res = await axios.get(url, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const url = companyId ? `${API_BASE}/canned-responses?companyId=${companyId}` : `${API_BASE}/canned-responses`;
+    const res = await axios.get(url, { headers: getHeaders() });
+    return res.data;
   },
 
   async createCannedResponse(data: { title: string; shortcut: string; content: string; departmentId?: number }): Promise<CannedResponse> {
@@ -707,11 +554,7 @@ export const apiService = {
 
   async verifyPortalOtp(subdomain: string, email: string, otp: string): Promise<any> {
     const res = await axios.post(`${API_BASE}/portal/${subdomain}/verify-otp`, { email, otp });
-    return res.data;
-  },
-
-  async demoCustomerLogin(subdomain: string, email: string): Promise<any> {
-    const res = await axios.post(`${API_BASE}/portal/${subdomain}/demo-login`, { email });
+    rememberBrowserSession(res.data, 'CUSTOMER');
     return res.data;
   },
 
@@ -720,8 +563,21 @@ export const apiService = {
     return res.data;
   },
 
-  async getCustomerPortalTickets(subdomain: string, email: string): Promise<Ticket[]> {
-    const res = await axios.get(`${API_BASE}/portal/${subdomain}/tickets?email=${encodeURIComponent(email)}`, { headers: getCustomerHeaders() });
+  async getCustomerPortalTicketPage(subdomain: string, query: { page?: number; size?: number; q?: string; status?: string }): Promise<PageResult<Ticket>> {
+    const res = await axios.get(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/tickets`, { params: query, headers: getCustomerHeaders() });
+    return res.data;
+  },
+
+  async uploadCustomerAttachments(subdomain: string, ticketNumber: string, files: File[], threadId?: number): Promise<TicketAttachment[]> {
+    const body = new FormData();
+    for (const file of files) body.append('files', file);
+    if (threadId != null) body.append('threadId', String(threadId));
+    const res = await axios.post(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/tickets/${encodeURIComponent(ticketNumber)}/attachments`, body);
+    return res.data;
+  },
+
+  async downloadCustomerAttachment(subdomain: string, id: number): Promise<Blob> {
+    const res = await axios.get(`${API_BASE}/portal/${encodeURIComponent(subdomain)}/attachments/${id}/download`, { responseType: 'blob' });
     return res.data;
   },
 
@@ -730,7 +586,7 @@ export const apiService = {
     return res.data;
   },
 
-  async sendCustomerPortalReply(subdomain: string, ticketNumber: string, email: string, reply: string): Promise<TicketThread> {
+  async sendCustomerPortalReply(subdomain: string, ticketNumber: string, email: string, reply: string): Promise<Ticket> {
     const res = await axios.post(`${API_BASE}/portal/${subdomain}/tickets/${encodeURIComponent(ticketNumber)}/reply`, { email, reply }, { headers: getCustomerHeaders() });
     return res.data;
   },
@@ -750,9 +606,29 @@ export const apiService = {
     adminPassword: string;
     adminName: string;
     planTier: string;
+    challengeId: string;
+    verificationCode: string;
+    agreedToTerms: boolean;
   }): Promise<LoginResponse> {
     const res = await axios.post(`${API_BASE}/onboarding/signup`, data);
+    rememberBrowserSession(res.data, 'STAFF');
     return res.data;
+  },
+
+  async getPublicPlans(): Promise<PublicPlan[]> {
+    return (await axios.get(`${API_BASE}/plans`)).data;
+  },
+
+  async getSignupConfiguration(): Promise<{ signupEnabled: boolean; captchaSiteKey: string; googleEnabled: boolean; microsoftEnabled: boolean }> {
+    return (await axios.get(`${API_BASE}/onboarding/config`)).data;
+  },
+
+  async checkWorkspaceAddress(slug: string): Promise<{ available: boolean; slug?: string; reason?: string }> {
+    return (await axios.get(`${API_BASE}/onboarding/check-subdomain`, { params: { slug } })).data;
+  },
+
+  async sendSignupVerification(email: string, captchaToken: string): Promise<{ success: boolean; challengeId: string; expiresInSeconds: number; resendAfterSeconds: number }> {
+    return (await axios.post(`${API_BASE}/onboarding/send-verification`, { email, captchaToken })).data;
   },
 
   // ==========================================
@@ -761,9 +637,7 @@ export const apiService = {
 
   async verify2Fa(data: Verify2FaRequest): Promise<LoginResponse> {
     const res = await axios.post(`${API_BASE}/auth/verify-2fa`, data);
-    if (res.data?.token) {
-      setAuthToken(res.data.token);
-    }
+    rememberBrowserSession(res.data, 'STAFF');
     return res.data;
   },
 
@@ -796,43 +670,35 @@ export const apiService = {
 
   async acceptInvitation(data: AcceptInvitationRequest): Promise<LoginResponse> {
     const res = await axios.post(`${API_BASE}/invitations/accept`, data);
-    if (res.data?.token) {
-      setAuthToken(res.data.token);
-    }
+    if (!res.data?.twoFactorRequired && res.data?.browserSession) rememberBrowserSession(res.data, 'STAFF');
     return res.data;
   },
 
   async getPendingInvitations(companyId: number): Promise<AgentInvitation[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/invitations`, {
-        params: { companyId },
-        headers: getHeaders()
-      });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/invitations`, {
+      params: { companyId },
+      headers: getHeaders()
+    });
+    return res.data;
   },
 
-  async inviteAgent(data: { email: string; name: string; roleId?: number }, adminUserId: number, companyId: number): Promise<{ success: boolean; message: string; inviteUrl?: string }> {
+  async inviteAgent(data: { email: string; name: string; roleId?: number }, companyId: number): Promise<{ success: boolean; message: string }> {
     const res = await axios.post(`${API_BASE}/invitations/invite`, data, {
-      params: { adminUserId, companyId },
+      params: { companyId },
       headers: getHeaders()
     });
     return res.data;
   },
 
-  async resendInvitation(id: number, adminUserId: number): Promise<{ success: boolean; message: string; inviteUrl?: string }> {
+  async resendInvitation(id: number): Promise<{ success: boolean; message: string }> {
     const res = await axios.post(`${API_BASE}/invitations/${id}/resend`, {}, {
-      params: { adminUserId },
       headers: getHeaders()
     });
     return res.data;
   },
 
-  async revokeInvitation(id: number, adminUserId: number): Promise<{ success: boolean; message: string }> {
+  async revokeInvitation(id: number): Promise<{ success: boolean; message: string }> {
     const res = await axios.post(`${API_BASE}/invitations/${id}/revoke`, {}, {
-      params: { adminUserId },
       headers: getHeaders()
     });
     return res.data;
@@ -865,14 +731,10 @@ export const apiService = {
   // ==========================================
 
   async getPublicKbArticles(subdomain: string, query?: string): Promise<KbArticle[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/portal/${subdomain}/kb/articles`, {
-        params: query ? { query } : undefined
-      });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/portal/${subdomain}/kb/articles`, {
+      params: query ? { query } : undefined
+    });
+    return res.data;
   },
 
   async voteKbArticle(subdomain: string, articleId: number, helpful: boolean): Promise<{ success: boolean; message: string }> {
@@ -912,12 +774,8 @@ export const apiService = {
   // =========================================================================
 
   async getCompanySettings(companyId: number): Promise<any> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/settings`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return null;
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/settings`, { headers: getHeaders() });
+    return res.data;
   },
 
   async updateCompanySettings(companyId: number, settings: any): Promise<any> {
@@ -926,12 +784,8 @@ export const apiService = {
   },
 
   async getAuditLogs(companyId: number): Promise<any[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/audit-logs`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/audit-logs`, { headers: getHeaders() });
+    return res.data;
   },
 
   async saveMailbox(companyId: number, mailbox: any): Promise<any> {
@@ -949,12 +803,8 @@ export const apiService = {
   },
 
   async getAutomationRules(companyId: number): Promise<any[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/companies/${companyId}/automation-rules`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [];
-    }
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/automation-rules`, { headers: getHeaders() });
+    return res.data;
   },
 
   async saveAutomationRule(companyId: number, rule: any): Promise<any> {
@@ -978,53 +828,18 @@ export const apiService = {
   // =========================================================================
 
   async getPlatformPlans(): Promise<any[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/plans`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        { code: 'FREE', name: 'Community Free', priceMonthlyInr: 0, priceYearlyInr: 0, maxAgents: 2, companiesCount: 1 },
-        { code: 'STARTER', name: 'Growth Starter', priceMonthlyInr: 2999, priceYearlyInr: 29990, maxAgents: 5, companiesCount: 2 },
-        { code: 'PRO', name: 'Scale Professional', priceMonthlyInr: 6999, priceYearlyInr: 69990, maxAgents: 15, companiesCount: 1 },
-        { code: 'ENTERPRISE', name: 'Corporate Enterprise', priceMonthlyInr: 14999, priceYearlyInr: 149990, maxAgents: 50, companiesCount: 2 }
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/admin/plans`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getPlatformCoupons(): Promise<any[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/coupons`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return [
-        { code: 'STARTUP50', discountPercent: 50, duration: '3_MONTHS', redemptionCount: 14, maxRedemptions: 50, isActive: true },
-        { code: 'KUWYPROMO', discountPercent: 20, duration: 'FOREVER', redemptionCount: 8, maxRedemptions: 100, isActive: true }
-      ];
-    }
+    const res = await axios.get(`${API_BASE}/admin/coupons`, { headers: getHeaders() });
+    return res.data;
   },
 
   async getEmailSystemHealth(): Promise<any> {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/email-health`, { headers: getHeaders() });
-      return res.data;
-    } catch {
-      return {
-        inboundMessagesPerHour: 148,
-        inboundQueueSize: 2,
-        inboundProcessingDelayMs: 340,
-        spfDkimPassRate: 99.4,
-        outboundSentToday: 2840,
-        outboundDeliveryRate: 99.8,
-        bounceRate: 0.18,
-        spamComplaintRate: 0.01,
-        connectedMailboxesHealthy: 6,
-        connectedMailboxesExpiring: 0,
-        backgroundJobsRunning: 4,
-        backgroundJobsWaiting: 0,
-        backgroundJobsFailed: 0,
-        deadLetterCount: 0
-      };
-    }
+    const res = await axios.get(`${API_BASE}/admin/email-health`, { headers: getHeaders() });
+    return res.data;
   },
 
   async extendCompanyTrial(id: number, days = 14, reason = 'Extended by platform administrator'): Promise<any> {

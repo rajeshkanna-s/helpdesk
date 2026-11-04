@@ -31,21 +31,8 @@ public class SubscriptionController {
         Long targetCompanyId = (companyId != null) ? companyId : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
-        final Long resolvedCompanyId = targetCompanyId;
-        CompanySubscription sub = subscriptionRepository.findByCompanyId(resolvedCompanyId)
-                .orElseGet(() -> {
-                    Company company = companyRepository.findById(resolvedCompanyId).orElse(null);
-                    CompanySubscription newSub = new CompanySubscription();
-                    newSub.setCompany(company);
-                    newSub.setPlanTier(CompanySubscription.PlanTier.STARTER);
-                    newSub.setAmount(BigDecimal.valueOf(2499.00));
-                    newSub.setAgentLimit(5);
-                    newSub.setTicketLimitMonthly(1000);
-                    newSub.setStatus(CompanySubscription.SubscriptionStatus.ACTIVE);
-                    return subscriptionRepository.save(newSub);
-                });
-
-        return ResponseEntity.ok(sub);
+        return subscriptionRepository.findByCompanyId(targetCompanyId).map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/checkout")

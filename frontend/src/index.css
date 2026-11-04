@@ -1,6 +1,5 @@
 @import 'bootstrap/dist/css/bootstrap.min.css';
 @import 'bootstrap-icons/font/bootstrap-icons.css';
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
   /* Brand Palette */
@@ -850,6 +849,8 @@ h1, h2, h3, h4, h5, h6 {
 .presence-busy { background: #d9a140; }
 .presence-away { background: #9ba6b6; }
 .workspace-user-info { min-width: 0; flex: 1; }
+.workspace-profile-button { border: 0; padding: 2px 0; background: none; text-align: left; color: inherit; }
+.workspace-profile-button:hover strong { color: #2563eb; }
 .workspace-user-info strong { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-user-info > span { display: block; color: #64748b; font-size: 10px; margin-top: 3px; }
 .workspace-presence { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; color: #64748b; font-size: 10px; }
@@ -1423,6 +1424,25 @@ button.platform-stat-card:hover { border-color: #b9cceb; background: #fcfdff; }
 .account-flow-dialog .modal-dialog { width: 100%; max-width: none; min-height: 0; margin: 0; }
 .account-flow-dialog .modal-content { border: 0; border-radius: 11px; }
 .account-flow-dialog .account-flow-header { padding-right: 42px; }
+.account-security-dialog { width: min(580px, calc(100vw - 32px)); }
+.account-security-body { padding: 24px 28px; }
+.account-security-body .form-label { display: block; font-size: 12px; color: #526782; }
+.account-security-body .form-control { min-height: 40px; font-size: 14px; }
+.account-security-body .btn { font-size: 12px; min-height: 36px; }
+.account-security-tabs { display: flex; gap: 8px; border-bottom: 1px solid #e1e8f1; margin-bottom: 23px; padding-bottom: 10px; }
+.account-security-tabs button { border: 0; border-radius: 5px; background: none; color: #64748b; padding: 8px 12px; font-size: 12px; }
+.account-security-tabs button.active { background: #eef4ff; color: #2563eb; }
+.account-security-status { display: flex; align-items: center; gap: 12px; padding: 15px; background: #f7faff; border: 1px solid #e2eaf7; border-radius: 7px; margin-bottom: 20px; color: #5276a9; }
+.account-security-status strong, .account-device-row strong { display: block; color: #344a68; font-size: 13px; }
+.account-security-status span { display: block; margin-top: 4px; font-size: 11px; color: #64748b; }
+.account-setup-key { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #dbe5f5; border-radius: 6px; background: #f9fbff; }
+.account-setup-key code { overflow-wrap: anywhere; flex: 1; color: #305a99; font-size: 13px; }
+.account-recovery-codes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; padding: 15px; border: 1px solid #e2e7ef; border-radius: 7px; background: #fafbfd; }
+.account-recovery-codes code { color: #3f5879; font-size: 11px; letter-spacing: 0.05em; overflow-wrap: anywhere; }
+.account-device-row { display: flex; align-items: start; gap: 10px; padding: 16px 0; border-bottom: 1px solid #e5eaf1; color: #7589a4; }
+.account-device-row > div { flex: 1; min-width: 0; }
+.account-device-row span, .account-device-row small { display: block; color: #64748b; font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.account-device-row span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 4px 0; }
 
 @media (max-width: 575px) {
   .account-flow-page { padding: 20px 12px; }
@@ -1433,4 +1453,12 @@ button.platform-stat-card:hover { border-color: #b9cceb; background: #fcfdff; }
   :is(.account-flow-page, .account-flow-dialog) .btn { min-height: 42px; }
   .account-flow-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
   .account-flow-dialog .modal-body { padding: 22px 20px !important; }
+  .account-security-body { padding: 22px 20px; }
+  .account-security-body .form-control { font-size: 16px; min-height: 44px; }
+}
+
+@media (max-width: 767px) {
+  .customer-portal .p-3\.5 { padding: 1.25rem !important; }
+  .customer-portal .g-2\.5 { --bs-gutter-x: 0.625rem; --bs-gutter-y: 0.625rem; }
+  .customer-portal .form-control, .customer-portal .form-select { font-size: 16px; }
 }

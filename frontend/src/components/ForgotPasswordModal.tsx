@@ -9,6 +9,7 @@ interface ForgotPasswordModalProps {
   onClose: () => void;
   defaultEmail?: string;
   companyCode?: string;
+  returnFocusRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
@@ -16,6 +17,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   onClose,
   defaultEmail = '',
   companyCode = '',
+  returnFocusRef,
 }) => {
   const [email, setEmail] = useState(defaultEmail);
   const [isLoading, setIsLoading] = useState(false);
@@ -33,8 +35,11 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     const dialog = dialogRef.current;
     dialog?.showModal();
     dialog?.querySelector<HTMLInputElement>('input')?.focus();
-    return () => dialog?.close();
-  }, [isOpen, defaultEmail]);
+    return () => {
+      dialog?.close();
+      window.requestAnimationFrame(() => returnFocusRef?.current?.focus());
+    };
+  }, [isOpen, defaultEmail, returnFocusRef]);
 
   useEffect(() => {
     let timer: any = null;

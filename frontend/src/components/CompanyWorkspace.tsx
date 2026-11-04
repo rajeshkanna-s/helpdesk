@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
 import {
   Inbox, Send, Lock, Mail, CheckCircle2, AlertCircle, Clock,
@@ -10,8 +10,9 @@ import {
   Menu, Headphones, ChevronDown, ChevronLeft, MoreHorizontal, ArrowUpDown, PanelRight, MessageSquare
 } from 'lucide-react';
 import { apiService, setApiTenantId } from '../services/api';
+import type { TicketQueryFilters } from '../services/api';
 import type {
-  Company, DashboardStats, Ticket, TicketThread, CompanyMailbox,
+  Company, DashboardStats, Ticket, CompanyMailbox,
   Department, AuthUser, User, KbArticle, ScenarioMacro, TicketAttachment,
   CannedResponse, CompanySubscription, CustomerContact, NotificationItem
 } from '../types';
@@ -40,6 +41,69 @@ interface CompanyWorkspaceProps {
   onSwitchToAdmin: () => void;
   onLogout: () => void;
 }
+
+interface ReplyDraft {
+  text: string;
+  isPrivate: boolean;
+  files: File[];
+  uploadedFiles: File[];
+  threadId?: number;
+  sending: boolean;
+  error?: string;
+}
+
+interface NewTicketDraft {
+  subject: string;
+  description: string;
+  requesterEmail: string;
+  requesterName: string;
+  priority: Ticket['priority'];
+  departmentId: number | null;
+  files: File[];
+  uploadedFiles: File[];
+  createdTicket?: Ticket;
+  sending: boolean;
+  error?: string;
+}
+
+const EMPTY_REPLY_DRAFT: ReplyDraft = { text: '', isPrivate: false, files: [], uploadedFiles: [], sending: false };
+const EMPTY_NEW_TICKET_DRAFT: NewTicketDraft = {
+  subject: '', description: '', requesterEmail: '', requesterName: '', priority: 'MEDIUM',
+  departmentId: null, files: [], uploadedFiles: [], sending: false,
+};
+const EMPTY_PAGE = { number: 0, size: 25, totalElements: 0, totalPages: 0 };
+const ADMIN_TABS: WorkspaceTab[] = ['settings', 'billing', 'engineers', 'mailboxes', 'automations'];
+
+interface WorkspaceDraftProps {
+  replyDrafts: Record<string, ReplyDraft>;
+  setReplyDrafts: React.Dispatch<React.SetStateAction<Record<string, ReplyDraft>>>;
+  newTicketDrafts: Record<string, NewTicketDraft>;
+  setNewTicketDrafts: React.Dispatch<React.SetStateAction<Record<string, NewTicketDraft>>>;
+  submissionLocks: React.RefObject<Set<string>>;
+}
+
+const describeFailure = (error: unknown, fallback: string) => {
+  const message = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+  return typeof message === 'string' && message.trim() ? `${fallback} ${message}` : fallback;
+};
+
+export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = props => {
+  // Drafts survive workspace switches, but are never shared across users or persisted with credentials.
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, ReplyDraft>>({});
+  const [newTicketDrafts, setNewTicketDrafts] = useState<Record<string, NewTicketDraft>>({});
+  const submissionLocks = useRef(new Set<string>());
+  return (
+    <CompanyWorkspaceView
+      key={`${props.currentUser.userId}:${props.activeCompany.id}:${props.currentUser.roleType}`}
+      {...props}
+      replyDrafts={replyDrafts}
+      setReplyDrafts={setReplyDrafts}
+      newTicketDrafts={newTicketDrafts}
+      setNewTicketDrafts={setNewTicketDrafts}
+      submissionLocks={submissionLocks}
+    />
+  );
+};
 
 // Pre-configured Scenario Automations (Freshdesk 1-Click Macros)
 const PRESET_SCENARIOS: ScenarioMacro[] = [
@@ -83,14 +147,22 @@ const PRESET_SCENARIOS: ScenarioMacro[] = [
   }
 ];
 
-export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
+const CompanyWorkspaceView: React.FC<CompanyWorkspaceProps & WorkspaceDraftProps> = ({
   currentUser,
   activeCompany,
   companies,
   onSwitchCompany,
   onSwitchToAdmin,
   onLogout,
+  replyDrafts,
+  setReplyDrafts,
+  newTicketDrafts,
+  setNewTicketDrafts,
+  submissionLocks,
 }) => {
+  const isWorkspaceAdmin = currentUser.roleType === 'COMPANY_ADMIN' || currentUser.roleType === 'SUPER_ADMIN';
+  const canMutate = isWorkspaceAdmin || currentUser.roleType === 'TEAM_LEAD' || currentUser.roleType === 'AGENT';
+  const draftScope = `${currentUser.userId}:${activeCompany.id}`;
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('tickets');
   const [agentPresence, setAgentPresence] = useState<'ONLINE' | 'BUSY' | 'AWAY'>('ONLINE');
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
@@ -101,11 +173,17 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const notificationsRef = useRef<HTMLDivElement>(null);
   const toolsMenuRef = useRef<HTMLDetailsElement>(null);
   const newTicketDialogRef = useRef<HTMLDialogElement>(null);
+  const customerHistoryDialogRef = useRef<HTMLDialogElement>(null);
   const propertiesRef = useRef<HTMLElement>(null);
-  const loadedCompanyRef = useRef<number | null>(null);
+  const workspaceContextRef = useRef<object | null>(null);
   const workspaceRequestRef = useRef(0);
   const workspaceMetadataRequestRef = useRef(0);
+  const countsRequestRef = useRef(0);
   const ticketRequestRef = useRef(0);
+  const ticketSelectionRef = useRef<{ id: number | null }>({ id: null });
+  const historyRequestRef = useRef(0);
+  const mutationLocksRef = useRef(new Set<number>());
+  const bulkLockRef = useRef(false);
 
   // Stats & Tickets
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -114,12 +192,25 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [selectedTicketIds, setSelectedTicketIds] = useState<number[]>([]);
   const [viewFilter, setViewFilter] = useState<string>('ALL');
   const [ticketSearch, setTicketSearch] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'priority'>('newest');
   const [priorityFilter, setPriorityFilter] = useState<Ticket['priority'] | 'ALL'>('ALL');
   const [ticketPage, setTicketPage] = useState(0);
-  const [ticketPageInfo, setTicketPageInfo] = useState({ number: 0, size: 25, totalElements: 0, totalPages: 0 });
+  const [ticketPageInfo, setTicketPageInfo] = useState(EMPTY_PAGE);
   const [ticketCounts, setTicketCounts] = useState<Record<string, number>>({});
+  const [queueRevision, setQueueRevision] = useState(0);
+  const [loadedQueueKey, setLoadedQueueKey] = useState<string | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const [countsError, setCountsError] = useState<string | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [detailTicketId, setDetailTicketId] = useState<number | null>(null);
+  const [isLoadingTicket, setIsLoadingTicket] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [mutatingTicketIds, setMutatingTicketIds] = useState<number[]>([]);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   // Department & Agents
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -128,9 +219,6 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [kbArticles, setKbArticles] = useState<KbArticle[]>([]);
 
   // Reply Composer State
-  const [replyText, setReplyText] = useState('');
-  const [isPrivateNote, setIsPrivateNote] = useState(false);
-  const [isSending, setIsSending] = useState(false);
   const [showKbPicker, setShowKbPicker] = useState(false);
   const [showCannedPicker, setShowCannedPicker] = useState(false);
   const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([]);
@@ -150,6 +238,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   // Section D States (Screens 19, 20, 21, 23, 24)
   const [customers, setCustomers] = useState<CustomerContact[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerContact | null>(null);
+  const [customerHistory, setCustomerHistory] = useState<Ticket[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyPageInfo, setHistoryPageInfo] = useState(EMPTY_PAGE);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [showNewCustomerModal, setShowNewCustomerModal] = useState(false);
   const [newCustFirst, setNewCustFirst] = useState('');
@@ -171,13 +266,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [newArtStatus, setNewArtStatus] = useState<'PUBLISHED' | 'DRAFT'>('PUBLISHED');
 
   // Interactive To-Do Checklist for active ticket
-  const [ticketTodos, setTicketTodos] = useState<Record<number, { id: number; text: string; done: boolean }[]>>({
-    1: [
-      { id: 1, text: 'Inspect customer PAN & Aadhaar on Bureau', done: true },
-      { id: 2, text: 'Verify partner API webhook payload', done: false },
-      { id: 3, text: 'Confirm loan disbursement batch', done: false },
-    ]
-  });
+  const [ticketTodos, setTicketTodos] = useState<Record<number, { id: number; text: string; done: boolean }[]>>({});
 
   // Modals state
   const [showForwardingModal, setShowForwardingModal] = useState(false);
@@ -185,26 +274,58 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const [showNewTicketModal, setShowNewTicketModal] = useState(false);
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'info' | 'warning'; text: string } | null>(null);
 
-  // New Ticket Form State
-  const [newSubject, setNewSubject] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [newRequesterEmail, setNewRequesterEmail] = useState('');
-  const [newRequesterName, setNewRequesterName] = useState('');
-  const [newPriority, setNewPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('MEDIUM');
-  const [newDeptId, setNewDeptId] = useState<number>(1);
-
   // Simulator Form State
-  const [simSenderEmail, setSimSenderEmail] = useState('testrajesh.sundaram@srivariauto.com');
-  const [simSenderName, setSimSenderName] = useState('Rajesh Sundaram');
+  const [simSenderEmail, setSimSenderEmail] = useState('');
+  const [simSenderName, setSimSenderName] = useState('');
   const [simSubject, setSimSubject] = useState('');
   const [simBody, setSimBody] = useState('');
-  const [simMailbox, setSimMailbox] = useState('1281753993@tickets.helpdesk.com');
+  const [simMailbox, setSimMailbox] = useState('');
   const [simResult, setSimResult] = useState<string | null>(null);
 
   // Attachment States & Helpers
-  const [newTicketAttachments, setNewTicketAttachments] = useState<File[]>([]);
-  const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
   const [previewAttachment, setPreviewAttachment] = useState<TicketAttachment | null>(null);
+
+  const replyDraftKey = selectedTicket ? `${draftScope}:ticket:${selectedTicket.id}` : '';
+  const replyDraft = replyDrafts[replyDraftKey] ?? EMPTY_REPLY_DRAFT;
+  const { text: replyText, isPrivate: isPrivateNote, files: replyAttachments, sending: isSending } = replyDraft;
+  const newTicketDraftKey = `${draftScope}:new`;
+  const newTicketDraft = newTicketDrafts[newTicketDraftKey] ?? EMPTY_NEW_TICKET_DRAFT;
+  const {
+    subject: newSubject, description: newDesc, requesterEmail: newRequesterEmail,
+    requesterName: newRequesterName, priority: newPriority, files: newTicketAttachments,
+    sending: isCreatingTicket, createdTicket,
+  } = newTicketDraft;
+  const newDeptId = newTicketDraft.departmentId ?? departments[0]?.id ?? 0;
+  const isMutatingTicket = !!selectedTicket && mutatingTicketIds.includes(selectedTicket.id);
+  const canEditTicket = canMutate && !!selectedTicket && selectedTicket.id === detailTicketId && !isLoadingTicket && !isMutatingTicket && !isSending && !isBulkUpdating;
+  const isComposerLocked = !canEditTicket || !!replyDraft.threadId;
+  const queueKey = JSON.stringify([viewFilter, debouncedSearch.trim(), deptFilter, priorityFilter, sortBy, ticketPage]);
+  const isQueueStale = loadedQueueKey !== queueKey || ticketSearch.trim() !== debouncedSearch.trim();
+
+  const updateReplyDraft = (key: string, changes: Partial<ReplyDraft> | ((draft: ReplyDraft) => Partial<ReplyDraft>)) => {
+    if (!key) return;
+    setReplyDrafts(previous => {
+      const draft = previous[key] ?? EMPTY_REPLY_DRAFT;
+      return { ...previous, [key]: { ...draft, ...(typeof changes === 'function' ? changes(draft) : changes) } };
+    });
+  };
+  const updateNewTicketDraft = (changes: Partial<NewTicketDraft> | ((draft: NewTicketDraft) => Partial<NewTicketDraft>)) => {
+    setNewTicketDrafts(previous => {
+      const draft = previous[newTicketDraftKey] ?? EMPTY_NEW_TICKET_DRAFT;
+      return { ...previous, [newTicketDraftKey]: { ...draft, ...(typeof changes === 'function' ? changes(draft) : changes) } };
+    });
+  };
+  const setReplyText = (value: React.SetStateAction<string>) => updateReplyDraft(replyDraftKey, draft => ({ text: typeof value === 'function' ? value(draft.text) : value }));
+  const setIsPrivateNote = (isPrivate: boolean) => updateReplyDraft(replyDraftKey, { isPrivate });
+  const setReplyAttachments = (value: React.SetStateAction<File[]>) => updateReplyDraft(replyDraftKey, draft => ({ files: typeof value === 'function' ? value(draft.files) : value }));
+  const setNewSubject = (subject: string) => updateNewTicketDraft({ subject });
+  const setNewDesc = (description: string) => updateNewTicketDraft({ description });
+  const setNewRequesterEmail = (requesterEmail: string) => updateNewTicketDraft({ requesterEmail });
+  const setNewRequesterName = (requesterName: string) => updateNewTicketDraft({ requesterName });
+  const setNewPriority = (priority: Ticket['priority']) => updateNewTicketDraft({ priority });
+  const setNewDeptId = (departmentId: number) => updateNewTicketDraft({ departmentId });
+  const setNewTicketAttachments = (value: React.SetStateAction<File[]>) => updateNewTicketDraft(draft => ({ files: typeof value === 'function' ? value(draft.files) : value }));
+  const isCurrentWorkspace = (context: object | null) => context !== null && workspaceContextRef.current === context;
 
   const formatFileSize = (bytes: number): string => {
     if (!bytes || bytes === 0) return '0 B';
@@ -222,22 +343,106 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     return /\.pdf$/i.test(fileName);
   };
 
-  // Load Company Workspace Data
+  // The keyed view discards tenant data synchronously; async work must also match this mount.
+  useLayoutEffect(() => {
+    workspaceContextRef.current = {};
+    setApiTenantId(activeCompany.id);
+    return () => { workspaceContextRef.current = null; };
+  }, [activeCompany.id]);
+
   useEffect(() => {
-    if (activeCompany) {
-      setApiTenantId(activeCompany.id);
-      const companyChanged = loadedCompanyRef.current !== activeCompany.id;
-      loadedCompanyRef.current = activeCompany.id;
-      loadCompanyData(activeCompany.id, companyChanged, !companyChanged);
+    void loadWorkspaceMetadata();
+    void loadTicketCounts();
+  }, [activeCompany.id, currentUser.userId, isWorkspaceAdmin]);
+
+  useEffect(() => {
+    if (ticketSearch === debouncedSearch) return;
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(ticketSearch);
+      setTicketPage(0);
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [ticketSearch, debouncedSearch]);
+
+  useEffect(() => {
+    const context = workspaceContextRef.current;
+    const requestId = ++workspaceRequestRef.current;
+    let cancelled = false;
+    const isCurrent = () => !cancelled && isCurrentWorkspace(context) && requestId === workspaceRequestRef.current;
+    const filters: TicketQueryFilters = {
+      q: debouncedSearch.trim() || undefined,
+      departmentId: deptFilter ?? undefined,
+      priority: priorityFilter === 'ALL' ? undefined : priorityFilter,
+    };
+    setIsLoadingWorkspace(true);
+    setQueueError(null);
+    void apiService.getTicketPage(activeCompany.id, viewFilter, ticketPage, 25, sortBy === 'oldest' ? 'asc' : 'desc', filters, sortBy === 'priority' ? 'priority' : 'createdAt')
+      .then(page => {
+        if (!isCurrent()) return;
+        if (ticketPage > 0 && ticketPage >= page.totalPages) {
+          setTicketPage(Math.max(0, page.totalPages - 1));
+          return;
+        }
+        setTickets(page.content);
+        setTicketPageInfo({ number: page.number, size: page.size, totalElements: page.totalElements, totalPages: page.totalPages });
+        setLoadedQueueKey(queueKey);
+        setSelectedTicketIds(previous => previous.filter(id => page.content.some(ticket => ticket.id === id)));
+        // Filtering or paging never replaces an already selected conversation.
+        if (ticketSelectionRef.current.id === null && page.content.length) void loadTicketDetail(page.content[0].id, false);
+      })
+      .catch(error => {
+        if (isCurrent()) setQueueError(describeFailure(error, 'Could not load tickets. Previous results, if any, are retained.'));
+      })
+      .finally(() => { if (isCurrent()) setIsLoadingWorkspace(false); });
+    return () => { cancelled = true; };
+  }, [activeCompany.id, viewFilter, ticketPage, sortBy, debouncedSearch, deptFilter, priorityFilter, queueKey, queueRevision]);
+
+  useEffect(() => {
+    if (!selectedCustomer) return;
+    if (!selectedCustomer.email?.trim()) {
+      setHistoryError('This contact does not have an email address for ticket history.');
+      setIsLoadingHistory(false);
+      return;
     }
-  }, [activeCompany, viewFilter, ticketPage, sortBy]);
+    const context = workspaceContextRef.current;
+    const requestId = ++historyRequestRef.current;
+    let cancelled = false;
+    const isCurrent = () => !cancelled && isCurrentWorkspace(context) && requestId === historyRequestRef.current;
+    setIsLoadingHistory(true);
+    setHistoryError(null);
+    void apiService.getTicketPage(activeCompany.id, 'ALL', historyPage, 25, 'desc', { customerEmail: selectedCustomer.email })
+      .then(page => {
+        if (!isCurrent()) return;
+        if (historyPage > 0 && historyPage >= page.totalPages) {
+          setHistoryPage(Math.max(0, page.totalPages - 1));
+          return;
+        }
+        setCustomerHistory(page.content);
+        setHistoryPageInfo({ number: page.number, size: page.size, totalElements: page.totalElements, totalPages: page.totalPages });
+        setHistoryLoaded(true);
+      })
+      .catch(error => {
+        if (isCurrent()) setHistoryError(describeFailure(error, 'Could not load customer history. Previous results, if any, are retained.'));
+      })
+      .finally(() => { if (isCurrent()) setIsLoadingHistory(false); });
+    return () => { cancelled = true; };
+  }, [activeCompany.id, selectedCustomer?.id, selectedCustomer?.email, historyPage, historyRevision]);
 
   useEffect(() => {
     if (!showNewTicketModal) return;
     const dialog = newTicketDialogRef.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
     dialog?.showModal();
-    return () => dialog?.close();
+    return () => { dialog?.close(); if (previousFocus?.isConnected) previousFocus.focus(); };
   }, [showNewTicketModal]);
+
+  useEffect(() => {
+    if (!selectedCustomer) return;
+    const dialog = customerHistoryDialogRef.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    dialog?.showModal();
+    return () => { dialog?.close(); if (previousFocus?.isConnected) previousFocus.focus(); };
+  }, [selectedCustomer?.id]);
 
   useEffect(() => {
     if (!isDetailsOverlay) return;
@@ -326,7 +531,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   // Section D Handlers (Screens 20, 23, 24)
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustEmail.trim() || !newCustFirst.trim()) return;
+    if (!canMutate || !newCustEmail.trim() || !newCustFirst.trim()) return;
+    const context = workspaceContextRef.current;
     try {
       const created = await apiService.createCustomer(activeCompany.id, {
         firstName: newCustFirst.trim(),
@@ -335,6 +541,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         phone: newCustPhone.trim() || undefined,
         organization: newCustOrg.trim() || undefined,
       });
+      if (!isCurrentWorkspace(context)) return;
       setCustomers(prev => [created, ...prev]);
       setShowNewCustomerModal(false);
       setNewCustFirst('');
@@ -344,13 +551,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       setNewCustOrg('');
       showNotification(`Customer contact created: ${created.email}`);
     } catch {
-      showNotification('Failed to create customer contact', 'warning');
+      if (isCurrentWorkspace(context)) showNotification('Failed to create customer contact', 'warning');
     }
   };
 
   const handleCreateArticle = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newArtTitle.trim() || !newArtContent.trim()) return;
+    if (!isWorkspaceAdmin || !newArtTitle.trim() || !newArtContent.trim()) return;
+    const context = workspaceContextRef.current;
     try {
       const created = await apiService.createKbArticle(activeCompany.id, {
         categoryId: newArtCatId,
@@ -358,37 +566,42 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         contentHtml: newArtContent.trim(),
         status: newArtStatus,
       });
+      if (!isCurrentWorkspace(context)) return;
       setKbArticles(prev => [created, ...prev]);
       setShowNewArticleModal(false);
       setNewArtTitle('');
       setNewArtContent('');
       showNotification(`Solution article published: "${created.title}"`);
     } catch {
-      showNotification('Failed to save solution article', 'warning');
+      if (isCurrentWorkspace(context)) showNotification('Failed to save solution article', 'warning');
     }
   };
 
   const handleMarkAllNotifsRead = async () => {
+    const context = workspaceContextRef.current;
     try {
       await apiService.markAllNotificationsRead(activeCompany.id);
+      if (!isCurrentWorkspace(context)) return;
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
       showNotification('All notifications marked as read');
     } catch {
-      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      if (isCurrentWorkspace(context)) showNotification('Notifications could not be marked as read.', 'warning');
     }
   };
 
   const handleMarkNotifRead = async (notif: NotificationItem) => {
+    const context = workspaceContextRef.current;
     try {
       await apiService.markNotificationRead(activeCompany.id, notif.id);
+      if (!isCurrentWorkspace(context)) return;
       setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
       if (notif.ticketId) {
         setShowNotifDropdown(false);
         setActiveTab('tickets');
-        loadTicketDetail(notif.ticketId);
+        void loadTicketDetail(notif.ticketId);
       }
     } catch {
-      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+      if (isCurrentWorkspace(context)) showNotification('The notification could not be marked as read.', 'warning');
     }
   };
 
@@ -409,294 +622,328 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     setTimeout(() => setActionNotice(null), 4000);
   };
 
-  const loadCompanyData = async (companyId: number, resetSelection = false, queueOnly = false) => {
-    const requestId = ++workspaceRequestRef.current;
-    const metadataRequestId = queueOnly ? workspaceMetadataRequestRef.current : ++workspaceMetadataRequestRef.current;
-    setIsLoadingWorkspace(true);
-    if (resetSelection) {
-      ticketRequestRef.current += 1;
-      setTickets([]);
-      setSelectedTicket(null);
-      setSelectedTicketIds([]);
-      setShowMobileTicket(false);
-      setDeptFilter(null);
-      setPriorityFilter('ALL');
-      setStats(null);
-      setDepartments([]);
-      setAgents([]);
-      setMailboxes([]);
-      setKbArticles([]);
-      setCannedResponses([]);
-      setCustomers([]);
-      setNotifications([]);
-      setCurrentSubscription(null);
-      setTicketCounts({});
+  const loadWorkspaceMetadata = async () => {
+    const context = workspaceContextRef.current;
+    const requestId = ++workspaceMetadataRequestRef.current;
+    setMetadataError(null);
+    const data = await Promise.all([
+      isWorkspaceAdmin ? apiService.getMailboxes(activeCompany.id).catch(() => undefined) : Promise.resolve([]),
+      apiService.getDepartments(activeCompany.id).catch(() => undefined),
+      apiService.getAgents(activeCompany.id).catch(() => undefined),
+      apiService.getKbArticles(activeCompany.id).catch(() => undefined),
+      apiService.getCannedResponses(activeCompany.id).catch(() => undefined),
+      isWorkspaceAdmin ? apiService.getCurrentSubscription(activeCompany.id).catch(() => undefined) : Promise.resolve(null),
+      apiService.getCustomers(activeCompany.id).catch(() => undefined),
+      apiService.getNotifications(activeCompany.id, currentUser.userId).catch(() => undefined),
+      apiService.getKbCategories(activeCompany.id).catch(() => undefined),
+    ]);
+    if (!isCurrentWorkspace(context) || requestId !== workspaceMetadataRequestRef.current) return;
+    const [mailboxesData, deptsData, agentsData, kbData, crData, subData, custData, notifsData, catsData] = data;
+    if (mailboxesData !== undefined) {
+      setMailboxes(mailboxesData);
+      if (mailboxesData.length) setSimMailbox(previous => previous || mailboxesData[0].forwardingAddress || mailboxesData[0].emailAddress);
     }
+    if (deptsData !== undefined) setDepartments(deptsData);
+    if (agentsData !== undefined) setAgents(agentsData);
+    if (kbData !== undefined) setKbArticles(kbData);
+    if (crData !== undefined) setCannedResponses(crData);
+    if (subData !== undefined) setCurrentSubscription(subData);
+    if (custData !== undefined) setCustomers(custData);
+    if (notifsData !== undefined) setNotifications(notifsData);
+    if (catsData !== undefined) {
+      setKbCategories(catsData);
+      if (catsData.length) setNewArtCatId(previous => catsData.some(category => category.id === previous) ? previous : catsData[0].id);
+    }
+    if (data.some(value => value === undefined)) setMetadataError('Some workspace reference data could not be loaded. Previously loaded data is retained.');
+  };
+
+  const loadTicketCounts = async () => {
+    const context = workspaceContextRef.current;
+    const requestId = ++countsRequestRef.current;
+    setCountsError(null);
     try {
-      const [pageData, workspaceData] = await Promise.all([
-        apiService.getTicketPage(companyId, viewFilter, resetSelection ? 0 : ticketPage, 25, sortBy === 'oldest' ? 'asc' : 'desc'),
-        queueOnly ? null : Promise.all([
-          apiService.getDashboardStats(companyId).catch(() => null),
-          apiService.getMailboxes(companyId).catch(() => []),
-          apiService.getDepartments(companyId).catch(() => []),
-          apiService.getAgents(companyId).catch(() => []),
-          apiService.getKbArticles(companyId).catch(() => []),
-          apiService.getCannedResponses(companyId).catch(() => []),
-          apiService.getCurrentSubscription(companyId).catch(() => null),
-          apiService.getCustomers(companyId).catch(() => []),
-          apiService.getNotifications(companyId, currentUser.userId).catch(() => []),
-          apiService.getKbCategories(companyId).catch(() => []),
-          Promise.all(['ALL', 'OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'].map(async status => {
-            const page = await apiService.getTicketPage(companyId, status, 0, 1);
-            return [status, page.totalElements] as const;
-          })),
-        ]),
+      const [counts, dashboard] = await Promise.all([
+        Promise.all(['ALL', 'OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'].map(async status => {
+          const page = await apiService.getTicketPage(activeCompany.id, status, 0, 1, 'desc', {}, 'createdAt');
+          return [status, page.totalElements] as const;
+        })),
+        apiService.getDashboardStats(activeCompany.id).catch(() => undefined),
       ]);
-
-      // A new queue view must not discard reference data that is still loading.
-      if (workspaceData && metadataRequestId === workspaceMetadataRequestRef.current && loadedCompanyRef.current === companyId) {
-        const [statsData, mailboxesData, deptsData, agentsData, kbData, crData, subData, custData, notifsData, catsData, countsData] = workspaceData;
-        if (statsData) setStats(statsData);
-        setMailboxes(mailboxesData);
-        setDepartments(deptsData);
-        setAgents(agentsData);
-        setKbArticles(kbData);
-        setCannedResponses(crData);
-        if (subData) setCurrentSubscription(subData);
-        setCustomers(custData);
-        setNotifications(notifsData);
-        setKbCategories(catsData);
-        setTicketCounts(Object.fromEntries(countsData));
-        if (catsData.length) setNewArtCatId(catsData[0].id);
-        if (mailboxesData.length) setSimMailbox(mailboxesData[0].forwardingAddress || mailboxesData[0].emailAddress);
-        if (deptsData.length) setNewDeptId(deptsData[0].id);
+      if (!isCurrentWorkspace(context) || requestId !== countsRequestRef.current) return;
+      setTicketCounts(Object.fromEntries(counts));
+      if (dashboard !== undefined) setStats(dashboard);
+    } catch (error) {
+      if (isCurrentWorkspace(context) && requestId === countsRequestRef.current) {
+        setCountsError(describeFailure(error, 'Workspace counts could not be refreshed. Last known counts are retained.'));
       }
-
-      if (requestId !== workspaceRequestRef.current) return;
-      const ticketsData = pageData.content;
-      setTickets(ticketsData);
-      setTicketPageInfo({ number: pageData.number, size: pageData.size, totalElements: pageData.totalElements, totalPages: pageData.totalPages });
-      setTicketCounts(previous => ({ ...previous, [viewFilter]: pageData.totalElements }));
-      setSelectedTicketIds(previous => previous.filter(id => ticketsData.some(ticket => ticket.id === id)));
-      if (resetSelection) setTicketPage(0);
-      else if (ticketPage >= pageData.totalPages && ticketPage > 0) setTicketPage(Math.max(0, pageData.totalPages - 1));
-
-      const refreshedTicket = ticketsData.find(ticket => ticket.id === selectedTicket?.id);
-      if (!ticketsData.length) {
-        setSelectedTicket(null);
-      } else if (resetSelection || !refreshedTicket) {
-        loadTicketDetail(ticketsData[0].id, false);
-      } else {
-        setSelectedTicket(current => current?.id === refreshedTicket.id ? { ...current, ...refreshedTicket, threads: refreshedTicket.threads ?? current.threads } : current);
-      }
-    } catch {
-      // Fallback
-    } finally {
-      if (requestId === workspaceRequestRef.current) setIsLoadingWorkspace(false);
     }
   };
 
-  const loadTicketDetail = async (id: number, openOnMobile = true) => {
+  const loadCompanyData = (companyId: number, queueOnly = false) => {
+    if (companyId !== activeCompany.id || !workspaceContextRef.current) return;
+    // The effect reads the latest filters, not those captured by a completed mutation.
+    setQueueRevision(previous => previous + 1);
+    void loadTicketCounts();
+    if (!queueOnly) void loadWorkspaceMetadata();
+  };
+
+  const loadTicketDetail = async (id: number, openOnMobile = true, refreshOnly = false) => {
+    const context = workspaceContextRef.current;
+    if (!context || (refreshOnly && ticketSelectionRef.current.id !== id)) return;
+    if (!refreshOnly) {
+      if (ticketSelectionRef.current.id !== id) ticketSelectionRef.current = { id };
+      setDetailTicketId(id);
+      setMutationError(null);
+      setShowCannedPicker(false);
+      setShowKbPicker(false);
+      setShowScenarioMenu(false);
+      setPreviewAttachment(null);
+    }
+    const selection = ticketSelectionRef.current;
     const requestId = ++ticketRequestRef.current;
-    const detail = await apiService.getTicketDetail(id);
-    if (requestId !== ticketRequestRef.current) return;
-    setSelectedTicket(detail);
+    const isCurrent = () => isCurrentWorkspace(context) && ticketSelectionRef.current === selection && requestId === ticketRequestRef.current;
+    setIsLoadingTicket(true);
+    setDetailError(null);
     if (openOnMobile) setShowMobileTicket(true);
+    try {
+      const detail = await apiService.getTicketDetail(id);
+      if (isCurrent()) setSelectedTicket(detail);
+    } catch (error) {
+      if (isCurrent()) setDetailError(describeFailure(error, `Could not load ticket ${id}. The last loaded conversation is retained.`));
+    } finally {
+      if (isCurrent()) setIsLoadingTicket(false);
+    }
   };
 
   const handleInsertCannedResponse = (cr: CannedResponse) => {
+    if (isComposerLocked) return;
     const custName = selectedTicket?.contact
       ? `${selectedTicket.contact.firstName} ${selectedTicket.contact.lastName || ''}`.trim()
       : 'Customer';
     const subject = selectedTicket?.subject || 'your inquiry';
     const ticketId = selectedTicket?.ticketNumber || 'TICKET';
-    let formatted = cr.content
-      .replace(/\{\{customer_name\}\}/g, custName)
-      .replace(/\{\{ticket_subject\}\}/g, subject)
-      .replace(/\{\{ticket_id\}\}/g, ticketId);
+    const variables: Record<string, string> = {
+      customer_name: custName, 'customer.name': custName,
+      customer_email: selectedTicket?.contact?.email || '', 'customer.email': selectedTicket?.contact?.email || '',
+      ticket_subject: subject, 'ticket.subject': subject,
+      ticket_id: ticketId, 'ticket.id': ticketId,
+      ticket_number: ticketId, 'ticket.number': ticketId,
+      agent_name: currentUser.displayName, 'agent.name': currentUser.displayName,
+      company_name: activeCompany.name, 'company.name': activeCompany.name,
+    };
+    let formatted = cr.content;
+    for (const [name, value] of Object.entries(variables)) {
+      formatted = formatted.replaceAll(`{{${name}}}`, () => value);
+    }
     setReplyText(prev => prev ? `${prev}\n\n${formatted}` : formatted);
     setShowCannedPicker(false);
     showNotification(`Inserted template ${cr.shortcut}`);
   };
 
   const handleUpgradeSubscription = async (targetPlan: 'FREE' | 'STARTER' | 'PRO') => {
+    if (!isWorkspaceAdmin || isUpgradingSub) return;
+    const context = workspaceContextRef.current;
     setIsUpgradingSub(true);
     try {
       const updated = await apiService.upgradeSubscription(targetPlan, 'RAZORPAY');
+      if (!isCurrentWorkspace(context)) return;
       setCurrentSubscription(updated);
       showNotification(`Subscription updated to ${targetPlan} plan!`);
-    } catch {
-      showNotification(`Plan updated to ${targetPlan}.`, 'info');
+    } catch (error) {
+      if (isCurrentWorkspace(context)) showNotification(describeFailure(error, 'The subscription was not updated.'), 'warning');
     } finally {
-      setIsUpgradingSub(false);
+      if (isCurrentWorkspace(context)) setIsUpgradingSub(false);
     }
   };
 
   const handleSendReply = async () => {
-    if (!replyText.trim() || !selectedTicket) return;
-    setIsSending(true);
+    if (!canEditTicket || !selectedTicket || ticketSelectionRef.current.id !== selectedTicket.id || submissionLocks.current.has(replyDraftKey)) return;
+    if (!replyDraft.threadId && !replyText.trim()) return;
+    const context = workspaceContextRef.current;
+    const selection = ticketSelectionRef.current;
+    const ticketId = selectedTicket.id;
+    const key = replyDraftKey;
+    const draft = replyDraft;
+    let threadId = draft.threadId;
+    let uploadedFiles = [...draft.uploadedFiles];
+    const isSelected = () => isCurrentWorkspace(context) && ticketSelectionRef.current === selection;
+    submissionLocks.current.add(key);
+    updateReplyDraft(key, { sending: true, error: undefined });
     try {
-      const newThread = await apiService.addReply(selectedTicket.id, {
-        body: replyText,
-        isPrivate: isPrivateNote,
-        senderName: isPrivateNote ? currentUser.displayName : 'Kuwy Support Team',
-        senderEmail: isPrivateNote ? currentUser.email : 'testsupport@kuwy.in',
-      });
-
-      if (replyAttachments.length > 0) {
-        try {
-          const uploadedAtts = await apiService.uploadTicketAttachments(selectedTicket.id, replyAttachments, newThread.id);
-          newThread.attachments = uploadedAtts;
-          showNotification(`Attached ${replyAttachments.length} document(s) to conversation`);
-        } catch (attErr) {
-          console.error("Failed to upload reply attachments", attErr);
+      if (!threadId) {
+        const newThread = await apiService.addReply(ticketId, {
+          body: draft.text,
+          isPrivate: draft.isPrivate,
+          senderName: currentUser.displayName,
+          senderEmail: currentUser.email,
+        });
+        threadId = newThread.id;
+        if (!threadId) throw new Error('The reply response did not include an ID.');
+        // Keep the durable ID even if the next request fails or the workspace is switched.
+        updateReplyDraft(key, { threadId });
+        if (isSelected()) {
+          ticketRequestRef.current += 1;
+          setIsLoadingTicket(false);
+          setSelectedTicket(current => current?.id === ticketId ? {
+            ...current,
+            threads: [...(current.threads || []).filter(thread => thread.id !== newThread.id), newThread],
+          } : current);
         }
       }
-
-      setSelectedTicket({
-        ...selectedTicket,
-        threads: [...(selectedTicket.threads || []), newThread],
-      });
-      setReplyText('');
-      setReplyAttachments([]);
-      showNotification(isPrivateNote ? 'Internal note recorded' : 'Reply dispatched to customer');
-    } catch {
-      const mockThread: TicketThread = {
-        id: Date.now(),
-        threadType: isPrivateNote ? 'PRIVATE_NOTE' : 'REPLY',
-        senderType: 'AGENT',
-        fromEmail: isPrivateNote ? currentUser.email : 'testsupport@kuwy.in',
-        fromName: isPrivateNote ? `${currentUser.displayName} (Internal)` : 'Kuwy Support Team',
-        bodyHtml: `<p>${replyText}</p>`,
-        isPrivate: isPrivateNote,
-        createdAt: new Date().toISOString(),
-      };
-      setSelectedTicket({
-        ...selectedTicket,
-        threads: [...(selectedTicket.threads || []), mockThread],
-      });
-      setReplyText('');
-      showNotification(isPrivateNote ? 'Internal note saved' : 'Reply sent');
+      for (const file of draft.files.filter(file => !uploadedFiles.includes(file))) {
+        if (!isCurrentWorkspace(context)) throw new Error('Return to this workspace to finish uploading.');
+        const uploaded = await apiService.uploadTicketAttachments(ticketId, [file], threadId);
+        if (!uploaded.length) throw new Error('The upload was not acknowledged.');
+        uploadedFiles = [...uploadedFiles, file];
+        updateReplyDraft(key, { uploadedFiles });
+      }
+      updateReplyDraft(key, { ...EMPTY_REPLY_DRAFT, isPrivate: draft.isPrivate, threadId: undefined, error: undefined });
+      if (isSelected()) {
+        showNotification(draft.isPrivate ? 'Internal note saved' : 'Reply saved to the conversation');
+        void loadTicketDetail(ticketId, false, true);
+      }
+    } catch (error) {
+      updateReplyDraft(key, { error: describeFailure(error, threadId
+        ? 'The reply is saved, but attachments remain pending. Retry uploads will use the same reply.'
+        : 'The reply could not be saved. Your text and files are retained.') });
+      if (threadId && isSelected()) void loadTicketDetail(ticketId, false, true);
     } finally {
-      setIsSending(false);
+      submissionLocks.current.delete(key);
+      updateReplyDraft(key, { sending: false });
+      if (threadId && isCurrentWorkspace(context)) loadCompanyData(activeCompany.id, true);
     }
   };
 
-  const handleStatusChange = async (newStatus: string) => {
-    if (!selectedTicket) return;
+  const runTicketMutation = async (mutate: (id: number) => Promise<Ticket>, success: string, refreshThreads = false) => {
+    if (!canEditTicket || !selectedTicket || ticketSelectionRef.current.id !== selectedTicket.id || mutationLocksRef.current.has(selectedTicket.id)) return;
+    const context = workspaceContextRef.current;
+    const selection = ticketSelectionRef.current;
+    const ticketId = selectedTicket.id;
+    mutationLocksRef.current.add(ticketId);
+    setMutatingTicketIds(previous => [...previous, ticketId]);
+    setMutationError(null);
     try {
-      const updated = await apiService.updateStatus(selectedTicket.id, newStatus);
-      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
-      showNotification(`Ticket #${selectedTicket.ticketNumber} status updated to ${newStatus}`);
-    } catch {
-      setSelectedTicket({ ...selectedTicket, status: newStatus as any });
+      const updated = await mutate(ticketId);
+      if (!isCurrentWorkspace(context)) return;
+      let detailRefresh: Promise<void> | undefined;
+      if (ticketSelectionRef.current === selection) {
+        ticketRequestRef.current += 1;
+        setIsLoadingTicket(false);
+        setDetailError(null);
+        setSelectedTicket(current => current?.id === ticketId ? {
+          ...current, ...updated, threads: updated.threads ?? current.threads, attachments: updated.attachments ?? current.attachments,
+        } : current);
+        showNotification(success);
+        if (refreshThreads) detailRefresh = loadTicketDetail(ticketId, false, true);
+      }
+      loadCompanyData(activeCompany.id, true);
+      await detailRefresh;
+    } catch (error) {
+      if (isCurrentWorkspace(context) && ticketSelectionRef.current === selection) {
+        setMutationError(describeFailure(error, 'The ticket could not be updated. No local changes have been applied. Try the action again.'));
+      }
+    } finally {
+      mutationLocksRef.current.delete(ticketId);
+      if (isCurrentWorkspace(context)) setMutatingTicketIds(previous => previous.filter(id => id !== ticketId));
     }
-    loadCompanyData(activeCompany.id);
   };
 
-  const handlePriorityChange = async (newPriority: string) => {
-    if (!selectedTicket) return;
-    try {
-      const updated = await apiService.updatePriority(selectedTicket.id, newPriority);
-      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
-      showNotification(`Priority set to ${newPriority}`);
-    } catch {
-      setSelectedTicket({ ...selectedTicket, priority: newPriority as any });
-    }
-    loadCompanyData(activeCompany.id);
-  };
-
-  const handleAssignAgent = async (agentId: number) => {
-    if (!selectedTicket) return;
-    try {
-      const updated = await apiService.assignAgent(selectedTicket.id, agentId);
-      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
-      const agent = agents.find(a => a.id === agentId);
-      showNotification(`Assigned to ${agent?.displayName || 'Support Engineer'}`);
-    } catch {
-      // optimistic
-    }
-    loadCompanyData(activeCompany.id);
-  };
+  const handleStatusChange = (status: string) => runTicketMutation(id => apiService.updateStatus(id, status), `Status updated to ${formatLabel(status)}`);
+  const handlePriorityChange = (priority: string) => runTicketMutation(id => apiService.updatePriority(id, priority), `Priority set to ${formatLabel(priority)}`);
+  const handleAssignAgent = (agentId: number) => runTicketMutation(id => apiService.assignAgent(id, agentId), `Assigned to ${agents.find(agent => agent.id === agentId)?.displayName || 'the selected agent'}`);
 
   const handleExecuteScenario = async (scenario: ScenarioMacro) => {
-    if (!selectedTicket) return;
+    if (!canEditTicket) return;
     setShowScenarioMenu(false);
-    try {
-      const updated = await apiService.executeScenario(selectedTicket.id, {
+    await runTicketMutation(id => apiService.executeScenario(id, {
         scenarioKey: scenario.id,
         authorName: currentUser.displayName,
-      });
-      setSelectedTicket({ ...updated, threads: updated.threads ?? selectedTicket.threads });
-      showNotification(`Executed macro: "${scenario.title}"`);
-      loadCompanyData(activeCompany.id);
-    } catch {
-      showNotification(`Applied scenario: ${scenario.title}`);
+      }), `Executed macro: "${scenario.title}"`, true);
+  };
+
+  const handleBulkUpdate = async (changes: { status?: string; priority?: string; agentId?: number }) => {
+    if (!canMutate || !selectedTicketIds.length || isQueueStale || isLoadingWorkspace || bulkLockRef.current) return;
+    const context = workspaceContextRef.current;
+    const selection = ticketSelectionRef.current;
+    const ids = [...selectedTicketIds];
+    bulkLockRef.current = true;
+    setIsBulkUpdating(true);
+    setBulkError(null);
+    try {
+      await apiService.bulkUpdateTickets({ ticketIds: ids, ...changes });
+      if (!isCurrentWorkspace(context)) return;
+      showNotification(`Updated ${ids.length} ticket${ids.length === 1 ? '' : 's'}`);
+      setSelectedTicketIds(previous => previous.filter(id => !ids.includes(id)));
+      loadCompanyData(activeCompany.id, true);
+      if (ticketSelectionRef.current === selection && selection.id !== null && ids.includes(selection.id)) {
+        void loadTicketDetail(selection.id, false, true);
+      }
+    } catch (error) {
+      if (isCurrentWorkspace(context)) setBulkError(describeFailure(error, 'The bulk update failed. Your selection is retained; choose the action again to retry.'));
+    } finally {
+      bulkLockRef.current = false;
+      if (isCurrentWorkspace(context)) setIsBulkUpdating(false);
     }
   };
-
-  const handleBulkStatus = async (status: string) => {
-    if (selectedTicketIds.length === 0) return;
-    await apiService.bulkUpdateTickets({ ticketIds: selectedTicketIds, status });
-    showNotification(`Updated ${selectedTicketIds.length} tickets to ${status}`);
-    setSelectedTicketIds([]);
-    loadCompanyData(activeCompany.id);
-  };
-
-  const handleBulkPriority = async (priority: string) => {
-    if (selectedTicketIds.length === 0) return;
-    await apiService.bulkUpdateTickets({ ticketIds: selectedTicketIds, priority });
-    showNotification(`Updated ${selectedTicketIds.length} tickets priority to ${priority}`);
-    setSelectedTicketIds([]);
-    loadCompanyData(activeCompany.id);
-  };
-
-  const handleBulkAssign = async (agentId: number) => {
-    if (selectedTicketIds.length === 0) return;
-    await apiService.bulkUpdateTickets({ ticketIds: selectedTicketIds, agentId });
-    showNotification(`Assigned ${selectedTicketIds.length} tickets`);
-    setSelectedTicketIds([]);
-    loadCompanyData(activeCompany.id);
-  };
+  const handleBulkStatus = (status: string) => handleBulkUpdate({ status });
+  const handleBulkPriority = (priority: string) => handleBulkUpdate({ priority });
+  const handleBulkAssign = (agentId: number) => handleBulkUpdate({ agentId });
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const created = await apiService.createTicket({
-        companyId: activeCompany.id,
-        departmentId: newDeptId,
-        requesterName: newRequesterName,
-        requesterEmail: newRequesterEmail,
-        subject: newSubject,
-        description: newDesc,
-        priority: newPriority,
-        channel: 'WEB_PORTAL',
-      });
-      if (created?.id && newTicketAttachments.length > 0) {
-        try {
-          await apiService.uploadTicketAttachments(created.id, newTicketAttachments);
-          showNotification(`Created #${created.ticketNumber} with ${newTicketAttachments.length} document(s) attached`);
-        } catch (attErr) {
-          console.error("Failed to upload ticket attachments", attErr);
-          showNotification(`Ticket #${created.ticketNumber} created successfully`);
-        }
-      } else {
-        showNotification(`Ticket #${created.ticketNumber} created successfully`);
-      }
-    } catch {
-      showNotification('Ticket created (optimistic)');
+    if (!canMutate || submissionLocks.current.has(newTicketDraftKey)) return;
+    if (!createdTicket && (!newSubject.trim() || !newDesc.trim() || !newRequesterEmail.trim() || !newRequesterName.trim() || !newDeptId)) {
+      updateNewTicketDraft({ error: 'Enter the subject, description, customer details, and a department.' });
+      return;
     }
-    setShowNewTicketModal(false);
-    setNewSubject('');
-    setNewDesc('');
-    setNewRequesterEmail('');
-    setNewRequesterName('');
-    setNewTicketAttachments([]);
-    loadCompanyData(activeCompany.id);
+    const context = workspaceContextRef.current;
+    const draft = newTicketDraft;
+    let created = draft.createdTicket;
+    let uploadedFiles = [...draft.uploadedFiles];
+    submissionLocks.current.add(newTicketDraftKey);
+    updateNewTicketDraft({ sending: true, error: undefined, departmentId: newDeptId });
+    try {
+      if (!created) {
+        created = await apiService.createTicket({
+          companyId: activeCompany.id,
+          departmentId: newDeptId,
+          requesterName: draft.requesterName.trim(),
+          requesterEmail: draft.requesterEmail.trim(),
+          subject: draft.subject.trim(),
+          description: draft.description,
+          priority: draft.priority,
+          channel: 'WEB_PORTAL',
+        });
+        if (!created?.id) throw new Error('The ticket response did not include an ID.');
+        updateNewTicketDraft({ createdTicket: created });
+      }
+      for (const file of draft.files.filter(file => !uploadedFiles.includes(file))) {
+        if (!isCurrentWorkspace(context)) throw new Error('Return to this workspace to finish uploading.');
+        const uploaded = await apiService.uploadTicketAttachments(created.id, [file]);
+        if (!uploaded.length) throw new Error('The upload was not acknowledged.');
+        uploadedFiles = [...uploadedFiles, file];
+        updateNewTicketDraft({ uploadedFiles });
+      }
+      updateNewTicketDraft({ ...EMPTY_NEW_TICKET_DRAFT, createdTicket: undefined, error: undefined });
+      if (isCurrentWorkspace(context)) {
+        setShowNewTicketModal(false);
+        showNotification(`Ticket #${created.ticketNumber} created${draft.files.length ? ' with attachments' : ''}`);
+      }
+    } catch (error) {
+      updateNewTicketDraft({ error: describeFailure(error, created?.id
+        ? `Ticket #${created.ticketNumber} is saved, but attachments remain pending. Retry uploads will not create another ticket.`
+        : 'The ticket could not be created. Your form and files are retained.') });
+    } finally {
+      submissionLocks.current.delete(newTicketDraftKey);
+      updateNewTicketDraft({ sending: false });
+      if (created?.id && isCurrentWorkspace(context)) loadCompanyData(activeCompany.id, true);
+    }
   };
 
   const handleSimulateEmail = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isWorkspaceAdmin) return;
+    const context = workspaceContextRef.current;
     setSimResult('Processing incoming message...');
     try {
       const res = await apiService.simulateIncomingEmail({
@@ -707,39 +954,17 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         bodyText: simBody,
         internetMessageId: `<SIM-${Date.now()}@outlook.com>`,
       });
+      if (!isCurrentWorkspace(context)) return;
       setSimResult(`Success! Created/Threaded Ticket #${res.ticketNumber}: "${res.subject}"`);
       showNotification(`Inbound email ingested: Ticket #${res.ticketNumber}`);
       loadCompanyData(activeCompany.id);
-    } catch {
-      setSimResult('Simulated message processed.');
-      loadCompanyData(activeCompany.id);
+    } catch (error) {
+      if (isCurrentWorkspace(context)) setSimResult(describeFailure(error, 'The test message could not be processed. Your input is retained.'));
     }
   };
 
-  // Filter tickets by search and department
-  const filteredTickets = tickets.filter(t => {
-    if (deptFilter && t.department?.id !== deptFilter) return false;
-    if (priorityFilter !== 'ALL' && t.priority !== priorityFilter) return false;
-    if (!ticketSearch.trim()) return true;
-    const q = ticketSearch.toLowerCase();
-    return (
-      t.ticketNumber.toLowerCase().includes(q.replace(/^#/, '')) ||
-      t.subject.toLowerCase().includes(q) ||
-      (t.contact?.firstName || '').toLowerCase().includes(q) ||
-      (t.contact?.lastName || '').toLowerCase().includes(q) ||
-      (t.contact?.email || '').toLowerCase().includes(q)
-    );
-  });
-
-  // The API paginates status views; text and attribute filters refine the current page.
-  const sortedTickets = [...filteredTickets].sort((a, b) => {
-    if (sortBy === 'priority') {
-      const pMap: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-      return (pMap[b.priority] || 0) - (pMap[a.priority] || 0);
-    }
-    const dateDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    return sortBy === 'oldest' ? -dateDifference : dateDifference;
-  });
+  // Search, attributes, and ordering are applied before pagination by the API.
+  const sortedTickets = tickets;
 
   const ticketViews = [
     { id: 'ALL', label: 'All tickets' },
@@ -750,9 +975,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     { id: 'CLOSED', label: 'Closed' },
   ];
   const activeFilterCount = Number(deptFilter !== null) + Number(priorityFilter !== 'ALL');
+  const hasTicketFilters = viewFilter !== 'ALL' || activeFilterCount > 0 || !!debouncedSearch.trim();
   const visibleSelectedIds = selectedTicketIds.filter(id => sortedTickets.some(ticket => ticket.id === id));
   const formatLabel = (value: string) => value.toLowerCase().replace(/_/g, ' ').replace(/^\w/, char => char.toUpperCase());
   const navigateToTab = (tab: WorkspaceTab) => {
+    if (!isWorkspaceAdmin && ADMIN_TABS.includes(tab)) return;
     setActiveTab(tab);
     setIsNavigationOpen(false);
     if (!isWideDetailsLayout) setShowPropertiesDrawer(false);
@@ -763,7 +990,29 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     setDeptFilter(null);
     setPriorityFilter('ALL');
     setTicketSearch('');
+    setDebouncedSearch('');
     setSelectedTicketIds([]);
+  };
+
+  const openCustomerHistory = (customer: CustomerContact) => {
+    setCustomerHistory([]);
+    setHistoryPage(0);
+    setHistoryPageInfo(EMPTY_PAGE);
+    setHistoryError(null);
+    setHistoryLoaded(false);
+    setIsLoadingHistory(true);
+    setSelectedCustomer(customer);
+  };
+
+  const openTicketForCustomer = (customer: CustomerContact) => {
+    if (!canMutate) return;
+    if (createdTicket || isCreatingTicket || ((newSubject || newDesc || newTicketAttachments.length) && newRequesterEmail !== customer.email)) {
+      showNotification('Finish or review your existing new-ticket draft before starting another customer request.', 'info');
+    } else {
+      updateNewTicketDraft({ requesterEmail: customer.email, requesterName: customer.displayName || customer.firstName });
+    }
+    setSelectedCustomer(null);
+    setShowNewTicketModal(true);
   };
 
   const formatTimer = (totalSeconds: number) => {
@@ -815,6 +1064,19 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
     },
   };
 
+  const detailFeedback = <>
+    {isLoadingTicket && <div id="workspace-ticket-detail-loading" className="small px-3 py-2 text-secondary" role="status">Loading ticket {detailTicketId}...{selectedTicket && ' The previous conversation remains visible.'}</div>}
+    {detailError && (
+      <div id="workspace-ticket-detail-error" className="alert alert-warning small m-0 py-2 px-3 rounded-0" role="alert">
+        <p className="mb-2">{detailError}</p>
+        <div className="d-flex flex-wrap gap-2">
+          <button type="button" className="btn btn-sm btn-outline-secondary" aria-label="Retry ticket detail" disabled={isLoadingTicket} onClick={() => { if (detailTicketId !== null) void loadTicketDetail(detailTicketId, false, true); }}>Retry</button>
+          {selectedTicket && detailTicketId !== selectedTicket.id && <button type="button" className="btn btn-sm btn-link" onClick={() => void loadTicketDetail(selectedTicket.id, false)}>Return to #{selectedTicket.ticketNumber}</button>}
+        </div>
+      </div>
+    )}
+  </>;
+
   return (
     <div className={`enterprise-shell company-workspace ${isNavigationOpen ? 'navigation-open' : ''}`}>
       {isNavigationOpen && (
@@ -864,7 +1126,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
             <div key={group.label}>
               <div className="sidebar-section-label">{group.label}</div>
               <div className="sidebar-nav-group">
-                {group.items.map(item => (
+                {group.items.filter(item => isWorkspaceAdmin || !ADMIN_TABS.includes(item.id)).map(item => (
                   <button
                     key={item.id}
                     id={`rail-tab-${item.id}`}
@@ -875,37 +1137,37 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   >
                     <item.icon size={18} />
                     <span>{item.label}</span>
-                    {item.id === 'tickets' && <span className="sidebar-badge">{ticketCounts.ALL ?? 0}</span>}
+                    {item.id === 'tickets' && <span className="sidebar-badge">{ticketCounts.ALL ?? '...'}</span>}
                   </button>
                 ))}
               </div>
             </div>
           ))}
-          <div className="workspace-secondary-nav sidebar-nav-group">
+          {isWorkspaceAdmin && <div className="workspace-secondary-nav sidebar-nav-group">
             <button id="rail-tab-settings" type="button" className={`sidebar-menu-btn ${activeTab === 'settings' ? 'active' : ''}`} aria-current={activeTab === 'settings' ? 'page' : undefined} onClick={() => navigateToTab('settings')}>
               <Settings size={18} /><span>Settings</span>
             </button>
             <button id="rail-tab-billing" type="button" className={`sidebar-menu-btn ${activeTab === 'billing' ? 'active' : ''}`} aria-current={activeTab === 'billing' ? 'page' : undefined} onClick={() => navigateToTab('billing')}>
               <CreditCard size={18} /><span>Plans & billing</span>
             </button>
-          </div>
+          </div>}
         </nav>
 
-        <div className="workspace-plan-card">
+        {isWorkspaceAdmin && <div className="workspace-plan-card">
           <span className="workspace-eyebrow">Your workspace</span>
           <div><strong>{formatLabel(currentSubscription?.planTier || activeCompany.planName)} plan</strong><span className="workspace-plan-dot" /></div>
           <button type="button" onClick={() => navigateToTab('billing')}>Manage subscription <ChevronRight size={14} /></button>
-        </div>
+        </div>}
         <div className="sidebar-footer">
           <div className="workspace-user">
             <div className="workspace-avatar">
               {currentUser.firstName?.charAt(0) || 'U'}{currentUser.lastName?.charAt(0)}
               <span className={`presence-indicator presence-${agentPresence.toLowerCase()}`} />
             </div>
-            <div className="workspace-user-info">
+            <button type="button" className="workspace-user-info workspace-profile-button" aria-label="Account security" onClick={() => window.dispatchEvent(new Event('kuwy-open-account-security'))}>
               <strong title={currentUser.displayName}>{currentUser.displayName}</strong>
               <span>{formatLabel(currentUser.roleType)}</span>
-            </div>
+            </button>
             <button id="btn-sign-out" type="button" className="workspace-icon-button" onClick={onLogout} title="Sign out" aria-label="Sign out"><LogOut size={16} /></button>
           </div>
           <label className="workspace-presence">
@@ -970,7 +1232,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <ExternalLink size={12} />
             </a>
 
-            <details ref={toolsMenuRef} className="workspace-tools-menu">
+            {isWorkspaceAdmin && <details ref={toolsMenuRef} className="workspace-tools-menu">
               <summary className="workspace-icon-button" aria-label="Email tools" title="Email tools"><MoreHorizontal size={20} /></summary>
               <div className="workspace-tools-popover">
                 <span className="workspace-eyebrow">Email tools</span>
@@ -981,7 +1243,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   <Mail size={16} /><span>Simulate incoming email</span>
                 </button>
               </div>
-            </details>
+            </details>}
 
             {/* Notification Center Bell (Screen 24) */}
             <div className="position-relative" ref={notificationsRef}>
@@ -1072,6 +1334,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               type="button"
               aria-label="New ticket"
               className="btn btn-primary workspace-new-ticket"
+              disabled={!canMutate}
+              title={!canMutate ? 'Read-only access: ticket creation is unavailable' : undefined}
               onClick={() => setShowNewTicketModal(true)}
             >
               <Plus size={15} />
@@ -1092,6 +1356,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
         {/* Main Workspace Content Area */}
         <main className={`enterprise-content ${activeTab === 'tickets' ? 'is-ticket-workspace' : ''}`}>
+          {metadataError && (
+            <div id="workspace-metadata-error" className="alert alert-warning small py-2 px-3 mb-2 d-flex flex-wrap align-items-center gap-2" role="alert">
+              <span>{metadataError}</span>
+              <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => void loadWorkspaceMetadata()} aria-label="Retry workspace reference data">Retry</button>
+            </div>
+          )}
           {activeTab !== 'tickets' && (
             <div className="workspace-page-heading">
               <div>
@@ -1109,13 +1379,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <div className="workspace-page-heading tickets-heading">
                 <div>
                   <span className="workspace-eyebrow">Team inbox</span>
-                  <h1>Tickets <span className="workspace-heading-count">{ticketCounts.ALL ?? 0}</span></h1>
-                  <p>{tabLabels.tickets.subtitle}</p>
+                  <h1>Tickets <span className="workspace-heading-count">{ticketCounts.ALL ?? '...'}</span></h1>
+                  <p id="workspace-role-notice">{canMutate ? tabLabels.tickets.subtitle : 'Read-only access. Ticket changes, replies, and uploads are unavailable.'}</p>
                 </div>
                 <div className="workspace-queue-summary">
                   <span><span className="queue-summary-dot" />{tickets.filter(t => !t.assignedAgent && !['RESOLVED', 'CLOSED', 'SPAM'].includes(t.status)).length} unassigned on page</span>
-                  <span><span className="queue-summary-dot is-overdue" />{stats?.breachedSlaTickets ?? 0} SLA overdue</span>
-                  <button type="button" className="workspace-icon-button" onClick={() => loadCompanyData(activeCompany.id)} disabled={isLoadingWorkspace} title="Refresh tickets" aria-label="Refresh tickets">
+                  <span><span className="queue-summary-dot is-overdue" />{stats?.breachedSlaTickets ?? '-'} SLA overdue</span>
+                  <button type="button" className="workspace-icon-button" onClick={() => { loadCompanyData(activeCompany.id); if (detailTicketId !== null) void loadTicketDetail(detailTicketId, false, true); }} disabled={isLoadingWorkspace} title="Refresh tickets" aria-label="Refresh tickets">
                     <RefreshCw size={16} className={isLoadingWorkspace ? 'spin' : ''} />
                   </button>
                 </div>
@@ -1124,16 +1394,23 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               <nav className="ticket-view-tabs" aria-label="Ticket views">
                 {ticketViews.map(view => (
                   <button key={view.id} type="button" className={viewFilter === view.id ? 'active' : ''} aria-pressed={viewFilter === view.id} onClick={() => { setViewFilter(view.id); setTicketPage(0); setSelectedTicketIds([]); setShowMobileTicket(false); }}>
-                    {view.label}<span>{ticketCounts[view.id] ?? 0}</span>
+                    {view.label}<span>{ticketCounts[view.id] ?? '...'}</span>
                   </button>
                 ))}
               </nav>
 
+              {countsError && (
+                <div id="workspace-counts-error" className="alert alert-warning small py-2 px-3 mb-0 d-flex flex-wrap align-items-center gap-2" role="alert">
+                  <span>{countsError}</span>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => void loadTicketCounts()} aria-label="Retry workspace counts">Retry counts</button>
+                </div>
+              )}
+
               <div className="ticket-workbench-controls">
                 <div className="workspace-search ticket-search">
                   <Search size={17} />
-                  <input id="workspace-ticket-search" type="search" aria-label="Search tickets" placeholder="Search this page by subject, ID, or customer..." value={ticketSearch} onChange={e => { setTicketSearch(e.target.value); setSelectedTicketIds([]); }} />
-                  {ticketSearch && <button type="button" className="workspace-icon-button" aria-label="Clear ticket search" onClick={() => setTicketSearch('')}><X size={15} /></button>}
+                  <input id="workspace-ticket-search" type="search" aria-label="Search tickets" maxLength={250} placeholder="Search all tickets by subject, ID, customer, or message..." value={ticketSearch} onChange={e => { setTicketSearch(e.target.value); setSelectedTicketIds([]); }} />
+                  {ticketSearch && <button type="button" className="workspace-icon-button" aria-label="Clear ticket search" onClick={() => { setTicketSearch(''); setDebouncedSearch(''); setTicketPage(0); setSelectedTicketIds([]); }}><X size={15} /></button>}
                 </div>
                 <div className="ticket-control-actions">
                   <button type="button" className={`workspace-filter-button ${showFilters || activeFilterCount ? 'active' : ''}`} onClick={() => setShowFilters(prev => !prev)} aria-expanded={showFilters} aria-controls="ticket-filters">
@@ -1141,10 +1418,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </button>
                   <label className="ticket-sort-control">
                     <ArrowUpDown size={15} />
-                    <select aria-label="Sort tickets" value={sortBy} onChange={e => { setSortBy(e.target.value as typeof sortBy); setTicketPage(0); }}>
+                    <select aria-label="Sort tickets" value={sortBy} onChange={e => { setSortBy(e.target.value as typeof sortBy); setTicketPage(0); setSelectedTicketIds([]); }}>
                       <option value="newest">Newest first</option>
                       <option value="oldest">Oldest first</option>
-                      <option value="priority">Priority on page</option>
+                      <option value="priority">Highest priority first</option>
                     </select>
                   </label>
                 </div>
@@ -1153,42 +1430,42 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
               {showFilters && (
                 <div id="ticket-filters" className="ticket-filter-panel">
                   <label>Department
-                    <select className="form-select form-select-sm" aria-label="Department" value={deptFilter ?? ''} onChange={e => { setDeptFilter(e.target.value ? Number(e.target.value) : null); setSelectedTicketIds([]); }}>
+                    <select className="form-select form-select-sm" aria-label="Department" value={deptFilter ?? ''} onChange={e => { setDeptFilter(e.target.value ? Number(e.target.value) : null); setTicketPage(0); setSelectedTicketIds([]); }}>
                       <option value="">All departments</option>
                       {departments.map(dept => <option key={dept.id} value={dept.id}>{dept.name}</option>)}
                     </select>
                   </label>
                   <label>Priority
-                    <select className="form-select form-select-sm" aria-label="Priority" value={priorityFilter} onChange={e => { setPriorityFilter(e.target.value as typeof priorityFilter); setSelectedTicketIds([]); }}>
+                    <select className="form-select form-select-sm" aria-label="Priority" value={priorityFilter} onChange={e => { setPriorityFilter(e.target.value as typeof priorityFilter); setTicketPage(0); setSelectedTicketIds([]); }}>
                       <option value="ALL">All priorities</option>
                       {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map(priority => <option key={priority} value={priority}>{formatLabel(priority)}</option>)}
                     </select>
                   </label>
-                  <button type="button" className="btn btn-sm btn-link text-decoration-none" onClick={() => { setDeptFilter(null); setPriorityFilter('ALL'); setSelectedTicketIds([]); }} disabled={!activeFilterCount}>Reset filters</button>
-                  <small className="ticket-filter-scope">Filters apply to this page.</small>
+                  <button type="button" className="btn btn-sm btn-link text-decoration-none" onClick={() => { setDeptFilter(null); setPriorityFilter('ALL'); setTicketPage(0); setSelectedTicketIds([]); }} disabled={!activeFilterCount}>Reset filters</button>
+                  <small className="ticket-filter-scope">Search, filters, and sorting apply across the selected queue.</small>
                 </div>
               )}
 
               <div className={`ticket-workbench ${showMobileTicket ? 'is-detail-open' : ''}`}>
-              <section className="ticket-queue" aria-label="Ticket queue" aria-busy={isLoadingWorkspace}>
+              <section className="ticket-queue" aria-label="Ticket queue" aria-busy={isLoadingWorkspace || ticketSearch.trim() !== debouncedSearch.trim()}>
                 <div className="ticket-queue-heading">
                   <label>
                     <input
                       type="checkbox"
                       className="form-check-input"
                       aria-label="Select all visible tickets"
-                      disabled={sortedTickets.length === 0}
+                      disabled={!canMutate || sortedTickets.length === 0 || isLoadingWorkspace || isQueueStale || isBulkUpdating}
                       checked={sortedTickets.length > 0 && visibleSelectedIds.length === sortedTickets.length}
                       ref={element => { if (element) element.indeterminate = visibleSelectedIds.length > 0 && visibleSelectedIds.length < sortedTickets.length; }}
                       onChange={e => setSelectedTicketIds(e.target.checked ? sortedTickets.map(ticket => ticket.id) : [])}
                     />
-                    <span>{sortedTickets.length} conversation{sortedTickets.length === 1 ? '' : 's'}</span>
+                    <span>{sortedTickets.length} conversation{sortedTickets.length === 1 ? '' : 's'} on page</span>
                   </label>
-                  {activeFilterCount > 0 && <span className="ticket-filtered-label">Filtered</span>}
+                  {(activeFilterCount > 0 || debouncedSearch.trim()) && <span className="ticket-filtered-label">Filtered</span>}
                 </div>
 
                 {/* Bulk Operations Toolbar when tickets selected */}
-                {selectedTicketIds.length > 0 && (
+                {canMutate && selectedTicketIds.length > 0 && (
                   <div className="ticket-bulk-actions">
                     <span className="small fw-bold">{selectedTicketIds.length} selected</span>
                     <div className="ticket-bulk-controls">
@@ -1196,7 +1473,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         className="form-select form-select-sm py-0 text-dark bg-white border-0 fw-semibold"
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkStatus(e.target.value)}
-                        defaultValue=""
+                        value=""
+                        disabled={isBulkUpdating || isLoadingWorkspace || isQueueStale}
                         aria-label="Bulk update status"
                       >
                         <option value="" disabled>Status...</option>
@@ -1210,7 +1488,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         className="form-select form-select-sm py-0 text-dark bg-white border-0 fw-semibold"
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkPriority(e.target.value)}
-                        defaultValue=""
+                        value=""
+                        disabled={isBulkUpdating || isLoadingWorkspace || isQueueStale}
                         aria-label="Bulk update priority"
                       >
                         <option value="" disabled>Priority...</option>
@@ -1224,7 +1503,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         className="form-select form-select-sm py-0 text-dark bg-white border-0 fw-semibold"
                         style={{ fontSize: '0.72rem' }}
                         onChange={e => e.target.value && handleBulkAssign(Number(e.target.value))}
-                        defaultValue=""
+                        value=""
+                        disabled={isBulkUpdating || isLoadingWorkspace || isQueueStale}
                         aria-label="Bulk assign agent"
                       >
                         <option value="" disabled>Assign...</option>
@@ -1234,6 +1514,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       </select>
 
                       <button
+                        type="button"
                         className="btn btn-sm btn-light py-0 px-2 fw-semibold text-danger border-0"
                         style={{ fontSize: '0.72rem' }}
                         onClick={() => setSelectedTicketIds([])}
@@ -1246,23 +1527,34 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                 {/* Tickets Scroll List */}
                 <div className="ticket-list-scroll">
-                  {isLoadingWorkspace && tickets.length === 0 ? (
-                    <div className="ticket-queue-loading" role="status">
+                  {bulkError && <div id="workspace-bulk-error" className="alert alert-warning rounded-0 small m-0 py-2 px-3" role="alert">{bulkError}</div>}
+                  {isBulkUpdating && <div className="small px-3 py-2" role="status">Updating selected tickets...</div>}
+                  {queueError && (
+                    <div id="workspace-queue-error" className="alert alert-warning rounded-0 small m-0 py-2 px-3" role="alert">
+                      <p className="mb-2">{queueError}</p>
+                      <button type="button" className="btn btn-sm btn-outline-secondary" aria-label="Retry ticket queue" onClick={() => setQueueRevision(previous => previous + 1)} disabled={isLoadingWorkspace}>Retry</button>
+                    </div>
+                  )}
+                  {(isLoadingWorkspace || ticketSearch.trim() !== debouncedSearch.trim()) && tickets.length > 0 && (
+                    <div id="workspace-queue-loading" className="small px-3 py-2 text-secondary" role="status">Updating results. Previous results remain visible.</div>
+                  )}
+                  {(isLoadingWorkspace || isQueueStale) && !queueError && tickets.length === 0 ? (
+                    <div id="workspace-queue-loading" className="ticket-queue-loading" role="status">
                       <span className="visually-hidden">Loading tickets...</span>
                       {[1, 2, 3].map(item => <div key={item} className="ticket-skeleton" aria-hidden="true"><span /><span /><span /></div>)}
                     </div>
-                  ) : sortedTickets.length === 0 ? (
+                  ) : sortedTickets.length === 0 ? (queueError ? null : (
                     <div className="workspace-empty-state">
                       <span className="workspace-empty-icon"><Inbox size={26} /></span>
-                      <h2>{tickets.length ? 'No matching tickets' : 'Your inbox is clear'}</h2>
-                      <p>{tickets.length ? 'Try a different search or adjust your filters.' : 'New customer conversations will appear here.'}</p>
-                      {tickets.length > 0 ? (
+                      <h2>{hasTicketFilters ? 'No matching tickets' : 'Your inbox is clear'}</h2>
+                      <p>{hasTicketFilters ? 'Try a different search or adjust your filters.' : 'New customer conversations will appear here.'}</p>
+                      {hasTicketFilters ? (
                         <button type="button" className="btn btn-sm btn-outline-primary" onClick={resetTicketFilters}>View all tickets</button>
                       ) : (
-                        <button type="button" className="btn btn-sm btn-primary" onClick={() => setShowNewTicketModal(true)}><Plus size={14} /> Create a ticket</button>
+                        <button type="button" className="btn btn-sm btn-primary" disabled={!canMutate} onClick={() => setShowNewTicketModal(true)}><Plus size={14} /> Create a ticket</button>
                       )}
                     </div>
-                  ) : (
+                  )) : (
                     sortedTickets.map(t => (
                       <article
                         key={t.id}
@@ -1272,10 +1564,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           type="checkbox"
                           className="form-check-input ticket-row-checkbox"
                           aria-label={`Select ticket ${t.ticketNumber}`}
+                          disabled={!canMutate || isLoadingWorkspace || isQueueStale || isBulkUpdating}
                           checked={selectedTicketIds.includes(t.id)}
                           onChange={e => setSelectedTicketIds(prev => e.target.checked ? [...prev, t.id] : prev.filter(id => id !== t.id))}
                         />
-                        <button type="button" className="ticket-open-button" onClick={() => loadTicketDetail(t.id)} aria-pressed={selectedTicket?.id === t.id} aria-label={`Open ticket ${t.ticketNumber}: ${t.subject}`}>
+                        <button type="button" className="ticket-open-button" onClick={() => void loadTicketDetail(t.id)} aria-pressed={detailTicketId === t.id} aria-label={`Open ticket ${t.ticketNumber}: ${t.subject}`}>
                           <span className="ticket-row-topline">
                             <span className="ticket-code">#{t.ticketNumber}</span>
                             <time dateTime={t.createdAt} title={new Date(t.createdAt).toLocaleString()}>{new Date(t.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</time>
@@ -1297,19 +1590,20 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   )}
                 </div>
                 <div className="ticket-queue-footer">
-                  <span>{sortedTickets.length} shown / {ticketPageInfo.totalElements} total</span>
+                  <span id="workspace-queue-total" aria-live="polite">{loadedQueueKey === null ? (queueError ? 'Results unavailable' : 'Loading results') : <>{sortedTickets.length} shown / {ticketPageInfo.totalElements} {isQueueStale || queueError ? 'previous total' : hasTicketFilters ? 'matching' : 'total'}</>}</span>
                   <div className="ticket-pagination" aria-label="Ticket pagination">
-                    <button type="button" className="workspace-icon-button" aria-label="Previous ticket page" disabled={ticketPage === 0 || isLoadingWorkspace} onClick={() => { setTicketPage(previous => previous - 1); setSelectedTicketIds([]); }}><ChevronLeft size={14} /></button>
+                    <button type="button" className="workspace-icon-button" aria-label="Previous ticket page" disabled={ticketPage === 0 || isLoadingWorkspace || isQueueStale || !!queueError} onClick={() => { setTicketPage(previous => previous - 1); setSelectedTicketIds([]); }}><ChevronLeft size={14} /></button>
                     <span>{ticketPageInfo.number + 1} / {Math.max(1, ticketPageInfo.totalPages)}</span>
-                    <button type="button" className="workspace-icon-button" aria-label="Next ticket page" disabled={ticketPage + 1 >= ticketPageInfo.totalPages || isLoadingWorkspace} onClick={() => { setTicketPage(previous => previous + 1); setSelectedTicketIds([]); }}><ChevronRight size={14} /></button>
+                    <button type="button" className="workspace-icon-button" aria-label="Next ticket page" disabled={ticketPage + 1 >= ticketPageInfo.totalPages || isLoadingWorkspace || isQueueStale || !!queueError} onClick={() => { setTicketPage(previous => previous + 1); setSelectedTicketIds([]); }}><ChevronRight size={14} /></button>
                   </div>
                 </div>
               </section>
 
               {/* RIGHT MAIN PANE: FRESHDESK /a/tickets/1 COMMAND CENTER */}
-              <section className="ticket-detail-pane" aria-label="Ticket conversation">
+              <section className="ticket-detail-pane" aria-label="Ticket conversation" aria-busy={isLoadingTicket} data-ticket-id={selectedTicket?.id}>
                 {selectedTicket ? (
                   <div className="ticket-detail-card">
+                    {detailFeedback}
                     <div className="ticket-detail-toolbar">
                       <div className="ticket-toolbar-title">
                         <button type="button" className="workspace-icon-button ticket-back-button" aria-label="Back to ticket list" onClick={() => { setShowMobileTicket(false); setShowPropertiesDrawer(false); }}><ArrowLeft size={18} /></button>
@@ -1325,6 +1619,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           <button
                             type="button"
                             className="workspace-filter-button"
+                            disabled={!canEditTicket}
                             onClick={() => setShowScenarioMenu(!showScenarioMenu)}
                             aria-expanded={showScenarioMenu}
                             aria-controls="ticket-scenario-menu"
@@ -1345,6 +1640,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                     key={sc.id}
                                     type="button"
                                     className="btn btn-sm text-start p-2 rounded-2 hover-bg-light border-0 d-flex flex-column"
+                                    disabled={!canEditTicket}
                                     onClick={() => handleExecuteScenario(sc)}
                                   >
                                     <div className="d-flex align-items-center justify-content-between w-100">
@@ -1387,7 +1683,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         </div>
                         <div className="ticket-routing-bar">
                           <label>Status
-                            <select className="form-select form-select-sm" aria-label="Ticket status" value={selectedTicket.status} onChange={e => handleStatusChange(e.target.value)}>
+                            <select className="form-select form-select-sm" aria-label="Ticket status" disabled={!canEditTicket} value={selectedTicket.status} onChange={e => handleStatusChange(e.target.value)}>
                               <option value="OPEN">Open</option>
                               <option value="IN_PROGRESS">In progress</option>
                               <option value="WAITING_ON_CUSTOMER">Waiting on customer</option>
@@ -1398,7 +1694,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             </select>
                           </label>
                           <label>Priority
-                            <select className="form-select form-select-sm" aria-label="Ticket priority" value={selectedTicket.priority} onChange={e => handlePriorityChange(e.target.value)}>
+                            <select className="form-select form-select-sm" aria-label="Ticket priority" disabled={!canEditTicket} value={selectedTicket.priority} onChange={e => handlePriorityChange(e.target.value)}>
                               <option value="LOW">Low</option>
                               <option value="MEDIUM">Medium</option>
                               <option value="HIGH">High</option>
@@ -1406,7 +1702,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             </select>
                           </label>
                           <label>Assigned to
-                            <select className="form-select form-select-sm" aria-label="Assigned agent" value={selectedTicket.assignedAgent?.id || ''} onChange={e => handleAssignAgent(Number(e.target.value))}>
+                            <select className="form-select form-select-sm" aria-label="Assigned agent" disabled={!canEditTicket} value={selectedTicket.assignedAgent?.id || ''} onChange={e => handleAssignAgent(Number(e.target.value))}>
                               <option value="" disabled>Unassigned</option>
                               {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}
                             </select>
@@ -1415,6 +1711,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                         {/* Conversation Threads Stream */}
                         <div className="ticket-thread-stream" aria-label="Conversation messages" tabIndex={0}>
+                          {mutationError && <div id="workspace-ticket-mutation-error" className="alert alert-warning small py-2 px-3" role="alert">{mutationError}</div>}
+                          {isMutatingTicket && <p className="small text-secondary" role="status">Saving ticket changes...</p>}
                           <div className="ticket-conversation-label"><MessageSquare size={14} />Conversation<span>{selectedTicket.threads?.length || 0}</span></div>
                           {!selectedTicket.threads?.length && <p className="ticket-no-messages">{selectedTicket.descriptionText || 'No messages yet. Start the conversation below.'}</p>}
                           {(selectedTicket.threads || []).map((th, idx) => (
@@ -1506,13 +1804,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         </div>
 
                         {/* Composer & Quick Knowledge Base Insertion Box */}
-                        <div className={`ticket-composer ${isPrivateNote ? 'is-private-note' : ''}`}>
+                        <div className={`ticket-composer ${isPrivateNote ? 'is-private-note' : ''}`} aria-busy={isSending}>
                           <div className="ticket-composer-toolbar">
                             <div className="ticket-composer-tabs" aria-label="Reply visibility">
                               <button
                                 type="button"
                                 className={`ticket-composer-tab ${!isPrivateNote ? 'active' : ''}`}
                                 aria-pressed={!isPrivateNote}
+                                disabled={isComposerLocked}
                                 onClick={() => setIsPrivateNote(false)}
                               >
                                 <Send size={14} /> Reply
@@ -1521,6 +1820,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 type="button"
                                 className={`ticket-composer-tab ${isPrivateNote ? 'active' : ''}`}
                                 aria-pressed={isPrivateNote}
+                                disabled={isComposerLocked}
                                 onClick={() => setIsPrivateNote(true)}
                               >
                                 <Lock size={14} /> Private note
@@ -1541,10 +1841,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                   accept=".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv"
                                   className="visually-hidden"
                                   aria-label="Attach files to reply"
+                                  disabled={isComposerLocked}
                                   onChange={(e) => {
                                     if (e.target.files) {
                                       setReplyAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
                                     }
+                                    e.target.value = '';
                                   }}
                                 />
                               </label>
@@ -1555,6 +1857,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 onClick={() => { setShowKbPicker(!showKbPicker); setShowCannedPicker(false); }}
                                 title="Insert Knowledge Base Solution"
                                 aria-label="Insert knowledge base article"
+                                disabled={isComposerLocked}
                                 aria-expanded={showKbPicker}
                               >
                                 <BookOpen size={16} />
@@ -1567,6 +1870,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 onClick={() => { setShowCannedPicker(!showCannedPicker); setShowKbPicker(false); }}
                                 title="Insert Canned Response Template (#)"
                                 aria-label="Insert reply template"
+                                disabled={isComposerLocked}
                                 aria-expanded={showCannedPicker}
                               >
                                 <Sparkles size={16} />
@@ -1576,7 +1880,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           </div>
 
                           {/* Canned Responses Template Picker */}
-                          {showCannedPicker && (
+                          {showCannedPicker && !isComposerLocked && (
                             <div className="ticket-composer-picker p-3 bg-white rounded-3 border">
                               <div className="d-flex justify-content-between align-items-center mb-2">
                                 <span className="small fw-bold text-dark">Reply templates</span>
@@ -1609,7 +1913,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           )}
 
                           {/* Knowledge Base Solutions Modal Picker */}
-                          {showKbPicker && (
+                          {showKbPicker && !isComposerLocked && (
                             <div className="ticket-composer-picker p-3 bg-white rounded-3 border">
                               <div className="d-flex justify-content-between align-items-center mb-2">
                                 <span className="small fw-bold text-dark">Knowledge base articles</span>
@@ -1621,6 +1925,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                     key={art.id}
                                     className="p-2 bg-white rounded-2 border d-flex justify-content-between align-items-center hover-bg-light cursor-pointer"
                                     onClick={() => {
+                                      if (isComposerLocked) return;
                                       setReplyText(prev => prev + `\n\nReference Guide: ${art.title}\nhttps://${activeCompany.subdomain}.kuwyhelp.com/kb/${art.slug}`);
                                       setShowKbPicker(false);
                                       showNotification('Inserted Knowledge Base link into reply');
@@ -1640,12 +1945,15 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             </div>
                           )}
 
+                          {replyDraft.error && <div id="workspace-reply-error" className="alert alert-warning small py-2 px-3 my-2" style={{ maxHeight: '84px', overflowY: 'auto', overflowWrap: 'anywhere' }} role="alert" tabIndex={0}>{replyDraft.error}</div>}
                           <div className="ticket-composer-recipient">
                             {isPrivateNote ? <><Lock size={12} />Visible only to your support team</> : <>To: <span>{selectedTicket.contact?.email || 'Customer'}</span></>}
                           </div>
                           <textarea
                             className="form-control ticket-reply-input"
                             rows={3}
+                            maxLength={100000}
+                            disabled={isComposerLocked}
                             aria-label={isPrivateNote ? 'Private note' : 'Reply message'}
                             placeholder={isPrivateNote ? 'Add context for your teammates...' : `Write a reply to ${selectedTicket.contact?.firstName || 'your customer'}...`}
                             value={replyText}
@@ -1654,12 +1962,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                           {/* Attached Document Chips */}
                           {replyAttachments.length > 0 && (
-                            <div className="d-flex flex-wrap gap-2 mt-2">
+                            <div className="d-flex flex-wrap gap-2 mt-2" style={{ maxHeight: '96px', overflowY: 'auto' }}>
                               {replyAttachments.map((f, idx) => (
                                 <span
                                   key={idx}
-                                  className="badge bg-light text-dark border px-2.5 py-1.5 rounded-3 d-inline-flex align-items-center gap-1.5"
-                                  style={{ fontSize: '0.76rem' }}
+                                    className="badge bg-light text-dark border px-2.5 py-1.5 rounded-3 d-inline-flex align-items-center gap-1.5"
+                                    style={{ fontSize: '0.76rem', maxWidth: '100%', flexWrap: 'wrap' }}
                                 >
                                   {isImageFile(f.name) ? (
                                     <ImageIcon size={12} className="text-info" />
@@ -1670,9 +1978,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                   )}
                                   <span className="text-truncate" style={{ maxWidth: '140px' }}>{f.name}</span>
                                   <span className="text-muted" style={{ fontSize: '0.68rem' }}>({formatFileSize(f.size)})</span>
+                                  {replyDraft.uploadedFiles.includes(f) && <span className="text-success">Uploaded</span>}
                                   <button
                                     type="button"
                                     className="btn-close ms-1"
+                                    aria-label={`Remove reply attachment ${f.name}`}
+                                    disabled={!canEditTicket || replyDraft.uploadedFiles.includes(f)}
                                     style={{ fontSize: '0.5rem' }}
                                     onClick={() => setReplyAttachments(prev => prev.filter((_, i) => i !== idx))}
                                   />
@@ -1682,26 +1993,27 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           )}
 
                           <div className="ticket-composer-footer">
-                            <small>{isPrivateNote ? 'Not shared with the customer' : 'Your reply will be sent by email'}</small>
-                            <div className="d-flex align-items-center gap-2">
+                            <small>{!canMutate ? 'Read-only access' : replyDraft.threadId ? 'Reply saved; finish pending uploads' : isPrivateNote ? 'Not shared with the customer' : 'Saved to this conversation'}</small>
+                            <div className="d-flex align-items-center flex-wrap gap-2">
                               <button
                                 type="button"
                                 className="btn btn-sm btn-light"
-                                disabled={!replyText && !replyAttachments.length}
+                                disabled={!canEditTicket || (!replyText && !replyAttachments.length)}
                                 onClick={() => {
-                                  setReplyText('');
-                                  setReplyAttachments([]);
+                                  updateReplyDraft(replyDraftKey, { ...EMPTY_REPLY_DRAFT, isPrivate: isPrivateNote, threadId: undefined, error: undefined });
+                                  if (replyDraft.threadId) showNotification('Saved reply kept. Pending uploads discarded.', 'info');
                                 }}
                               >
-                                Discard
+                                {replyDraft.threadId ? 'Discard uploads' : 'Discard'}
                               </button>
                               <button
                                 type="button"
+                                id="btn-send-reply"
                                 className="btn btn-sm btn-primary ticket-send-button"
-                                disabled={isSending || !replyText.trim()}
+                                disabled={!canEditTicket || (!replyDraft.threadId && !replyText.trim())}
                                 onClick={handleSendReply}
                               >
-                                <Send size={14} />{isSending ? 'Sending...' : isPrivateNote ? 'Add note' : 'Send reply'}
+                                <Send size={14} />{isSending ? (replyDraft.threadId ? 'Uploading...' : 'Sending...') : replyDraft.threadId ? (replyAttachments.some(file => !replyDraft.uploadedFiles.includes(file)) ? 'Retry uploads' : 'Finish reply') : isPrivateNote ? 'Add note' : 'Send reply'}
                               </button>
                             </div>
                           </div>
@@ -1779,19 +2091,20 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                               <span className="font-monospace text-primary fw-bolder" style={{ fontSize: '1rem' }}>{formatTimer(timerSeconds)}</span>
                             </div>
                             <div className="d-flex align-items-center gap-1.5">
-                              <button type="button" className={`btn btn-sm ${timerRunning ? 'btn-outline-warning' : 'btn-outline-secondary'} w-100 d-flex align-items-center justify-content-center gap-1`} onClick={() => setTimerRunning(!timerRunning)}>
+                              <button type="button" className={`btn btn-sm ${timerRunning ? 'btn-outline-warning' : 'btn-outline-secondary'} w-100 d-flex align-items-center justify-content-center gap-1`} disabled={!canMutate} onClick={() => setTimerRunning(!timerRunning)}>
                                 {timerRunning ? <Pause size={13} /> : <Play size={13} />}<span>{timerRunning ? 'Pause' : 'Start timer'}</span>
                               </button>
-                              <button type="button" className="btn btn-sm btn-outline-secondary p-1.5" onClick={() => { setTimerRunning(false); setTimerSeconds(0); }} title="Reset timer" aria-label="Reset timer"><RotateCcw size={13} /></button>
+                              <button type="button" className="btn btn-sm btn-outline-secondary p-1.5" disabled={!canMutate} onClick={() => { setTimerRunning(false); setTimerSeconds(0); }} title="Reset timer" aria-label="Reset timer"><RotateCcw size={13} /></button>
                             </div>
                           </div>
 
                           {/* Interactive Resolution To-Do Checklist */}
                           <div className="enterprise-card p-3 bg-white shadow-xs">
                             <span className="fw-bold text-dark small d-block mb-2">Resolution Checklist</span>
+                            <small className="text-muted d-block mb-2">Suggested steps, kept only in this workspace session.</small>
                             <div className="d-flex flex-column gap-1.5">
                               {(ticketTodos[selectedTicket.id] || [
-                                { id: 1, text: 'Verify customer identity & loan ID', done: true },
+                                { id: 1, text: 'Verify customer identity & loan ID', done: false },
                                 { id: 2, text: 'Check Bureau status on Partner portal', done: false },
                                 { id: 3, text: 'Send confirmation reply to requester', done: false },
                               ]).map(todo => (
@@ -1800,9 +2113,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                     type="checkbox"
                                     className="form-check-input mt-0"
                                     checked={todo.done}
+                                    disabled={!canEditTicket}
                                     onChange={() => {
                                       const currentList = ticketTodos[selectedTicket.id] || [
-                                        { id: 1, text: 'Verify customer identity & loan ID', done: true },
+                                        { id: 1, text: 'Verify customer identity & loan ID', done: false },
                                         { id: 2, text: 'Check Bureau status on Partner portal', done: false },
                                         { id: 3, text: 'Send confirmation reply to requester', done: false },
                                       ];
@@ -1820,7 +2134,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
                           {/* Attached Documents 360° Section */}
                           {(() => {
-                            const allAtts = (selectedTicket.threads || []).flatMap(t => t.attachments || []);
+                            const allAtts = Array.from(new Map([
+                              ...(selectedTicket.attachments || []),
+                              ...(selectedTicket.threads || []).flatMap(thread => thread.attachments || []),
+                            ].map(attachment => [attachment.id, attachment])).values());
                             return (
                               <div className="enterprise-card p-3 mt-3 bg-white shadow-xs">
                                 <div className="d-flex justify-content-between align-items-center mb-2">
@@ -1885,9 +2202,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                 ) : (
                   <div className="workspace-empty-state ticket-detail-empty">
+                    <button type="button" className="workspace-icon-button ticket-back-button" aria-label="Back to ticket list" onClick={() => setShowMobileTicket(false)}><ArrowLeft size={18} /></button>
+                    {detailFeedback}
                     <span className="workspace-empty-icon"><MessageSquare size={30} /></span>
-                    <h2>A space for better conversations</h2>
-                    <p>Select a ticket to read the conversation and help your customer.</p>
+                    <h2>{detailError ? 'Conversation unavailable' : isLoadingTicket ? 'Loading conversation' : 'A space for better conversations'}</h2>
+                    <p>{detailError ? 'Retry the request or select another ticket.' : 'Select a ticket to read the conversation and help your customer.'}</p>
                   </div>
                 )}
               </section>
@@ -1970,7 +2289,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           <td className="ps-4 fw-bold text-dark">{d.name}</td>
                           <td><span className="badge bg-light text-dark border">{d.code || 'DEPT'}</span></td>
                           <td><span className="badge-status badge-resolved">ACTIVE SLA</span></td>
-                          <td><code className="text-primary">{mailboxes[0]?.forwardingAddress || '1281753993@tickets.helpdesk.com'}</code></td>
+                          <td><code className="text-primary">{mailboxes[0]?.forwardingAddress || 'Not available'}</code></td>
                           <td className="pe-4">Within 4 Hours (Enterprise SLA)</td>
                         </tr>
                       ))}
@@ -2006,6 +2325,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                     <button
                       type="button"
                       className="btn btn-primary btn-sm px-3 py-2 fw-semibold d-flex align-items-center gap-1.5 shadow-sm rounded-3"
+                      disabled={!canMutate}
                       onClick={() => setShowNewCustomerModal(true)}
                     >
                       <UserPlus size={16} />
@@ -2109,7 +2429,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 </div>
                                 <div>
                                   <div className="fw-bold text-dark">{cust.displayName || `${cust.firstName} ${cust.lastName || ''}`}</div>
-                                  <small className="text-muted" style={{ fontSize: '0.72rem' }}>ID #{cust.id} • Verified Contact</small>
+                                  <small className="text-muted" style={{ fontSize: '0.72rem' }}>ID #{cust.id}</small>
                                 </div>
                               </div>
                             </td>
@@ -2146,7 +2466,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 <button
                                   type="button"
                                   className="btn btn-sm btn-outline-primary py-1 px-2.5 rounded-2"
-                                  onClick={() => setSelectedCustomer(cust)}
+                                  id={`btn-customer-history-${cust.id}`}
+                                  onClick={() => openCustomerHistory(cust)}
                                   title="View Customer Details & History"
                                 >
                                   View History →
@@ -2154,11 +2475,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                                 <button
                                   type="button"
                                   className="btn btn-sm btn-light border py-1 px-2 rounded-2"
-                                  onClick={() => {
-                                    setNewRequesterEmail(cust.email);
-                                    setNewRequesterName(cust.displayName || cust.firstName);
-                                    setShowNewTicketModal(true);
-                                  }}
+                                  disabled={!canMutate}
+                                  onClick={() => openTicketForCustomer(cust)}
                                   title="Create a ticket for this customer"
                                 >
                                   + Ticket
@@ -2195,6 +2513,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                   <button
                     className="btn btn-sm btn-success fw-bold d-flex align-items-center gap-1.5 px-3 py-2 rounded-3 shadow-sm"
+                    disabled={!isWorkspaceAdmin}
+                    title={!isWorkspaceAdmin ? 'Only workspace administrators can create articles' : undefined}
                     onClick={() => setShowNewArticleModal(true)}
                   >
                     <Plus size={15} />
@@ -2230,8 +2550,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         <button
                           type="button"
                           className="btn btn-sm btn-outline-primary py-1 px-2.5 rounded-2 fw-semibold"
+                          disabled={isComposerLocked}
                           style={{ fontSize: '0.74rem' }}
                           onClick={() => {
+                            if (isComposerLocked) return;
                             setActiveTab('tickets');
                             setReplyText(prev => prev + `\n\nReference Solution: ${art.title}\nhttps://${activeCompany.subdomain}.kuwyhelp.com/kb/${art.slug}`);
                             showNotification(`Pasted "${art.title}" into ticket composer`);
@@ -2250,7 +2572,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {/* ==============================================================
               TAB 4: SCENARIO AUTOMATIONS (Freshdesk 1-Click Macros)
               ============================================================== */}
-          {activeTab === 'automations' && (
+          {activeTab === 'automations' && isWorkspaceAdmin && (
             <div>
               <div className="enterprise-card workspace-section-banner p-4 mb-4">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
@@ -2295,6 +2617,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-dark fw-bold w-100"
+                        disabled={!canEditTicket}
                         onClick={() => {
                           if (selectedTicket) {
                             handleExecuteScenario(sc);
@@ -2316,7 +2639,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {/* ==============================================================
               TAB 5: SUPPORT ENGINEERS
               ============================================================== */}
-          {activeTab === 'engineers' && (
+          {activeTab === 'engineers' && isWorkspaceAdmin && (
             <SupportEngineersView activeCompany={activeCompany} />
           )}
 
@@ -2330,7 +2653,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {/* ==============================================================
               TAB 7: MICROSOFT 365 & EMAIL FORWARDING
               ============================================================== */}
-          {activeTab === 'mailboxes' && (
+          {activeTab === 'mailboxes' && isWorkspaceAdmin && (
             <div>
               {/* Email Forwarding Feature Banner */}
               <div
@@ -2360,7 +2683,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <div className="d-flex align-items-center gap-2 flex-wrap pt-1">
                         <span className="small text-secondary fw-bold" style={{ fontSize: '0.75rem' }}>HelpDesk Forwarding Target:</span>
                         <code className="bg-white px-2.5 py-1 rounded-2 border text-dark fw-bold" style={{ fontSize: '0.84rem' }}>
-                          {mailboxes[0]?.forwardingAddress || '1281753993@tickets.helpdesk.com'}
+                          {mailboxes[0]?.forwardingAddress || 'Not configured'}
                         </code>
                         <span className="badge bg-primary-subtle text-primary fw-semibold" style={{ fontSize: '0.7rem' }}>
                           Auto-Converts to Ticket
@@ -2418,13 +2741,13 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <div className="p-2.5 rounded-3 mt-2.5" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: '0.78rem' }}>
                         <div className="d-flex justify-content-between align-items-center mb-1">
                           <span className="fw-bold text-dark" style={{ fontSize: '0.75rem' }}>HelpDesk Forwarding Address</span>
-                          <span className="badge bg-success-subtle text-success rounded-pill fw-semibold" style={{ fontSize: '0.68rem' }}>
-                            Forwarding Verified
+                          <span className={`badge ${mb.forwardingVerified ? 'bg-success-subtle text-success' : 'bg-light text-secondary'} rounded-pill fw-semibold`} style={{ fontSize: '0.68rem' }}>
+                            {mb.forwardingVerified ? 'Forwarding verified' : 'Forwarding not verified'}
                           </span>
                         </div>
                         <div className="d-flex align-items-center justify-content-between">
                           <code className="text-primary fw-semibold" style={{ fontSize: '0.82rem' }}>
-                            {mb.forwardingAddress || '1281753993@tickets.helpdesk.com'}
+                            {mb.forwardingAddress || 'Not configured'}
                           </code>
                           <button
                             type="button"
@@ -2445,7 +2768,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {/* ==============================================================
               TAB 7: SUBSCRIPTION, BILLING & PLAN QUOTAS
               ============================================================== */}
-          {activeTab === 'billing' && (
+          {activeTab === 'billing' && isWorkspaceAdmin && (
             <div className="animate-fade-in">
               {/* Header Banner */}
               <div className="enterprise-card workspace-section-banner p-4 mb-4">
@@ -2498,21 +2821,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                 <div className="col-12 col-md-4">
                   <div className="enterprise-card p-4 h-100">
                     <div className="d-flex justify-content-between align-items-center mb-2">
-                      <span className="small fw-bold text-secondary text-uppercase">Monthly Ticket Quota</span>
+                      <span className="small fw-bold text-secondary text-uppercase">Workspace Tickets</span>
                       <Inbox size={18} className="text-success" />
                     </div>
                     <h3 className="fw-bold mb-1 text-dark">
-                      {stats?.totalTickets || tickets.length} <span className="fs-6 text-muted fw-normal">/ {currentSubscription?.ticketLimitMonthly || 5000}</span>
+                      {ticketCounts.ALL ?? '-'} <span className="fs-6 text-muted fw-normal">recorded</span>
                     </h3>
-                    <div className="progress mt-3" style={{ height: '8px' }}>
-                      <div
-                        className="progress-bar bg-success"
-                        role="progressbar"
-                        style={{ width: `${Math.min(100, ((stats?.totalTickets || tickets.length) / (currentSubscription?.ticketLimitMonthly || 5000)) * 100)}%` }}
-                      ></div>
-                    </div>
                     <small className="text-muted d-block mt-2" style={{ fontSize: '0.74rem' }}>
-                      Resets automatically at billing renewal cycle
+                      Monthly limit: {currentSubscription?.ticketLimitMonthly ?? 'Unavailable'}. Monthly usage is not available in this view.
                     </small>
                   </div>
                 </div>
@@ -2674,11 +2990,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           {/* ==============================================================
               SECTION E: ADMIN SETTINGS CONSOLE (SCREENS 25 TO 39)
               ============================================================== */}
-          {activeTab === 'settings' && (
+          {activeTab === 'settings' && isWorkspaceAdmin && (
             <AdminSettingsConsole
               activeCompany={activeCompany}
               currentUser={currentUser}
-              onRefreshCompany={() => onSwitchCompany(activeCompany)}
+              onRefreshCompany={() => { if (workspaceContextRef.current) { onSwitchCompany(activeCompany); loadCompanyData(activeCompany.id); } }}
               onShowToast={showNotification}
             />
           )}
@@ -2689,7 +3005,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       {/* ==============================================================
           MODAL 1: NEW TICKET CREATION
           ============================================================== */}
-      {showNewTicketModal && (
+      {showNewTicketModal && canMutate && (
         <dialog ref={newTicketDialogRef} className="workspace-ticket-dialog" aria-labelledby="new-ticket-title" onCancel={() => setShowNewTicketModal(false)} onClick={e => { if (e.target === e.currentTarget) setShowNewTicketModal(false); }}>
           <div className="modal-dialog">
             <div className="modal-content border-0 shadow-lg" style={{ borderRadius: '16px', overflow: 'hidden' }}>
@@ -2705,13 +3021,17 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                 </div>
                 <button type="button" className="btn-close" aria-label="Close new ticket" onClick={() => setShowNewTicketModal(false)}></button>
               </div>
-              <form onSubmit={handleCreateTicket}>
+              <form onSubmit={handleCreateTicket} aria-busy={isCreatingTicket}>
                 <div className="modal-body p-4">
+                  {newTicketDraft.error && <div id="workspace-new-ticket-error" className="alert alert-warning small py-2 px-3" role="alert">{newTicketDraft.error}</div>}
+                  {createdTicket && !newTicketDraft.error && <p className="small text-secondary" role="status">Ticket #{createdTicket.ticketNumber} is saved. Finishing attachments will not create another ticket.</p>}
+                  <fieldset disabled={isCreatingTicket || !!createdTicket} className="border-0 p-0 m-0">
                   <div className="mb-3">
                     <label htmlFor="new-ticket-subject" className="form-label fw-semibold small">Subject *</label>
                     <input
                       id="new-ticket-subject"
                       type="text"
+                      maxLength={500}
                       autoFocus
                       className="form-control"
                       required
@@ -2738,6 +3058,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <input
                         id="new-ticket-email"
                         type="email"
+                        maxLength={254}
                         className="form-control"
                         required
                         placeholder="name@company.com"
@@ -2752,9 +3073,11 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       <select
                         id="new-ticket-department"
                         className="form-select"
-                        value={newDeptId}
+                        required
+                        value={newDeptId || ''}
                         onChange={e => setNewDeptId(Number(e.target.value))}
                       >
+                        <option value="" disabled>Select a department</option>
                         {departments.map(d => (
                           <option key={d.id} value={d.id}>{d.name}</option>
                         ))}
@@ -2766,7 +3089,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         id="new-ticket-priority"
                         className="form-select"
                         value={newPriority}
-                        onChange={e => setNewPriority(e.target.value as any)}
+                        onChange={e => setNewPriority(e.target.value as Ticket['priority'])}
                       >
                         <option value="LOW">Low</option>
                         <option value="MEDIUM">Medium</option>
@@ -2781,12 +3104,14 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       id="new-ticket-description"
                       className="form-control"
                       rows={3}
+                      maxLength={100000}
                       required
                       placeholder="Describe the issue and how we can help..."
                       value={newDesc}
                       onChange={e => setNewDesc(e.target.value)}
                     />
                   </div>
+                  </fieldset>
 
                   {/* Attach Documents & Files (PNG, PDF, JPG, JPEG, TXT) */}
                   <div className="mb-2">
@@ -2818,10 +3143,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                         accept=".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv"
                         className="visually-hidden"
                         aria-label="Ticket attachments"
+                        disabled={isCreatingTicket || !!createdTicket}
                         onChange={(e) => {
                           if (e.target.files) {
                             setNewTicketAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
                           }
+                          e.target.value = '';
                         }}
                       />
                     </label>
@@ -2832,7 +3159,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                           <span
                             key={idx}
                             className="badge bg-white text-dark border px-2.5 py-1.5 rounded-3 d-inline-flex align-items-center gap-1.5 shadow-xs"
-                            style={{ fontSize: '0.78rem' }}
+                            style={{ fontSize: '0.78rem', maxWidth: '100%', flexWrap: 'wrap' }}
                           >
                             {isImageFile(f.name) ? (
                               <ImageIcon size={13} className="text-info" />
@@ -2843,9 +3170,12 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                             )}
                             <span className="text-truncate" style={{ maxWidth: '160px' }}>{f.name}</span>
                             <span className="text-muted" style={{ fontSize: '0.7rem' }}>({formatFileSize(f.size)})</span>
+                            {newTicketDraft.uploadedFiles.includes(f) && <span className="text-success">Uploaded</span>}
                             <button
                               type="button"
                               className="btn-close ms-1"
+                              aria-label={`Remove ticket attachment ${f.name}`}
+                              disabled={isCreatingTicket || newTicketDraft.uploadedFiles.includes(f)}
                               style={{ fontSize: '0.55rem' }}
                               onClick={(ev) => {
                                 ev.stopPropagation();
@@ -2859,8 +3189,10 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
                 </div>
                 <div className="modal-footer bg-light px-4 py-2.5">
-                  <button type="button" className="btn btn-light btn-sm px-3" onClick={() => setShowNewTicketModal(false)}>Cancel</button>
-                  <button type="submit" className="btn btn-primary btn-sm px-4 fw-semibold">Create ticket</button>
+                  <button type="button" className="btn btn-light btn-sm px-3" onClick={() => setShowNewTicketModal(false)}>{createdTicket ? 'Close' : 'Cancel'}</button>
+                  <button id="btn-submit-new-ticket" type="submit" className="btn btn-primary btn-sm px-4 fw-semibold" disabled={isCreatingTicket || (!createdTicket && !departments.length)}>
+                    {isCreatingTicket ? (createdTicket ? 'Uploading...' : 'Creating...') : createdTicket ? (newTicketAttachments.some(file => !newTicketDraft.uploadedFiles.includes(file)) ? 'Retry uploads' : 'Finish ticket') : 'Create ticket'}
+                  </button>
                 </div>
               </form>
             </div>
@@ -2871,7 +3203,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       {/* ==============================================================
           MODAL 2: SIMULATE INBOUND EMAIL
           ============================================================== */}
-      {showSimulateModal && (
+      {showSimulateModal && isWorkspaceAdmin && (
         <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg" style={{ borderRadius: '16px', overflow: 'hidden' }}>
@@ -2897,7 +3229,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                       value={simMailbox}
                       onChange={e => setSimMailbox(e.target.value)}
                     />
-                    <small className="text-muted">Points to verified forwarding target: <code>1281753993@tickets.helpdesk.com</code></small>
+                    <small className="text-muted">Use a configured mailbox. This test creates real ticket data.</small>
                   </div>
 
                   <div className="row g-2 mb-3">
@@ -2949,8 +3281,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                   </div>
 
                   {simResult && (
-                    <div className="alert alert-success d-flex align-items-center gap-2 py-2 px-3 mb-0 rounded-3 small">
-                      <CheckCircle2 size={16} className="text-success" />
+                    <div className="alert alert-info d-flex align-items-center gap-2 py-2 px-3 mb-0 rounded-3 small" role="status">
                       <span>{simResult}</span>
                     </div>
                   )}
@@ -2968,7 +3299,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       {/* ==============================================================
           MODAL 3: EMAIL FORWARDING SETUP WIZARD (Matching Screenshots)
           ============================================================== */}
-      {showForwardingModal && (
+      {showForwardingModal && isWorkspaceAdmin && (
         <EmailForwardingModal
           isOpen={showForwardingModal}
           onClose={() => setShowForwardingModal(false)}
@@ -2982,7 +3313,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
           MODAL 4: DOCUMENT & IMAGE ATTACHMENT PREVIEW LIGHTBOX
           ============================================================== */}
       {/* SCREEN 23: NEW SOLUTION ARTICLE MODAL */}
-      {showNewArticleModal && (
+      {showNewArticleModal && isWorkspaceAdmin && (
         <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content rounded-4 border-0 shadow-2xl">
@@ -3070,7 +3401,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       )}
 
       {/* SCREEN 20: NEW CUSTOMER CONTACT MODAL */}
-      {showNewCustomerModal && (
+      {showNewCustomerModal && canMutate && (
         <div className="modal show d-block modal-backdrop-blur" style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)' }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content rounded-4 border-0 shadow-2xl">
@@ -3151,32 +3482,33 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
       {/* CUSTOMER DETAIL DRAWER (Screen 20 & 21) */}
       {selectedCustomer && (
-        <div
-          className="modal fade show d-block"
-          tabIndex={-1}
-          style={{ backgroundColor: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 1060 }}
-          onClick={() => setSelectedCustomer(null)}
+        <dialog
+          ref={customerHistoryDialogRef}
+          id="customer-ticket-history"
+          className="workspace-ticket-dialog"
+          aria-labelledby="customer-history-title"
+          style={{ maxWidth: '480px' }}
+          onCancel={() => setSelectedCustomer(null)}
+          onClick={e => { if (e.target === e.currentTarget) setSelectedCustomer(null); }}
         >
           <div
-            className="modal-dialog modal-dialog-end h-100 my-0 ms-auto"
-            style={{ maxWidth: '480px' }}
-            onClick={e => e.stopPropagation()}
+            className="modal-dialog"
           >
-            <div className="modal-content h-100 border-0 rounded-0 shadow-2xl overflow-auto">
-              <div className="modal-header bg-dark text-white p-4">
-                <div className="d-flex align-items-center gap-3">
+            <div className="modal-content border-0 overflow-hidden">
+              <div className="modal-header bg-white p-4">
+                <div className="d-flex align-items-center gap-3" style={{ minWidth: 0 }}>
                   <div
                     className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold fs-5"
                     style={{ width: '48px', height: '48px', backgroundColor: '#3b82f6' }}
                   >
                     {(selectedCustomer.displayName || selectedCustomer.firstName || 'C').charAt(0).toUpperCase()}
                   </div>
-                  <div>
-                    <h5 className="modal-title fw-bold mb-0">{selectedCustomer.displayName || `${selectedCustomer.firstName} ${selectedCustomer.lastName || ''}`}</h5>
-                    <small className="text-secondary">{selectedCustomer.email}</small>
+                  <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                    <h2 id="customer-history-title" className="modal-title fw-bold mb-0">{selectedCustomer.displayName || `${selectedCustomer.firstName} ${selectedCustomer.lastName || ''}`}</h2>
+                    <small className="text-muted">{selectedCustomer.email}</small>
                   </div>
                 </div>
-                <button type="button" className="btn-close btn-close-white" onClick={() => setSelectedCustomer(null)} />
+                <button type="button" className="btn-close" aria-label="Close customer history" onClick={() => setSelectedCustomer(null)} />
               </div>
 
               <div className="modal-body p-4">
@@ -3191,33 +3523,36 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                 </div>
 
                 <div className="mb-4">
-                  <div className="d-flex justify-content-between align-items-center mb-2">
+                  <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
                     <h6 className="fw-bold text-dark mb-0">Ticket History in {activeCompany.name}</h6>
                     <button
                       type="button"
                       className="btn btn-sm btn-outline-primary py-0.5 px-2"
-                      onClick={() => {
-                        setNewRequesterEmail(selectedCustomer.email);
-                        setNewRequesterName(selectedCustomer.displayName || selectedCustomer.firstName);
-                        setSelectedCustomer(null);
-                        setShowNewTicketModal(true);
-                      }}
+                      disabled={!canMutate}
+                      onClick={() => openTicketForCustomer(selectedCustomer)}
                     >
                       + Raise Ticket
                     </button>
                   </div>
-                  <div className="d-flex flex-column gap-2">
-                    {tickets.filter(t => t.contact?.email === selectedCustomer.email).length === 0 ? (
-                      <p className="text-muted small mb-0">No tickets currently linked to this email address.</p>
-                    ) : (
-                      tickets.filter(t => t.contact?.email === selectedCustomer.email).map(tk => (
-                        <div
+                  <div className="d-flex flex-column gap-2" aria-busy={isLoadingHistory}>
+                    {isLoadingHistory && <p id="customer-history-loading" className="text-secondary small mb-0" role="status">Loading customer history...{historyLoaded && ' Previous results remain visible.'}</p>}
+                    {historyError && (
+                      <div id="customer-history-error" className="alert alert-warning small py-2 px-3 mb-0" role="alert">
+                        <p className="mb-2">{historyError}</p>
+                        <button type="button" className="btn btn-sm btn-outline-secondary" aria-label="Retry customer history" onClick={() => setHistoryRevision(previous => previous + 1)} disabled={isLoadingHistory}>Retry</button>
+                      </div>
+                    )}
+                    {!isLoadingHistory && !historyError && historyLoaded && customerHistory.length === 0 && <p className="text-muted small mb-0">No tickets are linked to this email address.</p>}
+                    {customerHistory.map(tk => (
+                        <button
+                          type="button"
                           key={tk.id}
-                          className="p-3 rounded-3 border bg-white cursor-pointer hover-shadow transition-all"
+                          className="p-3 rounded-3 border bg-white text-start cursor-pointer hover-shadow transition-all"
+                          aria-label={`Open history ticket ${tk.ticketNumber}`}
                           onClick={() => {
                             setSelectedCustomer(null);
                             setActiveTab('tickets');
-                            loadTicketDetail(tk.id);
+                            void loadTicketDetail(tk.id);
                           }}
                           style={{ cursor: 'pointer' }}
                         >
@@ -3227,23 +3562,30 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
                               {tk.status}
                             </span>
                           </div>
-                          <div className="fw-semibold text-dark small text-truncate">{tk.subject}</div>
+                          <div className="fw-semibold text-dark small" style={{ overflowWrap: 'anywhere' }}>{tk.subject}</div>
                           <small className="text-muted" style={{ fontSize: '0.7rem' }}>
                             Created {tk.createdAt ? new Date(tk.createdAt).toLocaleDateString() : 'Today'}
                           </small>
-                        </div>
-                      ))
-                    )}
+                        </button>
+                      ))}
+                  </div>
+                  <div className="d-flex flex-wrap gap-2 align-items-center justify-content-between border-top pt-3 mt-3 small">
+                    <span id="customer-history-total" aria-live="polite">{historyLoaded ? `${customerHistory.length} shown / ${historyPageInfo.totalElements} total` : 'History not loaded'}</span>
+                    <div className="ticket-pagination" aria-label="Customer history pagination">
+                      <button type="button" className="workspace-icon-button" aria-label="Previous customer history page" disabled={!historyLoaded || historyPage === 0 || isLoadingHistory || !!historyError} onClick={() => setHistoryPage(previous => previous - 1)}><ChevronLeft size={14} /></button>
+                      <span>{historyPageInfo.number + 1} / {Math.max(1, historyPageInfo.totalPages)}</span>
+                      <button type="button" className="workspace-icon-button" aria-label="Next customer history page" disabled={!historyLoaded || historyPage + 1 >= historyPageInfo.totalPages || isLoadingHistory || !!historyError} onClick={() => setHistoryPage(previous => previous + 1)}><ChevronRight size={14} /></button>
+                    </div>
                   </div>
                 </div>
               </div>
 
               <div className="modal-footer bg-light p-3">
-                <button type="button" className="btn btn-secondary btn-sm w-100" onClick={() => setSelectedCustomer(null)}>Close Drawer</button>
+                <button type="button" className="btn btn-secondary btn-sm w-100" onClick={() => setSelectedCustomer(null)}>Close history</button>
               </div>
             </div>
           </div>
-        </div>
+        </dialog>
       )}
 
       {previewAttachment && (

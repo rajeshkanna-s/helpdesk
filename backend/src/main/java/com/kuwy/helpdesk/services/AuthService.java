@@ -40,6 +40,7 @@ public class AuthService {
     private final SecurityAuditService auditService;
     private final RateLimiterService rateLimiterService;
     private final SecretCryptoService secretCryptoService;
+    private final AccountEmailService accountEmails;
 
     private static final String BACKUP_FORMAT = "BCRYPT_V1:";
     private static final int MAX_PENDING_CHALLENGES = 10000;
@@ -300,8 +301,8 @@ public class AuthService {
     public Map<String, Object> disable2Fa(Long userId, String password, String code, HttpServletRequest request) {
         User user = requireSelf(userId);
         requirePassword(user, password, request);
-        if (user.getRole().getRoleType() == Role.RoleType.SUPER_ADMIN) {
-            throw new SecurityException("Two-factor authentication cannot be disabled for platform administrators.");
+        if (com.kuwy.helpdesk.util.AccountSecurityPolicy.requiresTwoFactor(user)) {
+            throw new SecurityException("Two-factor authentication is required by account policy.");
         }
         if (Boolean.TRUE.equals(user.getIsTwoFactorEnabled()) && !twoFactorAuthService.verifyTotpCode(readMfaSecret(user), code)) {
             throw new BadCredentialsException("Verify your current authenticator to disable it.");
@@ -314,6 +315,27 @@ public class AuthService {
         enrollments.remove(userId);
         auditService.recordEvent(user.getCompany().getId(), userId, "2FA_DISABLED", user.getEmail(), "Authenticator disabled by verified account owner", request);
         return Map.of("success", true, "signInRequired", true, "message", "Authenticator disabled. Please sign in again.");
+    }
+
+    @Transactional(noRollbackFor = AuthenticationException.class)
+    public Map<String, Object> changeOwnPassword(String currentPassword, String newPassword, String code, HttpServletRequest request) {
+        User user = requireSelf(TenantContext.requireUserId());
+        requirePassword(user, currentPassword, request);
+        com.kuwy.helpdesk.util.PasswordPolicy.validate(newPassword);
+        if (Boolean.TRUE.equals(user.getIsTwoFactorEnabled()) && !twoFactorAuthService.verifyTotpCode(readMfaSecret(user), code)) {
+            throw new BadCredentialsException("Verify your authenticator to change the password.");
+        }
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.invalidateAuthentication();
+        userRepository.save(user);
+        enrollments.remove(user.getId());
+        tempSessions.entrySet().removeIf(entry -> entry.getValue().userId.equals(user.getId()));
+        boolean emailQueued = accountEmails.isReady();
+        if (emailQueued) accountEmails.enqueue(user.getCompany().getId(), user.getEmail(), "Your password was changed",
+                "<p>Your workspace password was changed. If this was not you, contact your administrator immediately.</p>",
+                "password-change:" + user.getId() + ":" + user.getAuthVersion());
+        auditService.recordEvent(user.getCompany().getId(), user.getId(), "PASSWORD_CHANGED", user.getEmail(), "Password changed by verified account owner", request);
+        return Map.of("success", true, "signInRequired", true, "emailQueued", emailQueued);
     }
 
     private LoginResponse finalizeLogin(User user, Company company, Role.RoleType roleType, HttpServletRequest httpRequest) {
@@ -345,6 +367,7 @@ public class AuthService {
                 .displayName(user.getDisplayName())
                 .roleType(roleType.name())
                 .roleName(user.getRole() != null ? user.getRole().getName() : "Agent")
+                .mfaSetupRequired(com.kuwy.helpdesk.util.AccountSecurityPolicy.needsSetup(user))
                 .company(buildCompanyInfo(company))
                 .twoFactorRequired(false)
                 .build();

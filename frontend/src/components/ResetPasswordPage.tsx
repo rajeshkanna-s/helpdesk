@@ -69,7 +69,10 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
 
   // Password rules validation
   const hasMinLength = [...newPassword].length >= 10;
-  const validCharacters = newPassword.length <= 1024 && !/[\u0000-\u001f\u007f-\u009f]/.test(newPassword);
+  const validCharacters = newPassword.length <= 1024 && [...newPassword].every(character => {
+    const code = character.codePointAt(0) || 0;
+    return code >= 32 && !(code >= 127 && code <= 159) && !(code >= 0xd800 && code <= 0xdfff);
+  });
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword;
 
   // Strength score

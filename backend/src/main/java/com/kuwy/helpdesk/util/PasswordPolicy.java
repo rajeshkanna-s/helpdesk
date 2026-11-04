@@ -15,7 +15,7 @@ public final class PasswordPolicy {
         if (password == null || password.isBlank() || password.codePointCount(0, password.length()) < 10 || password.length() > 1024) {
             throw new IllegalArgumentException("Use a password or passphrase with at least 10 characters (maximum 1024).");
         }
-        if (password.codePoints().anyMatch(Character::isISOControl)) {
+        if (password.codePoints().anyMatch(character -> Character.isISOControl(character) || character >= 0xd800 && character <= 0xdfff)) {
             throw new IllegalArgumentException("The password must not contain control characters.");
         }
         if (COMMON_PASSWORDS.contains(password.toLowerCase(Locale.ROOT))) {

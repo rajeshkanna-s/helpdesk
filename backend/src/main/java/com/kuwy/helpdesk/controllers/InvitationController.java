@@ -6,6 +6,8 @@ import com.kuwy.helpdesk.dto.InvitationValidationResponse;
 import com.kuwy.helpdesk.dto.InviteAgentRequest;
 import com.kuwy.helpdesk.dto.LoginResponse;
 import com.kuwy.helpdesk.services.AgentInvitationService;
+import com.kuwy.helpdesk.services.BrowserSessionService;
+import com.kuwy.helpdesk.config.BrowserSessionCookies;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,8 @@ import java.util.Map;
 public class InvitationController {
 
     private final AgentInvitationService invitationService;
+    private final BrowserSessionService sessions;
+    private final BrowserSessionCookies cookies;
 
     @PostMapping("/validate")
     public ResponseEntity<InvitationValidationResponse> validateInvitation(@RequestBody Map<String, String> request) {
@@ -31,8 +35,18 @@ public class InvitationController {
 
     @PostMapping("/accept")
     public ResponseEntity<?> acceptInvitation(@RequestBody AcceptInvitationRequest request, HttpServletRequest httpRequest) {
+        boolean browser = "1".equals(httpRequest.getHeader("X-Browser-Session"));
+        if (browser) cookies.requireBrowserMutation(httpRequest);
         LoginResponse response = invitationService.acceptInvitation(request, httpRequest);
-        return ResponseEntity.ok(response);
+        if (browser && response.getToken() != null && !Boolean.TRUE.equals(response.getTwoFactorRequired())) {
+            var session = sessions.openStaff(response.getToken(), false, httpRequest);
+            response.setToken(null);
+            response.setBrowserSession(true);
+            response.setCsrfToken(session.csrfToken());
+            response.setSessionId(session.sessionId());
+            return ResponseEntity.ok().headers(cookies.issue(session, "STAFF")).body(response);
+        }
+        return ResponseEntity.ok().headers(BrowserSessionCookies.noStore()).body(response);
     }
 
     @GetMapping

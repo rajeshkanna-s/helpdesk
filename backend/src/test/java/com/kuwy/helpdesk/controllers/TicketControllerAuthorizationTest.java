@@ -64,7 +64,7 @@ class TicketControllerAuthorizationTest {
         attachments = mock(TicketAttachmentRepository.class);
         subscriptions = mock(SubscriptionService.class);
         TicketService service = new TicketService(tickets, threads, companies, departments, contacts, users, attachments);
-        mvc = MockMvcBuilders.standaloneSetup(new TicketController(service, subscriptions))
+        mvc = MockMvcBuilders.standaloneSetup(new TicketController(service, subscriptions, new com.kuwy.helpdesk.services.TicketQueryService(tickets)))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
@@ -104,17 +104,16 @@ class TicketControllerAuthorizationTest {
     }
 
     @Test
-    void listKeepsLastMessageSortAliasAndDefaultsToTheAuthenticatedTenant() throws Exception {
-        Company company = authenticateAndStubTicket("AGENT");
-        PageRequest page = PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "updatedAt"));
-        when(companies.findById(7L)).thenReturn(Optional.of(company));
-        when(tickets.findByCompanyId(7L, page)).thenReturn(Page.empty(page));
+    void listUsesValidatedSortAndDefaultsToTheAuthenticatedTenant() throws Exception {
+        TenantContext.setContext(7L, 11L, "AGENT", "staff@example.invalid");
+        PageRequest page = PageRequest.of(0, 25);
+        when(tickets.findAll(any(org.springframework.data.jpa.domain.Specification.class), eq(page))).thenReturn(Page.empty(page));
 
-        mvc.perform(get("/api/v1/tickets").param("sortBy", "lastMessageAt").param("order", "asc"))
+        mvc.perform(get("/api/v1/tickets").param("sortBy", "updatedAt").param("order", "asc"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content").isEmpty());
 
-        verify(tickets).findByCompanyId(7L, page);
+        verify(tickets).findAll(any(org.springframework.data.jpa.domain.Specification.class), eq(page));
         verifyNoInteractions(subscriptions);
     }
 

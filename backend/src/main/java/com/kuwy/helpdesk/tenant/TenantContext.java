@@ -14,6 +14,7 @@ public final class TenantContext {
     private static final ThreadLocal<Long> CURRENT_USER_ID = new ThreadLocal<>();
     private static final ThreadLocal<String> CURRENT_USER_ROLE = new ThreadLocal<>();
     private static final ThreadLocal<String> CURRENT_USER_EMAIL = new ThreadLocal<>();
+    private static final ThreadLocal<String> CURRENT_BROWSER_SESSION = new ThreadLocal<>();
 
     private TenantContext() {
     }
@@ -98,6 +99,23 @@ public final class TenantContext {
         return getUserId();
     }
 
+    public static Long requireCustomerId(Long companyId) {
+        if (!Role.RoleType.CUSTOMER.name().equals(getUserRole()) || getUserId() == null || getUserId() <= 0
+                || getCompanyId() == null || !getCompanyId().equals(companyId)
+                || getUserEmail() == null || getUserEmail().isBlank()) {
+            throw new SecurityException("A verified customer session for this workspace is required.");
+        }
+        return getUserId();
+    }
+
+    public static String getBrowserSessionId() {
+        return CURRENT_BROWSER_SESSION.get();
+    }
+
+    public static void setBrowserSessionId(String sessionId) {
+        CURRENT_BROWSER_SESSION.set(sessionId);
+    }
+
     public static void assertCompanyAdminAccessTo(Long targetCompanyId) {
         assertAccessTo(targetCompanyId);
         if (!isSuperAdmin() && !Role.RoleType.COMPANY_ADMIN.name().equals(getUserRole())) {
@@ -110,5 +128,6 @@ public final class TenantContext {
         CURRENT_USER_ID.remove();
         CURRENT_USER_ROLE.remove();
         CURRENT_USER_EMAIL.remove();
+        CURRENT_BROWSER_SESSION.remove();
     }
 }

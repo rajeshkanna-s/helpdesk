@@ -17,6 +17,8 @@ public class LoginRequest {
     private String email;
     @NotBlank
     @Size(max = 1024)
+    @lombok.ToString.Exclude
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.WRITE_ONLY)
     private String password;
     @Size(max = 50)
     private String companyCode;

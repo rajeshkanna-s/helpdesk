@@ -56,8 +56,10 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public Company getCompanyBySubdomain(String subdomain) {
-        return companyRepository.findBySubdomain(subdomain)
+        Company company = companyRepository.findBySubdomain(subdomain)
                 .orElseThrow(() -> new RuntimeException("Company not found for subdomain: " + subdomain));
+        TenantContext.assertAccessTo(company.getId());
+        return company;
     }
 
     @Transactional(readOnly = true)

@@ -22,6 +22,10 @@ public class LoginResponse {
     private Boolean twoFactorRequired;
     private String tempToken;
     private String maskedEmail;
+    private Boolean browserSession;
+    private String csrfToken;
+    private String sessionId;
+    private Boolean mfaSetupRequired;
 
     @Getter
     @Setter
@@ -31,8 +35,10 @@ public class LoginResponse {
         private String companyCode;
         private String name;
         private String subdomain;
+        private String customDomain;
         private String status;
         private String primaryColor;
+        private String logoUrl;
         private String planName;
     }
 }

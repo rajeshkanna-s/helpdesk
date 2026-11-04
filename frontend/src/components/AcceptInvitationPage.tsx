@@ -73,7 +73,10 @@ export const AcceptInvitationPage: React.FC<AcceptInvitationPageProps> = ({
 
   // Password rules validation
   const hasMinLength = [...password].length >= 10;
-  const validCharacters = password.length <= 1024 && !/[\u0000-\u001f\u007f-\u009f]/.test(password);
+  const validCharacters = password.length <= 1024 && [...password].every(character => {
+    const code = character.codePointAt(0) || 0;
+    return code >= 32 && !(code >= 127 && code <= 159) && !(code >= 0xd800 && code <= 0xdfff);
+  });
   const passwordsMatch = password.length > 0 && password === confirmPassword;
 
   // Strength score
@@ -182,10 +185,10 @@ export const AcceptInvitationPage: React.FC<AcceptInvitationPageProps> = ({
                 </div>
                 <div>
                   <div className="fw-bold text-dark">
-                    {invitationData.inviterName} has invited you
+                    {invitationData.inviterName || 'Your team'} has invited you
                   </div>
                   <small className="text-muted">
-                    to join as <span className="badge bg-primary text-white">{invitationData.roleName}</span>
+                    to join {invitationData.companyName || 'this workspace'} as <span className="badge bg-primary text-white">{invitationData.roleName || 'a team member'}</span>
                   </small>
                 </div>
               </div>

@@ -3,17 +3,17 @@ package com.kuwy.helpdesk.controllers;
 import com.kuwy.helpdesk.dto.BulkUpdateDto;
 import com.kuwy.helpdesk.dto.ScenarioExecuteDto;
 import com.kuwy.helpdesk.dto.TicketCreateDto;
+import com.kuwy.helpdesk.dto.TicketQuery;
 import com.kuwy.helpdesk.dto.TicketReplyDto;
 import com.kuwy.helpdesk.models.Ticket;
 import com.kuwy.helpdesk.models.TicketThread;
 import com.kuwy.helpdesk.services.SubscriptionService;
+import com.kuwy.helpdesk.services.TicketQueryService;
 import com.kuwy.helpdesk.services.TicketService;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,40 +29,11 @@ public class TicketController {
 
     private final TicketService ticketService;
     private final SubscriptionService subscriptionService;
+    private final TicketQueryService ticketQueryService;
 
     @GetMapping
-    public ResponseEntity<Page<Ticket>> listTickets(
-            @RequestParam(required = false) Long companyId,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) Long agentId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String order
-    ) {
-        TenantContext.requireUserId();
-        if (page < 0 || page > TicketService.MAX_PAGE_NUMBER || size < 1 || size > TicketService.MAX_PAGE_SIZE) {
-            throw new IllegalArgumentException("Invalid ticket page or page size.");
-        }
-        if (!"asc".equalsIgnoreCase(order) && !"desc".equalsIgnoreCase(order)) {
-            throw new IllegalArgumentException("order must be asc or desc.");
-        }
-
-        Sort.Direction direction = "asc".equalsIgnoreCase(order) ? Sort.Direction.ASC : Sort.Direction.DESC;
-        String sortField = "createdAt";
-        if ("priority".equalsIgnoreCase(sortBy)) sortField = "priority";
-        else if ("status".equalsIgnoreCase(sortBy)) sortField = "status";
-        else if ("updatedAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
-        else if ("lastMessageAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
-        else if (!"createdAt".equalsIgnoreCase(sortBy)) throw new IllegalArgumentException("Invalid ticket sort field.");
-
-        Page<Ticket> tickets = ticketService.getCompanyTickets(
-                companyId,
-                status,
-                agentId,
-                PageRequest.of(page, size, Sort.by(direction, sortField))
-        );
-        return ResponseEntity.ok(tickets);
+    public ResponseEntity<Page<Ticket>> listTickets(@ModelAttribute TicketQuery query) {
+        return ResponseEntity.ok(ticketQueryService.listTickets(query));
     }
 
     @GetMapping("/{id}")

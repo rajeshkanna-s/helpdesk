@@ -50,7 +50,11 @@ public class TicketAttachment {
     private StorageType storageType = StorageType.LOCAL_DISK;
 
     @Column(name = "storage_path", nullable = false, length = 1000)
+    @JsonIgnore
     private String storagePath;
+
+    @Column(name = "scan_status", nullable = false, length = 20, columnDefinition = "VARCHAR(20) DEFAULT 'NOT_SCANNED'")
+    private String scanStatus = "NOT_SCANNED";
 
     @Column(name = "is_inline", nullable = false)
     private Boolean isInline = false;
@@ -85,4 +89,3 @@ public class TicketAttachment {
         LOCAL_DISK, S3, AZURE_BLOB, CLOUDINARY
     }
 }
-
