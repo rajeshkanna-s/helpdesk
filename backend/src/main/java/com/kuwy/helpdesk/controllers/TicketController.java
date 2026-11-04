@@ -18,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Locale;
 
 @Slf4j
 @RestController
@@ -39,15 +40,12 @@ public class TicketController {
             @RequestParam(defaultValue = "createdAt") String sortBy,
             @RequestParam(defaultValue = "desc") String order
     ) {
-        Long targetCompanyId;
-        // Anti-leak: If caller is not Super Admin, strictly enforce their signed tenant ID
-        if (TenantContext.isSuperAdmin()) {
-            targetCompanyId = (companyId != null) ? companyId : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
-        } else {
-            targetCompanyId = TenantContext.getCompanyId();
-            if (targetCompanyId == null) {
-                targetCompanyId = 1L; // Fallback
-            }
+        TenantContext.requireUserId();
+        if (page < 0 || page > TicketService.MAX_PAGE_NUMBER || size < 1 || size > TicketService.MAX_PAGE_SIZE) {
+            throw new IllegalArgumentException("Invalid ticket page or page size.");
+        }
+        if (!"asc".equalsIgnoreCase(order) && !"desc".equalsIgnoreCase(order)) {
+            throw new IllegalArgumentException("order must be asc or desc.");
         }
 
         Sort.Direction direction = "asc".equalsIgnoreCase(order) ? Sort.Direction.ASC : Sort.Direction.DESC;
@@ -56,9 +54,10 @@ public class TicketController {
         else if ("status".equalsIgnoreCase(sortBy)) sortField = "status";
         else if ("updatedAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
         else if ("lastMessageAt".equalsIgnoreCase(sortBy)) sortField = "updatedAt";
+        else if (!"createdAt".equalsIgnoreCase(sortBy)) throw new IllegalArgumentException("Invalid ticket sort field.");
 
         Page<Ticket> tickets = ticketService.getCompanyTickets(
-                targetCompanyId,
+                companyId,
                 status,
                 agentId,
                 PageRequest.of(page, size, Sort.by(direction, sortField))
@@ -68,23 +67,21 @@ public class TicketController {
 
     @GetMapping("/{id}")
     public ResponseEntity<Ticket> getTicket(@PathVariable Long id) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
-        return ResponseEntity.ok(ticket);
+        return ResponseEntity.ok(ticketService.getTicketById(id));
     }
 
     @GetMapping("/{id}/threads")
     public ResponseEntity<List<TicketThread>> getTicketThreads(@PathVariable Long id) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
         return ResponseEntity.ok(ticketService.getTicketThreads(id));
     }
 
     @PostMapping
     public ResponseEntity<Ticket> createTicket(@RequestBody TicketCreateDto dto) {
-        Long companyId = TenantContext.isSuperAdmin() && dto.getCompanyId() != null
-                ? dto.getCompanyId()
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        assertWritableContext();
+        if (dto == null) throw new IllegalArgumentException("Ticket request is required.");
+        dto.validate();
+        Long companyId = dto.getCompanyId() != null ? dto.getCompanyId() : TenantContext.getCompanyId();
+        TenantContext.assertAccessTo(companyId);
 
         // Enforce Subscription Status and Monthly Ticket Quota
         subscriptionService.assertCanCreateTicket(companyId);
@@ -98,8 +95,8 @@ public class TicketController {
             @PathVariable Long id,
             @RequestBody TicketReplyDto dto
     ) {
+        assertWritableContext();
         Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
 
         // Check if workspace is locked (read-only mode)
         if (subscriptionService.isWorkspaceLocked(ticket.getCompany().getId())) {
@@ -114,9 +111,8 @@ public class TicketController {
             @PathVariable Long id,
             @RequestParam String status
     ) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
-        return ResponseEntity.ok(ticketService.updateStatus(id, Ticket.TicketStatus.valueOf(status.toUpperCase())));
+        if (status == null || status.length() > 32) throw new IllegalArgumentException("Invalid ticket status.");
+        return ResponseEntity.ok(ticketService.updateStatus(id, Ticket.TicketStatus.valueOf(status.trim().toUpperCase(Locale.ROOT))));
     }
 
     @PatchMapping("/{id}/priority")
@@ -124,9 +120,8 @@ public class TicketController {
             @PathVariable Long id,
             @RequestParam String priority
     ) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
-        return ResponseEntity.ok(ticketService.updatePriority(id, Ticket.TicketPriority.valueOf(priority.toUpperCase())));
+        if (priority == null || priority.length() > 16) throw new IllegalArgumentException("Invalid ticket priority.");
+        return ResponseEntity.ok(ticketService.updatePriority(id, Ticket.TicketPriority.valueOf(priority.trim().toUpperCase(Locale.ROOT))));
     }
 
     @PatchMapping("/{id}/department")
@@ -134,8 +129,6 @@ public class TicketController {
             @PathVariable Long id,
             @RequestParam Long departmentId
     ) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
         return ResponseEntity.ok(ticketService.updateDepartment(id, departmentId));
     }
 
@@ -144,20 +137,11 @@ public class TicketController {
             @PathVariable Long id,
             @RequestParam Long agentId
     ) {
-        Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
         return ResponseEntity.ok(ticketService.assignAgent(id, agentId));
     }
 
     @PostMapping("/bulk")
     public ResponseEntity<String> bulkUpdateTickets(@RequestBody BulkUpdateDto dto) {
-        // Enforce that all tickets in the bulk list belong to the caller's tenant
-        if (dto.getTicketIds() != null) {
-            for (Long ticketId : dto.getTicketIds()) {
-                Ticket t = ticketService.getTicketById(ticketId);
-                TenantContext.assertAccessTo(t.getCompany().getId());
-            }
-        }
         ticketService.bulkUpdate(dto);
         return ResponseEntity.ok("Bulk update completed successfully");
     }
@@ -167,8 +151,18 @@ public class TicketController {
             @PathVariable Long id,
             @RequestBody ScenarioExecuteDto dto
     ) {
+        assertWritableContext();
         Ticket ticket = ticketService.getTicketById(id);
-        TenantContext.assertAccessTo(ticket.getCompany().getId());
+        if (subscriptionService.isWorkspaceLocked(ticket.getCompany().getId())) {
+            throw new IllegalStateException("Workspace is locked. Cannot execute scenarios.");
+        }
         return ResponseEntity.ok(ticketService.executeScenario(id, dto));
+    }
+
+    private void assertWritableContext() {
+        TenantContext.requireUserId();
+        if ("LIGHT_AGENT".equals(TenantContext.getUserRole())) {
+            throw new SecurityException("Light agents have read-only ticket access.");
+        }
     }
 }

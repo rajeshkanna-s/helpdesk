@@ -1,6 +1,7 @@
 package com.kuwy.helpdesk.services;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kuwy.helpdesk.dto.CustomerContactDto;
 import com.kuwy.helpdesk.dto.KbArticleDto;
@@ -37,11 +38,15 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public List<Company> getAllCompanies() {
+        if (!TenantContext.isSuperAdmin()) {
+            throw new SecurityException("Only a platform administrator can list workspaces.");
+        }
         return companyRepository.findAll();
     }
 
     @Transactional(readOnly = true)
     public Company getCompanyById(Long id) {
+        TenantContext.assertAccessTo(id);
         return companyRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Company not found: " + id));
     }
@@ -54,19 +59,22 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public List<Department> getDepartments(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         return departmentRepository.findByCompanyIdAndIsActiveTrue(companyId);
     }
 
     @Transactional(readOnly = true)
     public List<User> getAgents(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         return userRepository.findByCompanyIdAndIsActiveTrue(companyId);
     }
 
     @Transactional(readOnly = true)
     public List<KbArticleDto> getKbArticles(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         String sql = "SELECT a.id, a.category_id, c.name as category_name, a.title, a.slug, a.content_html, a.view_count, a.helpful_votes " +
                      "FROM kb_articles a " +
-                     "JOIN kb_categories c ON a.category_id = c.id " +
+                     "JOIN kb_categories c ON a.category_id = c.id AND c.company_id = a.company_id " +
                      "WHERE a.company_id = ? AND a.status = 'PUBLISHED' " +
                      "ORDER BY c.display_order ASC, a.title ASC";
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
@@ -85,19 +93,30 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getKbCategories(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         String sql = "SELECT id, name, slug, description, display_order FROM kb_categories WHERE company_id = ? ORDER BY display_order ASC";
         return jdbcTemplate.queryForList(sql, companyId);
     }
 
     @Transactional
     public KbArticleDto createKbArticle(Long companyId, SaveKbArticleRequest req) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        Long catId = req.getCategoryId();
+        if (catId == null) {
+            catId = jdbcTemplate.queryForList(
+                    "SELECT id FROM kb_categories WHERE company_id = ? ORDER BY display_order ASC, id ASC LIMIT 1",
+                    Long.class, companyId).stream().findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("A category in this workspace is required."));
+        }
+        validateTenantReferences(companyId, Map.of("categoryId", catId));
+        Long authorId = TenantContext.requireUserId();
+        String catName = jdbcTemplate.queryForObject(
+                "SELECT name FROM kb_categories WHERE id = ? AND company_id = ?", String.class, catId, companyId);
         String slug = req.getSlug();
         if (slug == null || slug.isBlank()) {
             slug = req.getTitle().toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
         }
-        Long catId = req.getCategoryId() != null ? req.getCategoryId() : 1L;
         String status = req.getStatus() != null ? req.getStatus() : "PUBLISHED";
-        Long authorId = TenantContext.getUserId() != null ? TenantContext.getUserId() : 1L;
 
         jdbcTemplate.update(
             "INSERT INTO kb_articles (company_id, category_id, author_id, title, slug, content_html, status, view_count, helpful_votes, unhelpful_votes, created_at, updated_at) " +
@@ -106,10 +125,6 @@ public class CompanyService {
         );
         Long id = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
         
-        String catName = jdbcTemplate.queryForObject(
-            "SELECT name FROM kb_categories WHERE id = ?", String.class, catId
-        );
-
         KbArticleDto dto = new KbArticleDto();
         dto.setId(id);
         dto.setCategoryId(catId);
@@ -124,12 +139,13 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public List<CustomerContactDto> getCustomers(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         String sql = "SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.created_at, " +
                      "       a.id as account_id, a.account_name, " +
                      "       COUNT(t.id) as total_tickets, " +
                      "       SUM(CASE WHEN t.status IN ('OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER') THEN 1 ELSE 0 END) as open_tickets " +
                      "FROM contacts c " +
-                     "LEFT JOIN customer_accounts a ON c.account_id = a.id " +
+                     "LEFT JOIN customer_accounts a ON c.account_id = a.id AND a.company_id = c.company_id " +
                      "LEFT JOIN tickets t ON t.contact_id = c.id AND t.company_id = c.company_id " +
                      "WHERE c.company_id = ? " +
                      "GROUP BY c.id, c.first_name, c.last_name, c.email, c.phone, c.created_at, a.id, a.account_name " +
@@ -155,7 +171,11 @@ public class CompanyService {
 
     @Transactional
     public CustomerContactDto createCustomer(Long companyId, CustomerContactDto req) {
+        TenantContext.assertAccessTo(companyId);
         Long accountId = req.getAccountId();
+        if (accountId != null) {
+            validateTenantReferences(companyId, Map.of("accountId", accountId));
+        }
         if (accountId == null && req.getOrganization() != null && !req.getOrganization().isBlank()) {
             List<Long> accIds = jdbcTemplate.query(
                 "SELECT id FROM customer_accounts WHERE company_id = ? AND account_name = ?",
@@ -182,35 +202,32 @@ public class CompanyService {
         return req;
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<Notification> getNotifications(Long companyId, Long userId) {
-        List<Notification> list = notificationRepository.findByCompanyIdOrderByCreatedAtDesc(companyId);
-        if (list.isEmpty()) {
-            jdbcTemplate.update(
-                "INSERT INTO notifications (company_id, user_id, ticket_id, title, message, is_read, created_at) VALUES " +
-                "(?, ?, 1, 'New Ticket Raised', 'Priya Natarajan raised #KUWY-1012: Need urgent verification of vehicle registration certificate', 0, NOW()), " +
-                "(?, ?, 2, 'SLA Resolution Advisory', 'Ticket #KUWY-1010 has 2 hours remaining before resolution SLA threshold', 0, NOW()), " +
-                "(?, ?, 3, 'Inbound Reply Recorded', 'Customer reply received on ticket #KUWY-1002 from Rajesh Sundaram', 0, NOW())",
-                companyId, (userId != null ? userId : 1L),
-                companyId, (userId != null ? userId : 1L),
-                companyId, (userId != null ? userId : 1L)
-            );
-            list = notificationRepository.findByCompanyIdOrderByCreatedAtDesc(companyId);
+        TenantContext.assertAccessTo(companyId);
+        Long recipientId = TenantContext.requireUserId();
+        if (userId != null && !recipientId.equals(userId)) {
+            throw new SecurityException("Notifications belong to the current recipient only.");
         }
-        return list;
+        return notificationRepository.findByCompanyIdAndUserIdOrderByCreatedAtDesc(companyId, recipientId);
     }
 
     @Transactional
-    public void markNotificationRead(Long id) {
-        notificationRepository.findById(id).ifPresent(n -> {
-            n.setIsRead(true);
-            notificationRepository.save(n);
-        });
+    public void markNotificationRead(Long companyId, Long id) {
+        TenantContext.assertAccessTo(companyId);
+        Long recipientId = TenantContext.requireUserId();
+        Notification notification = notificationRepository.findById(id)
+                .filter(n -> companyId.equals(n.getCompanyId()) && recipientId.equals(n.getUserId()))
+                .orElseThrow(() -> new SecurityException("Notification not found for the current recipient."));
+        notification.setIsRead(true);
+        notificationRepository.save(notification);
     }
 
     @Transactional
     public void markAllNotificationsRead(Long companyId) {
-        jdbcTemplate.update("UPDATE notifications SET is_read = 1 WHERE company_id = ?", companyId);
+        TenantContext.assertAccessTo(companyId);
+        jdbcTemplate.update("UPDATE notifications SET is_read = 1 WHERE company_id = ? AND user_id = ?",
+                companyId, TenantContext.requireUserId());
     }
 
     // =========================================================================
@@ -219,6 +236,7 @@ public class CompanyService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> getCompanySettings(Long companyId) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
         Map<String, Object> settings = new HashMap<>();
 
@@ -237,6 +255,7 @@ public class CompanyService {
 
     @Transactional
     public Map<String, Object> updateCompanySettings(Long companyId, Map<String, Object> payload) {
+        TenantContext.assertCompanyAdminAccessTo(companyId);
         Company company = getCompanyById(companyId);
 
         // Sync top-level branding/profile fields if provided
@@ -278,59 +297,28 @@ public class CompanyService {
 
     @Transactional
     public SecurityAuditLog recordAuditLog(Long companyId, String action, String details, String ipAddress, String userAgent) {
+        TenantContext.assertAccessTo(companyId);
         SecurityAuditLog logEntry = new SecurityAuditLog();
         logEntry.setCompanyId(companyId);
-        logEntry.setUserId(TenantContext.getUserId());
+        logEntry.setUserId(TenantContext.requireUserId());
         logEntry.setAction(action);
         logEntry.setEmail(TenantContext.getUserEmail());
-        logEntry.setIpAddress(ipAddress != null ? ipAddress : "127.0.0.1");
-        logEntry.setUserAgent(userAgent != null ? userAgent : "Browser / Antigravity UI");
+        logEntry.setIpAddress(ipAddress);
+        logEntry.setUserAgent(userAgent);
         logEntry.setDetails(details);
         return securityAuditLogRepository.save(logEntry);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<SecurityAuditLog> getAuditLogs(Long companyId) {
-        List<SecurityAuditLog> logs = securityAuditLogRepository.findTop50ByCompanyIdOrderByCreatedAtDesc(companyId);
-        if (logs.isEmpty()) {
-            // Seed realistic initial audit events
-            jdbcTemplate.update(
-                "INSERT INTO security_audit_logs (company_id, user_id, action, email, ip_address, user_agent, details, created_at) VALUES " +
-                "(?, 1, 'WORKSPACE_INITIALIZED', 'admin@kuwy.in', '10.0.0.1', 'Chrome/124.0.0', 'Workspace created with enterprise SLA policy and default mailbox', NOW() - INTERVAL 5 DAY), " +
-                "(?, 1, 'SECURITY_POLICY_ENFORCED', 'admin@kuwy.in', '10.0.0.1', 'Chrome/124.0.0', 'Two-factor authentication requirement enabled for all administrators', NOW() - INTERVAL 2 DAY), " +
-                "(?, 1, 'SLA_TARGET_UPDATED', 'admin@kuwy.in', '10.0.0.1', 'Chrome/124.0.0', 'Urgent priority resolution target set to 2 hours with business hours counting', NOW() - INTERVAL 12 HOUR)",
-                companyId, companyId, companyId
-            );
-            logs = securityAuditLogRepository.findTop50ByCompanyIdOrderByCreatedAtDesc(companyId);
-        }
-        return logs;
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        return securityAuditLogRepository.findTop50ByCompanyIdOrderByCreatedAtDesc(companyId);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<CompanyMailbox> getCompanyMailboxes(Long companyId) {
-        List<CompanyMailbox> mailboxes = companyMailboxRepository.findByCompanyId(companyId);
-        if (mailboxes.isEmpty()) {
-            Company company = getCompanyById(companyId);
-            Department defaultDept = departmentRepository.findByCompanyIdAndIsActiveTrue(companyId).stream().findFirst().orElse(null);
-
-            CompanyMailbox primary = new CompanyMailbox();
-            primary.setCompany(company);
-            primary.setDepartment(defaultDept);
-            primary.setMailboxName(company.getName() + " Support");
-            primary.setEmailAddress("support@" + company.getSubdomain() + ".com");
-            primary.setForwardingAddress("in-" + company.getSubdomain() + "-" + UUID.randomUUID().toString().substring(0, 8) + "@in.yourhelpdesk.com");
-            primary.setForwardingVerified(true);
-            primary.setProviderType(CompanyMailbox.MailProviderType.FORWARDING);
-            primary.setAuthType(CompanyMailbox.AuthType.FORWARD_ONLY);
-            primary.setSyncStatus(CompanyMailbox.SyncStatus.CONNECTED);
-            primary.setSendAsName(company.getName() + " HelpDesk");
-            primary.setIsActive(true);
-            primary.setLastSyncedAt(LocalDateTime.now().minusMinutes(14));
-            companyMailboxRepository.save(primary);
-
-            mailboxes = companyMailboxRepository.findByCompanyId(companyId);
-        }
-        return mailboxes;
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        return companyMailboxRepository.findByCompanyId(companyId);
     }
 
     @Transactional
