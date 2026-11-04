@@ -21,6 +21,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -132,9 +133,23 @@ class InvitationControllerSecurityTest {
         AcceptInvitationRequest request = new AcceptInvitationRequest();
         request.setToken(raw);
         when(invitations.acceptInvitation(request, http)).thenReturn(login);
-        assertSame(validation, controller.validateInvitation(raw).getBody());
+        assertSame(validation, controller.validateInvitation(Map.of("token", raw)).getBody());
         assertSame(login, controller.acceptInvitation(request, http).getBody());
         assertNull(TenantContext.getUserId());
+    }
+
+    @Test
+    void validationReceivesTheTokenOnlyInThePostBody() throws Exception {
+        String raw = "a1".repeat(32);
+        when(invitations.validateInvitation(raw)).thenReturn(
+                InvitationValidationResponse.builder().valid(true).status("VALID").build());
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+        mvc.perform(post("/api/v1/invitations/validate").contentType("application/json")
+                        .content("{\"token\":\"" + raw + "\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.token").doesNotExist());
+        mvc.perform(get("/api/v1/invitations/validate")).andExpect(status().isMethodNotAllowed());
+        verify(invitations).validateInvitation(raw);
     }
 
     private void actor(String role) {

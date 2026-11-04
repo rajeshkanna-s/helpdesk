@@ -43,12 +43,12 @@ public class MultiTenantSecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/error").permitAll()
                 .requestMatchers(HttpMethod.GET,
-                        "/api/v1/auth/validate-reset-token", "/api/v1/auth/lookup-workspace",
-                        "/api/v1/invitations/validate", "/api/v1/onboarding/check-subdomain",
+                        "/api/v1/auth/lookup-workspace", "/api/v1/onboarding/check-subdomain",
                         "/api/v1/onboarding/plans", "/api/v1/portal/*", "/api/v1/portal/*/kb/articles").permitAll()
                 .requestMatchers(HttpMethod.POST,
                         "/api/v1/auth/login", "/api/v1/auth/verify-2fa",
                         "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+                        "/api/v1/auth/validate-reset-token", "/api/v1/invitations/validate",
                         "/api/v1/invitations/accept", "/api/v1/onboarding/send-verification",
                         "/api/v1/onboarding/signup", "/api/v1/onboarding/calculate-checkout",
                         "/api/v1/portal/*/request-otp", "/api/v1/portal/*/verify-otp",

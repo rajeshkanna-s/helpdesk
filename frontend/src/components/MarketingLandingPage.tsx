@@ -26,7 +26,10 @@ export const MarketingLandingPage: React.FC<MarketingLandingPageProps> = ({
   const [cookieAccepted, setCookieAccepted] = useState<boolean>(() => {
     return localStorage.getItem('kuwy_cookie_consent') === 'true';
   });
-  const [activeLegalModal, setActiveLegalModal] = useState<'terms' | 'privacy' | 'refund' | null>(null);
+  const [activeLegalModal, setActiveLegalModal] = useState<'terms' | 'privacy' | 'refund' | null>(() => {
+    const document = new URLSearchParams(window.location.search).get('legal');
+    return document === 'terms' || document === 'privacy' || document === 'refund' ? document : null;
+  });
 
   const toggleFaq = (idx: number) => {
     setOpenFaq(prev => prev === idx ? null : idx);

@@ -7,6 +7,7 @@ import com.kuwy.helpdesk.dto.TicketReplyDto;
 import com.kuwy.helpdesk.models.*;
 import com.kuwy.helpdesk.repositories.*;
 import com.kuwy.helpdesk.tenant.TenantContext;
+import com.kuwy.helpdesk.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -160,9 +161,13 @@ public class TicketService {
         ticket.setTicketNumber(ticketNumber);
         ticket.setDepartment(department);
         ticket.setContact(contact);
-        ticket.setSubject(dto.getSubject());
-        ticket.setDescriptionText(dto.getDescription());
-        ticket.setDescriptionHtml("<p>" + dto.getDescription() + "</p>");
+        String safeDescriptionHtml = HtmlSanitizer.clean(dto.getDescription());
+        if (!safeDescriptionHtml.startsWith("<p>")) {
+            safeDescriptionHtml = "<p>" + safeDescriptionHtml + "</p>";
+        }
+        ticket.setSubject(HtmlSanitizer.cleanToPlainText(dto.getSubject()));
+        ticket.setDescriptionText(HtmlSanitizer.cleanToPlainText(dto.getDescription()));
+        ticket.setDescriptionHtml(safeDescriptionHtml);
         ticket.setPriority(dto.getPriority() != null ? dto.getPriority() : Ticket.TicketPriority.MEDIUM);
         ticket.setStatus(Ticket.TicketStatus.OPEN);
         ticket.setChannel(dto.getChannel() != null ? dto.getChannel() : Ticket.TicketChannel.WEB_PORTAL);
@@ -181,9 +186,9 @@ public class TicketService {
         initialThread.setSenderContact(contact);
         initialThread.setFromEmail(dto.getRequesterEmail());
         initialThread.setFromName(contact.getFirstName());
-        initialThread.setSubject(dto.getSubject());
-        initialThread.setBodyText(dto.getDescription());
-        initialThread.setBodyHtml("<p>" + dto.getDescription() + "</p>");
+        initialThread.setSubject(ticket.getSubject());
+        initialThread.setBodyText(ticket.getDescriptionText());
+        initialThread.setBodyHtml(safeDescriptionHtml);
         initialThread.setIsPrivate(false);
         threadRepository.save(initialThread);
 
@@ -201,8 +206,12 @@ public class TicketService {
         thread.setCompany(ticket.getCompany());
         thread.setTicket(ticket);
         thread.setSubject(replySubject(ticket));
-        thread.setBodyText(dto.getBody());
-        thread.setBodyHtml("<p>" + dto.getBody() + "</p>");
+        String safeReplyBody = HtmlSanitizer.clean(dto.getBody());
+        if (!safeReplyBody.startsWith("<p>")) {
+            safeReplyBody = "<p>" + safeReplyBody + "</p>";
+        }
+        thread.setBodyText(HtmlSanitizer.cleanToPlainText(dto.getBody()));
+        thread.setBodyHtml(safeReplyBody);
         thread.setIsPrivate(Boolean.TRUE.equals(dto.getIsPrivate()));
         setAuthor(thread, actor);
 
@@ -334,12 +343,14 @@ public class TicketService {
         Ticket.TicketStatus status = ticket.getStatus();
         Ticket.TicketPriority priority = ticket.getPriority();
         boolean resolved = false;
+        String companyName = ticket.getCompany() != null && ticket.getCompany().getName() != null
+                ? ticket.getCompany().getName() : "Support Team";
 
         switch (dto.getScenarioKey().trim()) {
             case "KYC_RESUBMIT":
                 status = Ticket.TicketStatus.WAITING_ON_CUSTOMER;
                 priority = Ticket.TicketPriority.HIGH;
-                replyText = "Hello " + ticket.getContact().getFirstName() + ",\n\nWe have reviewed your application and noticed a verification discrepancy with your submitted KYC documents. Please re-upload clear copies of your PAN and Aadhaar cards through our partner portal.\n\nThank you,\nKuwy Support Team";
+                replyText = "Hello " + ticket.getContact().getFirstName() + ",\n\nWe have reviewed your request and noticed a verification discrepancy with your submitted documents. Please re-upload clear copies through our portal.\n\nThank you,\n" + companyName;
                 isReply = true;
                 break;
             case "ESCALATE_LEAD":
@@ -350,7 +361,7 @@ public class TicketService {
             case "LOAN_APPROVED":
                 status = Ticket.TicketStatus.RESOLVED;
                 resolved = true;
-                replyText = "Dear " + ticket.getContact().getFirstName() + ",\n\nCongratulations! Your loan verification has been successfully approved by the underwriting team. Please refer to your application for disbursement details.\n\nRegards,\nKuwy Finance Operations";
+                replyText = "Dear " + ticket.getContact().getFirstName() + ",\n\nCongratulations! Your application and request have been successfully approved by the operations team.\n\nRegards,\n" + companyName;
                 isReply = true;
                 break;
             case "CUSTOMER_INACTIVE":
@@ -378,7 +389,12 @@ public class TicketService {
         if (isReply) thread.setToEmails(ticket.getContact().getEmail());
         thread.setSubject(isReply ? replySubject(ticket) : "Internal Note: Scenario Executed");
         thread.setBodyText(isReply ? replyText : noteText);
-        thread.setBodyHtml("<p>" + (isReply ? replyText.replace("\n", "<br/>") : noteText) + "</p>");
+        String rawBody = isReply ? replyText.replace("\n", "<br/>") : noteText;
+        String safeBody = HtmlSanitizer.clean(rawBody);
+        if (!safeBody.startsWith("<p>")) {
+            safeBody = "<p>" + safeBody + "</p>";
+        }
+        thread.setBodyHtml(safeBody);
         thread.setIsPrivate(!isReply);
         threadRepository.save(thread);
 

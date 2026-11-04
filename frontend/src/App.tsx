@@ -1,16 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { apiService, setApiTenantId, setAuthToken } from './services/api';
 import type { Company, AuthUser, LoginResponse } from './types';
 import { LoginPage } from './components/LoginPage';
-import { SuperAdminPortal } from './components/SuperAdminPortal';
-import { CompanyWorkspace } from './components/CompanyWorkspace';
-import { CustomerPortal } from './components/CustomerPortal';
-import { OnboardingModal } from './components/OnboardingModal';
 import { MarketingLandingPage } from './components/MarketingLandingPage';
-import { PricingPage } from './components/PricingPage';
-import { CheckoutModal } from './components/CheckoutModal';
+
+const SuperAdminPortal = lazy(() => import('./components/SuperAdminPortal').then(module => ({ default: module.SuperAdminPortal })));
+const CompanyWorkspace = lazy(() => import('./components/CompanyWorkspace').then(module => ({ default: module.CompanyWorkspace })));
+const CustomerPortal = lazy(() => import('./components/CustomerPortal').then(module => ({ default: module.CustomerPortal })));
+const ResetPasswordPage = lazy(() => import('./components/ResetPasswordPage').then(module => ({ default: module.ResetPasswordPage })));
+const AcceptInvitationPage = lazy(() => import('./components/AcceptInvitationPage').then(module => ({ default: module.AcceptInvitationPage })));
+const OnboardingModal = lazy(() => import('./components/OnboardingModal').then(module => ({ default: module.OnboardingModal })));
+const PricingPage = lazy(() => import('./components/PricingPage').then(module => ({ default: module.PricingPage })));
+const CheckoutModal = lazy(() => import('./components/CheckoutModal').then(module => ({ default: module.CheckoutModal })));
 
 export default function App() {
+  return <Suspense fallback={<div className="app-route-loading" role="status"><span className="spinner-border spinner-border-sm" aria-hidden="true" />Loading your workspace...</div>}><AppRoutes /></Suspense>;
+}
+
+function AppRoutes() {
   const [pathname, setPathname] = useState<string>(() => window.location.pathname || '/');
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
@@ -48,14 +55,17 @@ export default function App() {
 
   // Navigate helper that updates browser address bar and triggers component rerender
   const navigate = (path: string) => {
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, '', path);
-      setPathname(path);
+    const target = new URL(path, window.location.origin);
+    if (target.origin !== window.location.origin) return;
+    if (window.location.href !== target.href) {
+      window.history.pushState(null, '', target.pathname + target.search + target.hash);
+      setPathname(target.pathname);
     }
   };
 
   // Load companies
   useEffect(() => {
+    if (['/reset-password', '/accept-invitation'].includes(window.location.pathname.toLowerCase().replace(/\/+$/, ''))) return;
     loadCompanies();
   }, []);
 
@@ -73,13 +83,16 @@ export default function App() {
   const isAdminConsoleRoute = normalizedPath === '/adminconsole';
   const isSignupRoute = normalizedPath === '/signup';
   const isPricingRoute = normalizedPath === '/pricing';
+  const isLoginRoute = normalizedPath === '/login';
+  const isResetPasswordRoute = normalizedPath === '/reset-password';
+  const isAcceptInvitationRoute = normalizedPath === '/accept-invitation';
 
   // Check company admin route match: e.g. /kuwy/admin or /acme/admin
   const companyAdminMatch = normalizedPath.match(/^\/([^/]+)\/admin$/);
   const companyAdminSlug = companyAdminMatch ? companyAdminMatch[1] : null;
 
   // Check customer portal route match: e.g. /kuwy, /kuwy/ticket, /kuwy/ticketstatus, /kuwy/portal
-  const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !isPricingRoute && !companyAdminSlug && normalizedPath !== '/';
+  const isCustomerPortalRoute = !isAdminConsoleRoute && !isSignupRoute && !isPricingRoute && !isLoginRoute && !isResetPasswordRoute && !isAcceptInvitationRoute && !companyAdminSlug && normalizedPath !== '/';
   const customerPortalMatch = isCustomerPortalRoute
     ? normalizedPath.match(/^\/([^/]+)(?:\/(ticketstatus|ticket|portal))?$/)
     : null;
@@ -114,7 +127,13 @@ export default function App() {
 
   // Dynamic Browser Tab Title based on Route
   useEffect(() => {
-    if (isAdminConsoleRoute) {
+    if (isResetPasswordRoute) {
+      document.title = 'Reset password | Kuwy HelpDesk';
+    } else if (isAcceptInvitationRoute) {
+      document.title = 'Join your workspace | Kuwy HelpDesk';
+    } else if (isLoginRoute) {
+      document.title = 'Staff sign in | Kuwy HelpDesk';
+    } else if (isAdminConsoleRoute) {
       document.title = 'Admin Console — Multi-Tenant Governance';
     } else if (companyAdminSlug) {
       const compName = activeCompany?.name || (companyAdminSlug.toUpperCase() + ' HelpDesk');
@@ -135,12 +154,28 @@ export default function App() {
     } else {
       document.title = 'Kuwy HelpDesk — Enterprise Multi-Tenant Customer Support Platform';
     }
-  }, [isAdminConsoleRoute, companyAdminSlug, isCustomerPortalRoute, customerPortalSlug, isPricingRoute, isSignupRoute, activeCompany]);
+  }, [isAdminConsoleRoute, companyAdminSlug, isCustomerPortalRoute, customerPortalSlug, isPricingRoute, isSignupRoute, isLoginRoute, isResetPasswordRoute, isAcceptInvitationRoute, activeCompany]);
 
   const handleLoginSuccess = (res: LoginResponse) => {
+    if (!res.token || res.twoFactorRequired) {
+      setAuthToken(null);
+      localStorage.removeItem('kuwy_user');
+      setCurrentUser(null);
+      navigate('/login');
+      return;
+    }
     setAuthToken(res.token || null);
     localStorage.setItem('kuwy_user', JSON.stringify(res));
     setCurrentUser(res as unknown as AuthUser);
+    if (res.company) {
+      const authenticatedCompany = { ...res.company, planName: res.company.planName || 'Not reported' } as Company;
+      setActiveCompany(authenticatedCompany);
+      setApiTenantId(authenticatedCompany.id);
+      setCompanies(previous => previous.some(company => company.id === authenticatedCompany.id)
+        ? previous.map(company => company.id === authenticatedCompany.id ? { ...company, ...authenticatedCompany } : company)
+        : [...previous, authenticatedCompany]);
+    }
+    void loadCompanies();
 
     if (res.roleType === 'SUPER_ADMIN') {
       if (isAdminConsoleRoute) {
@@ -180,6 +215,16 @@ export default function App() {
     status: 'ACTIVE',
     planName: 'ENTERPRISE',
   };
+
+  if (isResetPasswordRoute) {
+    return <ResetPasswordPage onNavigate={navigate} onResetComplete={() => {
+      setAuthToken(null);
+      localStorage.removeItem('kuwy_user');
+      setCurrentUser(null);
+    }} />;
+  }
+  if (isAcceptInvitationRoute) return <AcceptInvitationPage onNavigate={navigate} onLoginSuccess={handleLoginSuccess} />;
+  if (isLoginRoute) return <LoginPage onLoginSuccess={handleLoginSuccess} targetMode="company" onNavigate={navigate} />;
 
   // =========================================================================
   // 1. DEDICATED ROUTE: http://localhost:5174/adminconsole (Admin Console)
@@ -270,7 +315,7 @@ export default function App() {
           }}
           onNavigateToLogin={() => navigate('/kuwy/admin')}
         />
-        <CheckoutModal
+        {showCheckout && <CheckoutModal
           isOpen={showCheckout}
           onClose={() => setShowCheckout(false)}
           initialPlanTier={checkoutPlanTier}
@@ -280,7 +325,7 @@ export default function App() {
             setShowCheckout(false);
             navigate(`/${effectiveCompany.subdomain}/admin`);
           }}
-        />
+        />}
       </>
     );
   }
@@ -323,16 +368,7 @@ export default function App() {
         onNavigateToAdminConsole={() => navigate('/adminconsole')}
         onOpenPortalDemo={(slug = 'kuwy') => navigate(`/${slug}`)}
       />
-      <OnboardingModal
-        isOpen={showOnboarding}
-        defaultPlan={selectedOnboardPlan}
-        onClose={() => setShowOnboarding(false)}
-        onSuccess={(res) => {
-          handleLoginSuccess(res);
-          navigate(`/${res.company?.subdomain || 'kuwy'}/admin`);
-        }}
-      />
-      <CheckoutModal
+      {showCheckout && <CheckoutModal
         isOpen={showCheckout}
         onClose={() => setShowCheckout(false)}
         initialPlanTier={checkoutPlanTier}
@@ -342,7 +378,7 @@ export default function App() {
           setShowCheckout(false);
           navigate(`/${effectiveCompany.subdomain}/admin`);
         }}
-      />
+      />}
     </>
   );
 }

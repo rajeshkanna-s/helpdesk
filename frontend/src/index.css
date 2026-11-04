@@ -1398,3 +1398,39 @@ button.platform-stat-card:hover { border-color: #b9cceb; background: #fcfdff; }
   .platform-stat-grid { grid-template-columns: minmax(0, 1fr); }
   .platform-console .enterprise-content { padding-left: 12px; padding-right: 12px; }
 }
+
+.app-route-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 100vh; min-height: 100dvh; background: #f7f9fc; color: #64748b; font-size: 13px; }
+.account-flow-page { display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; padding: 32px 16px; background: #f7f9fc; color: #203047; }
+.account-flow-card { width: min(100%, 540px); border: 1px solid #e1e8f1; border-radius: 11px; background: #fff; box-shadow: 0 8px 38px #203d600b; overflow: hidden; }
+.account-flow-header { display: flex; align-items: center; gap: 13px; padding: 25px 28px; border-bottom: 1px solid #e5eaf1; background: #fff; color: #203047; }
+.account-flow-header h1, .account-flow-header h2 { margin: 0 0 6px; color: #203047; font-size: 22px; font-weight: 700; letter-spacing: -0.035em; line-height: 1.35; }
+.account-flow-header p { margin: 0; color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-flow-mark { display: inline-flex; align-items: center; justify-content: center; width: 43px; height: 43px; flex-shrink: 0; border-radius: 10px; background: #eef4ff; color: #2563eb; }
+.account-flow-page .card-body { padding: 28px !important; }
+:is(.account-flow-page, .account-flow-dialog) .form-control { min-height: 43px; border-color: #d9e1ec; font-size: 14px; }
+:is(.account-flow-page, .account-flow-dialog) .form-label { font-size: 12px; }
+:is(.account-flow-page, .account-flow-dialog) .input-group-text { background: #fafbfd !important; border-color: #d9e1ec; }
+:is(.account-flow-page, .account-flow-dialog) .btn { min-height: 40px; font-size: 13px; border-radius: 6px; }
+:is(.account-flow-page, .account-flow-dialog) .btn-primary { border: 1px solid #2563eb; background: #2563eb; box-shadow: none; }
+:is(.account-flow-page, .account-flow-dialog) .btn-primary:hover { transform: none; background: #1d4ed8; box-shadow: none; }
+:is(.account-flow-page, .account-flow-dialog) .btn-primary:disabled { border-color: #9db5e8; background: #9db5e8; }
+:is(.account-flow-page, .account-flow-dialog) .btn-link { min-height: 30px; }
+:is(.account-flow-page, .account-flow-dialog) .text-muted { color: #64748b !important; }
+:is(.account-flow-page, .account-flow-dialog) .small { line-height: 1.7; }
+:is(.account-flow-page, .account-flow-dialog) :is(button, a, input):focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.account-flow-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 0; border: 1px solid #e1e8f1; border-radius: 11px; color: #203047; background: #fff; box-shadow: 0 24px 80px #172d4b33; }
+.account-flow-dialog::backdrop { background: #172d4b66; backdrop-filter: blur(3px); }
+.account-flow-dialog .modal-dialog { width: 100%; max-width: none; min-height: 0; margin: 0; }
+.account-flow-dialog .modal-content { border: 0; border-radius: 11px; }
+.account-flow-dialog .account-flow-header { padding-right: 42px; }
+
+@media (max-width: 575px) {
+  .account-flow-page { padding: 20px 12px; }
+  .account-flow-header { padding: 21px 20px; gap: 11px; }
+  .account-flow-header h1, .account-flow-header h2 { font-size: 20px; }
+  .account-flow-page .card-body { padding: 22px 20px !important; }
+  :is(.account-flow-page, .account-flow-dialog) .form-control { font-size: 16px; min-height: 44px; }
+  :is(.account-flow-page, .account-flow-dialog) .btn { min-height: 42px; }
+  .account-flow-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .account-flow-dialog .modal-body { padding: 22px 20px !important; }
+}

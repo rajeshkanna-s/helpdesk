@@ -23,9 +23,9 @@ public class InvitationController {
 
     private final AgentInvitationService invitationService;
 
-    @GetMapping("/validate")
-    public ResponseEntity<InvitationValidationResponse> validateInvitation(@RequestParam("token") String token) {
-        InvitationValidationResponse response = invitationService.validateInvitation(token);
+    @PostMapping("/validate")
+    public ResponseEntity<InvitationValidationResponse> validateInvitation(@RequestBody Map<String, String> request) {
+        InvitationValidationResponse response = invitationService.validateInvitation(request != null ? request.get("token") : null);
         return ResponseEntity.ok(response);
     }
 

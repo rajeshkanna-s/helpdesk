@@ -16,6 +16,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.springframework.web.server.ResponseStatusException;
+
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -70,6 +72,13 @@ public class AttachmentController {
     @GetMapping("/tickets/{ticketId}/attachments")
     public ResponseEntity<List<TicketAttachment>> getTicketAttachments(@PathVariable Long ticketId) {
         Ticket ticket = ticketService.getTicketById(ticketId);
+        String role = TenantContext.getUserRole();
+        if ("ROLE_CUSTOMER".equalsIgnoreCase(role) || "CUSTOMER".equalsIgnoreCase(role)) {
+            String customerEmail = TenantContext.getUserEmail();
+            if (customerEmail == null || ticket.getContact() == null || !customerEmail.equalsIgnoreCase(ticket.getContact().getEmail())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied to ticket attachments.");
+            }
+        }
         TenantContext.assertAccessTo(ticket.getCompany().getId());
         return ResponseEntity.ok(attachmentService.getAttachmentsForTicket(ticketId));
     }
@@ -77,11 +86,7 @@ public class AttachmentController {
     @GetMapping("/attachments/{id}/download")
     public ResponseEntity<Resource> downloadAttachment(@PathVariable Long id) throws IOException {
         TicketAttachment attachment = attachmentService.getAttachmentById(id);
-
-        // Verify tenant authorization if an authenticated user session is active
-        if (TenantContext.getCompanyId() != null) {
-            TenantContext.assertAccessTo(attachment.getCompany().getId());
-        }
+        authorizeAttachmentAccess(attachment);
 
         Resource resource = attachmentService.getResourceForAttachment(attachment);
 
@@ -102,10 +107,7 @@ public class AttachmentController {
     @GetMapping("/attachments/{id}/preview")
     public ResponseEntity<Resource> previewAttachment(@PathVariable Long id) throws IOException {
         TicketAttachment attachment = attachmentService.getAttachmentById(id);
-
-        if (TenantContext.getCompanyId() != null) {
-            TenantContext.assertAccessTo(attachment.getCompany().getId());
-        }
+        authorizeAttachmentAccess(attachment);
 
         Resource resource = attachmentService.getResourceForAttachment(attachment);
 
@@ -125,8 +127,33 @@ public class AttachmentController {
     @DeleteMapping("/attachments/{id}")
     public ResponseEntity<Void> deleteAttachment(@PathVariable Long id) {
         TicketAttachment attachment = attachmentService.getAttachmentById(id);
-        TenantContext.assertAccessTo(attachment.getCompany().getId());
+        authorizeAttachmentAccess(attachment);
         attachmentService.deleteAttachment(id);
         return ResponseEntity.noContent().build();
+    }
+
+    private void authorizeAttachmentAccess(TicketAttachment attachment) {
+        if (attachment == null || attachment.getCompany() == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Attachment not found.");
+        }
+        Long companyId = attachment.getCompany().getId();
+
+        // 1. If portal customer: verify that requester email matches authenticated customer email
+        String role = TenantContext.getUserRole();
+        if ("ROLE_CUSTOMER".equalsIgnoreCase(role) || "CUSTOMER".equalsIgnoreCase(role)) {
+            String customerEmail = TenantContext.getUserEmail();
+            if (customerEmail == null || attachment.getTicket() == null || attachment.getTicket().getContact() == null
+                    || !customerEmail.equalsIgnoreCase(attachment.getTicket().getContact().getEmail())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied to attachment.");
+            }
+            TenantContext.assertAccessTo(companyId);
+            return;
+        }
+
+        // 2. If staff or super admin: require valid authenticated user session and verify company access
+        if (TenantContext.getUserId() == null && TenantContext.getUserEmail() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required to access attachments.");
+        }
+        TenantContext.assertAccessTo(companyId);
     }
 }

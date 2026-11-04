@@ -40,3 +40,4 @@ public final class HtmlSanitizer {
         return Jsoup.clean(input, Safelist.none());
     }
 }
+

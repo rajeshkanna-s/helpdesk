@@ -703,7 +703,19 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             }}
             style={{ cursor: 'pointer', maxWidth: 'calc(100% - 95px)' }}
           >
-            {company?.logoUrl && !logoFailed && companySlug !== 'kuwy' ? (
+            {companySlug === 'kuwy' ? (
+              <div
+                className="rounded-3 text-white d-flex align-items-center justify-content-center shadow-xs flex-shrink-0 fw-bold"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  background: 'linear-gradient(135deg, #0d6efd 0%, #004ecc 100%)',
+                  boxShadow: '0 2px 8px rgba(13, 110, 253, 0.25)',
+                }}
+              >
+                <span style={{ fontSize: '1.05rem', fontWeight: 800, letterSpacing: '-0.03em' }}>K</span>
+              </div>
+            ) : company?.logoUrl && !logoFailed ? (
               <img
                 src={company.logoUrl}
                 alt=""
@@ -726,7 +738,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             )}
             <div className="text-truncate">
               <h5 className="fw-bolder mb-0 text-dark text-truncate" style={{ letterSpacing: '-0.02em', fontSize: '0.96rem' }}>
-                {company?.name || 'Customer Support'}
+                {company?.name || (companySlug === 'kuwy' ? 'Kuwy Technology Services Pvt Ltd' : 'Customer Support')}
               </h5>
               <small className="text-muted d-none d-sm-block text-truncate" style={{ fontSize: '0.7rem', marginTop: '-2px' }}>
                 Official Help Center & Support Portal
@@ -2230,7 +2242,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
-                onClick={() => setActiveTab('home')}
+                onClick={() => {
+                  setActiveTab('home');
+                  onNavigate?.('/' + companySlug);
+                }}
               >
                 <ArrowLeft size={15} /> Back to Home
               </button>

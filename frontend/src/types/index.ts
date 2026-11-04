@@ -128,7 +128,7 @@ export interface AuthUser {
   firstName: string;
   lastName: string;
   displayName: string;
-  roleType: 'SUPER_ADMIN' | 'COMPANY_ADMIN' | 'AGENT' | 'CUSTOMER';
+  roleType: 'SUPER_ADMIN' | 'COMPANY_ADMIN' | 'TEAM_LEAD' | 'AGENT' | 'LIGHT_AGENT' | 'CUSTOMER';
   roleName: string;
   company?: {
     id: number;
@@ -137,6 +137,7 @@ export interface AuthUser {
     subdomain: string;
     status: string;
     primaryColor: string;
+    planName?: string;
   };
 }
 

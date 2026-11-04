@@ -1,18 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   KeyRound, Lock, Eye, EyeOff, CheckCircle2, XCircle, AlertCircle,
   ShieldCheck, ArrowRight, ArrowLeft
 } from 'lucide-react';
 import { apiService } from '../services/api';
+import { useAuthLinkToken } from '../utils/useAuthLinkToken';
 
 interface ResetPasswordPageProps {
   onNavigate: (path: string) => void;
+  onResetComplete?: () => void;
 }
 
-export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate }) => {
-  const [token, setToken] = useState<string>('');
+export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate, onResetComplete }) => {
+  const token = useAuthLinkToken('/reset-password');
+  const validationRequest = useRef(0);
   const [isValidating, setIsValidating] = useState<boolean>(true);
-  const [tokenStatus, setTokenStatus] = useState<'VALID' | 'EXPIRED' | 'USED' | 'NOT_FOUND' | null>(null);
+  const [tokenStatus, setTokenStatus] = useState<'VALID' | 'EXPIRED' | 'USED' | 'NOT_FOUND' | 'UNAVAILABLE' | null>(null);
   const [maskedEmail, setMaskedEmail] = useState<string>('');
   const [validationError, setValidationError] = useState<string>('');
 
@@ -25,24 +28,29 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
   const [isSuccess, setIsSuccess] = useState(false);
 
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const tokenParam = urlParams.get('token');
-    if (!tokenParam) {
+    setIsSuccess(false);
+    setNewPassword('');
+    setConfirmPassword('');
+    setSubmitError(null);
+    setMaskedEmail('');
+    if (!token) {
       setIsValidating(false);
       setTokenStatus('NOT_FOUND');
-      setValidationError('No reset token was provided in the URL.');
+      setValidationError('Open the complete reset link from your email to continue.');
       return;
     }
 
-    setToken(tokenParam);
-    validateToken(tokenParam);
-  }, []);
+    validateToken(token);
+    return () => { validationRequest.current += 1; };
+  }, [token]);
 
   const validateToken = async (tok: string) => {
+    const requestId = ++validationRequest.current;
     setIsValidating(true);
     setValidationError('');
     try {
       const res = await apiService.validateResetToken(tok);
+      if (requestId !== validationRequest.current) return;
       if (res.valid) {
         setTokenStatus('VALID');
         if (res.email) setMaskedEmail(res.email);
@@ -51,42 +59,36 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
         setValidationError(res.message || 'This reset link is either invalid or expired.');
       }
     } catch (err: any) {
-      setTokenStatus('NOT_FOUND');
-      setValidationError(err.response?.data?.error || 'Failed to validate reset link.');
+      if (requestId !== validationRequest.current) return;
+      setTokenStatus('UNAVAILABLE');
+      setValidationError(err.response?.data?.message || err.response?.data?.error || 'We could not check this link right now. Please try again.');
     } finally {
-      setIsValidating(false);
+      if (requestId === validationRequest.current) setIsValidating(false);
     }
   };
 
   // Password rules validation
-  const hasMinLength = newPassword.length >= 10;
-  const hasUpper = /[A-Z]/.test(newPassword);
-  const hasLower = /[a-z]/.test(newPassword);
-  const hasNumber = /[0-9]/.test(newPassword);
-  const hasSpecial = /[!@#$%^&*()_+\-=[\]{}|;':",.<>?]/.test(newPassword);
+  const hasMinLength = [...newPassword].length >= 10;
+  const validCharacters = newPassword.length <= 1024 && !/[\u0000-\u001f\u007f-\u009f]/.test(newPassword);
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword;
 
   // Strength score
-  let strengthScore = 0;
-  if (hasMinLength) strengthScore += 1;
-  if (hasUpper && hasLower) strengthScore += 1;
-  if (hasNumber) strengthScore += 1;
-  if (hasSpecial) strengthScore += 1;
+  const strengthScore = [10, 14, 20, 28].filter(length => [...newPassword].length >= length).length;
 
   const getStrengthMeta = () => {
     if (newPassword.length === 0) return { label: '', color: '#cbd5e1', width: '0%' };
-    if (strengthScore <= 1) return { label: 'Weak', color: '#ef4444', width: '25%' };
-    if (strengthScore === 2) return { label: 'Fair', color: '#f59e0b', width: '50%' };
-    if (strengthScore === 3) return { label: 'Good', color: '#3b82f6', width: '75%' };
-    return { label: 'Strong & Secure', color: '#10b981', width: '100%' };
+    if (strengthScore === 0) return { label: 'Too short', color: '#b63a3a', width: '20%' };
+    if (strengthScore === 1) return { label: 'Minimum length', color: '#997014', width: '40%' };
+    if (strengthScore === 2) return { label: 'Good length', color: '#2563eb', width: '60%' };
+    return { label: 'Long passphrase', color: '#298258', width: '100%' };
   };
 
   const strengthMeta = getStrengthMeta();
-  const allRulesPassed = hasMinLength && hasUpper && hasLower && hasNumber && hasSpecial && passwordsMatch;
+  const allRulesPassed = hasMinLength && validCharacters && passwordsMatch;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!allRulesPassed) return;
+    if (!allRulesPassed || isSubmitting) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -96,9 +98,12 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
         token,
         newPassword,
       });
+      onResetComplete?.();
+      setNewPassword('');
+      setConfirmPassword('');
       setIsSuccess(true);
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.message || 'Failed to update password.';
+      const msg = err.response?.data?.message || err.response?.data?.error || 'Your password could not be updated. Please try again.';
       setSubmitError(msg);
     } finally {
       setIsSubmitting(false);
@@ -106,24 +111,12 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
   };
 
   return (
-    <div
-      className="min-vh-100 d-flex align-items-center justify-content-center py-5 px-3"
-      style={{
-        background: 'radial-gradient(ellipse at top left, #eef2ff 0%, #f8fafc 45%, #e2e8f0 100%)',
-      }}
-    >
-      <div className="card shadow-lg border-0 rounded-4 overflow-hidden" style={{ maxWidth: '520px', width: '100%' }}>
+    <div className="account-flow-page">
+      <div className="account-flow-card">
         {/* Header Ribbon */}
-        <div className="bg-primary bg-gradient p-4 text-white text-center">
-          <div
-            className="d-inline-flex p-3 rounded-circle bg-white bg-opacity-20 mb-3 shadow-sm"
-          >
-            <KeyRound size={32} className="text-white" />
-          </div>
-          <h4 className="fw-bold mb-1">Set New Password</h4>
-          <p className="text-white text-opacity-80 small mb-0">
-            Screen 7b • Enterprise Access Recovery
-          </p>
+        <div className="account-flow-header">
+          <span className="account-flow-mark"><KeyRound size={23} /></span>
+          <div><h1>Set a new password</h1><p>Restore access to your workspace.</p></div>
         </div>
 
         <div className="card-body p-4 p-md-5">
@@ -145,12 +138,12 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
               </div>
               <h5 className="fw-bold text-dark mb-2">Password Successfully Updated</h5>
               <p className="text-muted small mb-4">
-                Your credentials have been securely refreshed. For your security, all previous active sessions have been terminated.
+                Your password has changed and previous sign-in tokens are no longer valid. Sign in again to continue.
               </p>
               <button
                 type="button"
                 className="btn btn-primary w-100 py-2.5 fw-semibold d-flex align-items-center justify-content-center gap-2"
-                onClick={() => onNavigate('/kuwy/admin')}
+                onClick={() => onNavigate('/login')}
               >
                 <span>Proceed to Sign In</span>
                 <ArrowRight size={18} />
@@ -165,7 +158,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                 <AlertCircle size={48} />
               </div>
               <h5 className="fw-bold text-dark mb-2">
-                {tokenStatus === 'EXPIRED'
+                {tokenStatus === 'UNAVAILABLE' ? 'Unable to check this link' : tokenStatus === 'EXPIRED'
                   ? 'Reset Link Expired'
                   : tokenStatus === 'USED'
                   ? 'Link Already Consumed'
@@ -177,10 +170,10 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
               <button
                 type="button"
                 className="btn btn-primary w-100 py-2.5 fw-semibold d-flex align-items-center justify-content-center gap-2"
-                onClick={() => onNavigate('/login')}
+                onClick={() => tokenStatus === 'UNAVAILABLE' ? validateToken(token) : onNavigate('/login')}
               >
                 <ArrowLeft size={18} />
-                <span>Request a New Reset Link</span>
+                <span>{tokenStatus === 'UNAVAILABLE' ? 'Try again' : 'Back to sign in'}</span>
               </button>
             </div>
           )}
@@ -196,7 +189,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
               )}
 
               {submitError && (
-                <div className="alert alert-danger py-2 px-3 small d-flex align-items-center gap-2 mb-4">
+                <div className="alert alert-danger py-2 px-3 small d-flex align-items-center gap-2 mb-4" role="alert">
                   <AlertCircle size={18} className="text-danger flex-shrink-0" />
                   <span>{submitError}</span>
                 </div>
@@ -213,6 +206,10 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                     type={showPassword ? 'text' : 'password'}
                     className="form-control border-start-0 border-end-0"
                     placeholder="Enter new secure password"
+                    aria-label="New password"
+                    autoComplete="new-password"
+                    minLength={10}
+                    maxLength={1024}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     required
@@ -221,6 +218,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                   <button
                     type="button"
                     className="btn btn-light border border-start-0"
+                    aria-label={showPassword ? 'Hide new password' : 'Show new password'}
                     onClick={() => setShowPassword(!showPassword)}
                   >
                     {showPassword ? <EyeOff size={18} className="text-muted" /> : <Eye size={18} className="text-muted" />}
@@ -231,7 +229,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                 {newPassword.length > 0 && (
                   <div className="mt-2">
                     <div className="d-flex justify-content-between align-items-center mb-1">
-                      <span className="small text-muted" style={{ fontSize: '0.75rem' }}>Strength:</span>
+                      <span className="small text-muted" style={{ fontSize: '0.75rem' }}>Length guide:</span>
                       <span className="small fw-bold" style={{ fontSize: '0.75rem', color: strengthMeta.color }}>
                         {strengthMeta.label}
                       </span>
@@ -261,6 +259,9 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                     type={showConfirmPassword ? 'text' : 'password'}
                     className="form-control border-start-0 border-end-0"
                     placeholder="Repeat password"
+                    aria-label="Confirm new password"
+                    autoComplete="new-password"
+                    maxLength={1024}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
@@ -268,6 +269,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                   <button
                     type="button"
                     className="btn btn-light border border-start-0"
+                    aria-label={showConfirmPassword ? 'Hide confirmation password' : 'Show confirmation password'}
                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                   >
                     {showConfirmPassword ? <EyeOff size={18} className="text-muted" /> : <Eye size={18} className="text-muted" />}
@@ -283,23 +285,12 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                     {hasMinLength ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                     <span>Minimum 10 characters</span>
                   </li>
-                  <li className={`d-flex align-items-center gap-2 mb-1 ${hasUpper && hasLower ? 'text-success' : 'text-muted'}`}>
-                    {hasUpper && hasLower ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                    <span>Uppercase (A-Z) and lowercase (a-z) letters</span>
-                  </li>
-                  <li className={`d-flex align-items-center gap-2 mb-1 ${hasNumber ? 'text-success' : 'text-muted'}`}>
-                    {hasNumber ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                    <span>At least one number (0-9)</span>
-                  </li>
-                  <li className={`d-flex align-items-center gap-2 mb-1 ${hasSpecial ? 'text-success' : 'text-muted'}`}>
-                    {hasSpecial ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                    <span>At least one special symbol (!@#$%^&*)</span>
-                  </li>
                   <li className={`d-flex align-items-center gap-2 ${passwordsMatch ? 'text-success' : 'text-muted'}`}>
                     {passwordsMatch ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                     <span>Passwords match</span>
                   </li>
                 </ul>
+                <p className="text-muted small mt-2 mb-0">Use a unique, long passphrase. Symbols are optional; common passwords are rejected.</p>
               </div>
 
               {/* Submit Button */}
@@ -311,7 +302,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
                 {isSubmitting ? (
                   <>
                     <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                    <span>Updating Security Credentials...</span>
+                    <span>Updating password...</span>
                   </>
                 ) : (
                   <>
@@ -328,7 +319,7 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
             <button
               type="button"
               className="btn btn-link text-decoration-none text-muted small p-0 d-inline-flex align-items-center gap-1"
-              onClick={() => onNavigate('/kuwy/admin')}
+              onClick={() => onNavigate('/login')}
             >
               <ArrowLeft size={14} />
               <span>Back to Sign In</span>
@@ -339,4 +330,3 @@ export const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigate
     </div>
   );
 };
-

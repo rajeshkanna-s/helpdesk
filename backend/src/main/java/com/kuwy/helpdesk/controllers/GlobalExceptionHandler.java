@@ -8,10 +8,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.core.AuthenticationException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Global exception handler providing secure, standardized error responses
@@ -21,6 +23,12 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<Map<String, Object>> handleAuthentication(AuthenticationException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                "error", "Authentication required", "message", ex.getMessage() == null ? "Please sign in again." : ex.getMessage()));
+    }
 
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<Map<String, Object>> handleSecurityException(SecurityException ex) {
@@ -60,11 +68,19 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
+        if ("PASSWORD_RESET_RATE_LIMITED".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", "60").body(Map.of(
+                    "error", "Rate limit", "message", "Too many recovery requests. Please try again later."));
+        }
+        if (Set.of("ACCOUNT_EMAIL_NOT_READY", "ACCOUNT_EMAIL_ENQUEUE_FAILED", "AUTHENTICATION_TOKEN_NOT_AVAILABLE").contains(ex.getMessage() == null ? "" : ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                    "error", "Account service unavailable", "message", "Account email or sign-in services are not available. Contact your administrator or try again later."));
+        }
         Map<String, Object> body = new HashMap<>();
         body.put("timestamp", LocalDateTime.now());
         body.put("status", HttpStatus.LOCKED.value()); // HTTP 423 Locked for quota/subscription locks
         body.put("error", "Tenant Resource Locked");
-        body.put("message", ex.getMessage());
+        body.put("message", "This operation is not available in the current workspace state. Check workspace access and plan limits, or contact your administrator.");
         return ResponseEntity.status(HttpStatus.LOCKED).body(body);
     }
 

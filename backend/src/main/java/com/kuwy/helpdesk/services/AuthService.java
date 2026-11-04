@@ -359,6 +359,7 @@ public class AuthService {
                 .subdomain(company.getSubdomain())
                 .status(company.getStatus().name())
                 .primaryColor(company.getPrimaryColor())
+                .planName(company.getPlanName())
                 .build();
     }
 

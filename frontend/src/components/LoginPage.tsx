@@ -640,13 +640,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         onClose={() => setShowForgotModal(false)}
         defaultEmail={email}
         companyCode={companyCode}
-        onNavigateToReset={(tok) => {
-          if (onNavigate) {
-            onNavigate(`/reset-password?token=${tok}`);
-          } else {
-            window.location.href = `/reset-password?token=${tok}`;
-          }
-        }}
       />
     </div>
   );

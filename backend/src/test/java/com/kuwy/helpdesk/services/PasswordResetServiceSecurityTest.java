@@ -133,7 +133,7 @@ class PasswordResetServiceSecurityTest {
             assertFalse(saved.getValue().getIsUsed());
             assertTrue(saved.getValue().getExpiresAt().isAfter(LocalDateTime.now().plusMinutes(59)));
             assertTrue(saved.getValue().getExpiresAt().isBefore(LocalDateTime.now().plusHours(1).plusSeconds(1)));
-            assertTrue(html.getValue().contains("https://desk.example.invalid/support&amp;tools/reset-password?token=" + raw));
+            assertTrue(html.getValue().contains("https://desk.example.invalid/support&amp;tools/reset-password#token=" + raw));
             assertFalse(html.getValue().contains("attacker.example.invalid"));
             assertEquals("password-reset:44:101", key.getValue());
             assertFalse(key.getValue().contains(raw));
@@ -141,7 +141,7 @@ class PasswordResetServiceSecurityTest {
             assertFalse(known.toString().contains(raw));
             assertFalse(known.toString().contains(saved.getValue().getTokenHash()));
             assertTrue(logs.list.stream().noneMatch(event -> event.getFormattedMessage().contains(raw)
-                    || event.getFormattedMessage().contains("reset-password?token=")));
+                    || event.getFormattedMessage().contains("reset-password#token=")));
             verify(audits).recordEvent(eq(7L), isNull(), eq("PASSWORD_RESET_REQUESTED"), eq(EMAIL),
                     eq("Password reset email queued; link valid for one hour."), same(http));
         } finally {

@@ -33,5 +33,6 @@ public class LoginResponse {
         private String subdomain;
         private String status;
         private String primaryColor;
+        private String planName;
     }
 }

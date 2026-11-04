@@ -94,7 +94,7 @@ public class PasswordResetService {
         if (saved.getId() == null) {
             throw new IllegalStateException("ACCOUNT_EMAIL_ENQUEUE_FAILED");
         }
-        String resetUrl = baseUrl + "/reset-password?token=" + rawToken;
+        String resetUrl = baseUrl + "/reset-password#token=" + rawToken;
         accountEmailService.enqueue(token.getCompanyId(), user.getEmail(), "Reset your Helpdesk password",
                 "<p>A password reset was requested for your Helpdesk account.</p>"
                         + "<p><a href=\"" + HtmlUtils.htmlEscape(resetUrl) + "\">Reset your password</a></p>"
@@ -250,6 +250,7 @@ public class PasswordResetService {
                     || (!"https".equalsIgnoreCase(uri.getScheme()) && !"http".equalsIgnoreCase(uri.getScheme()))
                     || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
                     || uri.getPort() == 0 || uri.getPort() > 65535 || !uri.equals(uri.normalize())
+                    || uri.getPath().contains("..")
                     || uri.getPath().chars().anyMatch(Character::isISOControl)) {
                 throw new IllegalArgumentException();
             }

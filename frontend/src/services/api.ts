@@ -767,15 +767,13 @@ export const apiService = {
     return res.data;
   },
 
-  async forgotPassword(data: ForgotPasswordRequest): Promise<{ success: boolean; message: string; devResetUrl?: string }> {
+  async forgotPassword(data: ForgotPasswordRequest): Promise<{ success: boolean; message: string }> {
     const res = await axios.post(`${API_BASE}/auth/forgot-password`, data);
     return res.data;
   },
 
   async validateResetToken(token: string): Promise<{ valid: boolean; status?: string; message?: string; email?: string }> {
-    const res = await axios.get(`${API_BASE}/auth/validate-reset-token`, {
-      params: { token }
-    });
+    const res = await axios.post(`${API_BASE}/auth/validate-reset-token`, { token });
     return res.data;
   },
 
@@ -792,9 +790,7 @@ export const apiService = {
   },
 
   async validateInvitation(token: string): Promise<InvitationValidationResponse> {
-    const res = await axios.get(`${API_BASE}/invitations/validate`, {
-      params: { token }
-    });
+    const res = await axios.post(`${API_BASE}/invitations/validate`, { token });
     return res.data;
   },
 

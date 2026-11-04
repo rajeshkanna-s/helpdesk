@@ -4,19 +4,29 @@ import com.kuwy.helpdesk.config.JwtTokenProvider;
 import com.kuwy.helpdesk.dto.*;
 import com.kuwy.helpdesk.models.AgentInvitation;
 import com.kuwy.helpdesk.models.Company;
+import com.kuwy.helpdesk.models.CompanySubscription;
 import com.kuwy.helpdesk.models.Role;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.repositories.AgentInvitationRepository;
 import com.kuwy.helpdesk.repositories.CompanyRepository;
+import com.kuwy.helpdesk.repositories.CompanySubscriptionRepository;
 import com.kuwy.helpdesk.repositories.RoleRepository;
 import com.kuwy.helpdesk.repositories.UserRepository;
+import com.kuwy.helpdesk.tenant.TenantContext;
+import com.kuwy.helpdesk.util.PasswordPolicy;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.util.HtmlUtils;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -24,7 +34,6 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.*;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AgentInvitationService {
@@ -36,109 +45,58 @@ public class AgentInvitationService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final SecurityAuditService auditService;
+    private final AccountEmailService accountEmailService;
+    private final EntityManager entityManager;
+    private final CompanySubscriptionRepository subscriptionRepository;
+
+    @Value("${kuwy.frontend-url:http://localhost:5174}")
+    private String frontendUrl;
 
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Set<Role.RoleType> STAFF_ROLES = EnumSet.of(Role.RoleType.COMPANY_ADMIN,
+            Role.RoleType.TEAM_LEAD, Role.RoleType.AGENT, Role.RoleType.LIGHT_AGENT);
+    private static final List<AgentInvitation.InvitationStatus> UNUSED_STATUSES = List.of(
+            AgentInvitation.InvitationStatus.PENDING, AgentInvitation.InvitationStatus.EXPIRED);
+    private static final String INVALID_INVITATION = "This invitation is invalid, already used, revoked, or expired.";
 
-    private static final Map<String, Integer> PLAN_AGENT_LIMITS = Map.of(
-            "FREE", 2,
-            "STARTER", 5,
-            "PRO", 25,
-            "PROFESSIONAL", 25,
-            "ENTERPRISE", 50
-    );
-
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> inviteAgent(InviteAgentRequest req, Long invitingUserId, Long companyId, HttpServletRequest request) {
-        String email = req.getEmail() != null ? req.getEmail().trim().toLowerCase() : "";
-        String name = req.getName() != null ? req.getName().trim() : "";
+        User actor = requireAdmin(companyId, invitingUserId);
+        accountEmailService.requireReady();
+        String baseUrl = frontendBaseUrl();
+        String email = req != null && req.getEmail() != null ? req.getEmail().trim().toLowerCase(Locale.ROOT) : "";
+        String name = req != null && req.getName() != null ? req.getName().trim() : "";
+        validateIdentity(email, name);
 
-        if (email.isBlank() || name.isBlank()) {
-            throw new RuntimeException("Agent name and email are required.");
-        }
+        Company company = lockCompany(companyId);
+        requireActiveCompany(company);
+        Role role = resolveRole(req.getRoleId(), companyId);
+        userRepository.findForAuthenticationByCompanyAndEmail(companyId, email)
+                .ifPresent(user -> requireInvitableAccount(user, companyId, email));
+        assertSeatAvailable(company, email);
+        revokeOtherInvitations(companyId, email, null);
 
-        Company company = companyRepository.findById(companyId)
-                .orElseThrow(() -> new RuntimeException("Company not found with id: " + companyId));
-
-        User invitingUser = userRepository.findById(invitingUserId)
-                .orElseThrow(() -> new RuntimeException("Inviting admin account not found."));
-
-        // 1. Quota check against company plan
-        String planName = company.getPlanName() != null ? company.getPlanName().toUpperCase() : "STARTER";
-        int maxLimit = PLAN_AGENT_LIMITS.getOrDefault(planName, 5);
-
-        long activeUsers = userRepository.countByCompanyIdAndIsActiveTrue(company.getId());
-        long pendingInvites = invitationRepository.countByCompanyIdAndStatus(company.getId(), AgentInvitation.InvitationStatus.PENDING);
-
-        if ((activeUsers + pendingInvites) >= maxLimit) {
-            throw new RuntimeException(String.format(
-                    "Seat limit reached: Your current %s plan permits up to %d agents (%d active, %d pending). Please upgrade your subscription to invite more team members.",
-                    planName, maxLimit, activeUsers, pendingInvites
-            ));
-        }
-
-        // 2. Check if agent already exists in company
-        Optional<User> existingUser = userRepository.findByCompanyIdAndEmail(company.getId(), email);
-        if (existingUser.isPresent() && Boolean.TRUE.equals(existingUser.get().getIsActive())) {
-            throw new RuntimeException("An active staff account with email '" + email + "' already exists in this workspace.");
-        }
-
-        // 3. Resolve Role (defaults to AGENT if roleId is null)
-        Role role;
-        if (req.getRoleId() != null) {
-            role = roleRepository.findById(req.getRoleId())
-                    .orElseThrow(() -> new RuntimeException("Role not found with id: " + req.getRoleId()));
-        } else {
-            role = roleRepository.findFirstByRoleType(Role.RoleType.AGENT)
-                    .orElseThrow(() -> new RuntimeException("Default AGENT role not configured in system."));
-        }
-
-        // 4. Invalidate any existing pending invite for this email in this company
-        Optional<AgentInvitation> existingInvite = invitationRepository.findByCompanyIdAndEmailAndStatus(
-                company.getId(), email, AgentInvitation.InvitationStatus.PENDING
-        );
-        existingInvite.ifPresent(inv -> {
-            inv.setStatus(AgentInvitation.InvitationStatus.REVOKED);
-            invitationRepository.save(inv);
-        });
-
-        // 5. Generate secure token (7 days expiry)
         String rawToken = generateRandomHex(32);
-        String tokenHash = sha256(rawToken);
-
         AgentInvitation invitation = new AgentInvitation();
         invitation.setCompanyId(company.getId());
-        invitation.setInvitedByUserId(invitingUser.getId());
+        invitation.setInvitedByUserId(actor.getId());
         invitation.setEmail(email);
         invitation.setName(name);
         invitation.setRoleId(role.getId());
-        invitation.setTokenHash(tokenHash);
+        invitation.setTokenHash(sha256(rawToken));
         invitation.setStatus(AgentInvitation.InvitationStatus.PENDING);
         invitation.setExpiresAt(LocalDateTime.now().plusDays(7));
 
         AgentInvitation saved = invitationRepository.save(invitation);
-
-        auditService.recordEvent(
-                company.getId(),
-                invitingUser.getId(),
-                "INVITATION_SENT",
-                email,
-                "Invited " + name + " as " + role.getName() + " (Token expires in 7 days)",
-                request
-        );
-
-        String inviteUrl = "http://localhost:5174/accept-invitation?token=" + rawToken;
-        log.info("Agent invitation link created for {}: {}", email, inviteUrl);
-
-        Map<String, Object> res = new LinkedHashMap<>();
-        res.put("success", true);
-        res.put("message", "Invitation created successfully and dispatched to " + email);
-        res.put("invitationId", saved.getId());
-        res.put("inviteUrl", inviteUrl);
-        return res;
+        queueInvitation(saved, company, role, baseUrl, rawToken, "created");
+        auditService.recordEvent(companyId, actor.getId(), "INVITATION_QUEUED", email,
+                "Invitation email queued; link valid for seven days.", request);
+        return Map.of("success", true, "message", "Invitation email queued.", "invitationId", saved.getId());
     }
 
+    @Transactional(readOnly = true)
     public InvitationValidationResponse validateInvitation(String rawToken) {
-        if (rawToken == null || rawToken.isBlank()) {
+        if (!validToken(rawToken)) {
             return InvitationValidationResponse.builder()
                     .valid(false)
                     .status("NOT_FOUND")
@@ -175,7 +133,8 @@ public class AgentInvitationService {
                     .build();
         }
 
-        if (invitation.getExpiresAt().isBefore(LocalDateTime.now()) || invitation.getStatus() == AgentInvitation.InvitationStatus.EXPIRED) {
+        if (invitation.getExpiresAt() == null || !invitation.getExpiresAt().isAfter(LocalDateTime.now())
+                || invitation.getStatus() == AgentInvitation.InvitationStatus.EXPIRED) {
             return InvitationValidationResponse.builder()
                     .valid(false)
                     .status("EXPIRED")
@@ -183,15 +142,18 @@ public class AgentInvitationService {
                     .build();
         }
 
-        Company company = companyRepository.findById(invitation.getCompanyId()).orElse(null);
-        User inviter = userRepository.findById(invitation.getInvitedByUserId()).orElse(null);
-        Role role = roleRepository.findById(invitation.getRoleId()).orElse(null);
-
-        String companyName = company != null ? company.getName() : "Kuwy Helpdesk";
-        String companySubdomain = company != null ? company.getSubdomain() : "kuwy";
-        String companyLogo = company != null ? company.getLogoUrl() : null;
+        Company company = invitation.getCompanyId() != null
+                ? companyRepository.findById(invitation.getCompanyId()).orElse(null) : null;
+        Role role = invitation.getRoleId() != null ? roleRepository.findById(invitation.getRoleId()).orElse(null) : null;
+        if (invitation.getStatus() != AgentInvitation.InvitationStatus.PENDING || company == null
+                || (company.getStatus() != Company.CompanyStatus.ACTIVE && company.getStatus() != Company.CompanyStatus.TRIAL)
+                || !allowedRole(role, company.getId())) {
+            return InvitationValidationResponse.builder().valid(false).status("NOT_FOUND")
+                    .message(INVALID_INVITATION).build();
+        }
+        User inviter = invitation.getInvitedByUserId() != null
+                ? userRepository.findById(invitation.getInvitedByUserId()).orElse(null) : null;
         String inviterName = inviter != null ? inviter.getDisplayName() : "Workspace Admin";
-        String roleName = role != null ? role.getName() : "Support Agent";
 
         return InvitationValidationResponse.builder()
                 .valid(true)
@@ -199,70 +161,73 @@ public class AgentInvitationService {
                 .message("Invitation is active and valid.")
                 .email(invitation.getEmail())
                 .name(invitation.getName())
-                .companyName(companyName)
-                .companySubdomain(companySubdomain)
-                .companyLogo(companyLogo)
+                .companyName(company.getName())
+                .companySubdomain(company.getSubdomain())
+                .companyLogo(company.getLogoUrl())
                 .inviterName(inviterName)
-                .roleName(roleName)
+                .roleName(role.getName())
                 .build();
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public LoginResponse acceptInvitation(AcceptInvitationRequest req, HttpServletRequest request) {
-        if (req.getToken() == null || req.getToken().isBlank()) {
-            throw new RuntimeException("Invitation token is required.");
+        if (req == null || !validToken(req.getToken())) {
+            throw new IllegalArgumentException(INVALID_INVITATION);
         }
         if (!Boolean.TRUE.equals(req.getAgreedToTerms())) {
-            throw new RuntimeException("You must accept the Terms of Service and Privacy Policy to join the workspace.");
+            throw new IllegalArgumentException("You must accept the Terms of Service and Privacy Policy to join the workspace.");
         }
-        if (req.getPassword() == null || req.getPassword().length() < 10) {
-            throw new RuntimeException("Password must be at least 10 characters long.");
-        }
-
-        validatePassword(req.getPassword());
+        PasswordPolicy.validate(req.getPassword());
 
         String tokenHash = sha256(req.getToken().trim());
-        AgentInvitation invitation = invitationRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new RuntimeException("Invalid invitation token."));
-
-        if (invitation.getStatus() != AgentInvitation.InvitationStatus.PENDING) {
-            throw new RuntimeException("This invitation cannot be accepted because it is " + invitation.getStatus());
+        // A scalar hint avoids caching an invitation before the shared company seat lock is acquired.
+        Long companyId = invitationRepository.findCompanyIdByTokenHash(tokenHash)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        Company company = lockCompany(companyId);
+        requireActiveCompany(company);
+        AgentInvitation invitation = invitationRepository.findForConsumptionByTokenHash(tokenHash)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        if (!companyId.equals(invitation.getCompanyId()) || !tokenHash.equals(invitation.getTokenHash())
+                || invitation.getStatus() != AgentInvitation.InvitationStatus.PENDING || invitation.getRoleId() == null
+                || invitation.getExpiresAt() == null || !invitation.getExpiresAt().isAfter(LocalDateTime.now())) {
+            throw new IllegalArgumentException(INVALID_INVITATION);
         }
+        Role role = resolveRole(invitation.getRoleId(), companyId);
+        String email = invitation.getEmail() != null ? invitation.getEmail().trim().toLowerCase(Locale.ROOT) : "";
+        validateIdentity(email, invitation.getName());
+        Optional<User> existing = userRepository.findForAuthenticationByCompanyAndEmail(companyId, email);
+        existing.ifPresent(user -> requireInvitableAccount(user, companyId, email));
+        assertSeatAvailable(company, email);
 
-        if (invitation.getExpiresAt().isBefore(LocalDateTime.now())) {
-            invitation.setStatus(AgentInvitation.InvitationStatus.EXPIRED);
-            invitationRepository.save(invitation);
-            throw new RuntimeException("This invitation has expired. Ask your administrator for a new invite link.");
-        }
-
-        Company company = companyRepository.findById(invitation.getCompanyId())
-                .orElseThrow(() -> new RuntimeException("Workspace company no longer exists."));
-
-        Role role = roleRepository.findById(invitation.getRoleId())
-                .orElseThrow(() -> new RuntimeException("Target role no longer exists."));
-
-        // Create or activate user
-        String email = invitation.getEmail().toLowerCase().trim();
-        User user = userRepository.findByCompanyIdAndEmail(company.getId(), email).orElse(new User());
-
+        String encodedPassword = passwordEncoder.encode(req.getPassword());
+        User user = existing.orElseGet(User::new);
         user.setCompany(company);
         user.setEmail(email);
-        user.setDisplayName(req.getName() != null && !req.getName().isBlank() ? req.getName().trim() : invitation.getName());
-        user.setFirstName(user.getDisplayName().split(" ")[0]);
-        if (user.getDisplayName().contains(" ")) {
-            user.setLastName(user.getDisplayName().substring(user.getDisplayName().indexOf(" ") + 1));
+        // Acceptance cannot replace the identity or role approved by the inviting administrator.
+        user.setDisplayName(invitation.getName().trim());
+        String[] names = user.getDisplayName().split("\\s+", 2);
+        user.setFirstName(names[0]);
+        user.setLastName(names.length > 1 ? names[1] : null);
+        user.setPasswordHash(encodedPassword);
+        if (existing.isPresent()) {
+            user.invalidateAuthentication();
         }
-        user.setPasswordHash(passwordEncoder.encode(req.getPassword()));
         user.setRole(role);
         user.setIsActive(true);
         user.setStatus("ACTIVE");
+        user.setFailedLoginAttempts(0);
+        user.setLockoutUntil(null);
         user.setLastLoginAt(LocalDateTime.now());
         User savedUser = userRepository.save(user);
 
-        // Mark invitation as accepted
         invitation.setStatus(AgentInvitation.InvitationStatus.ACCEPTED);
         invitationRepository.save(invitation);
+        revokeOtherInvitations(companyId, email, invitation.getId());
 
+        String token = jwtTokenProvider.generateToken(savedUser);
+        if (token == null || token.isBlank()) {
+            throw new IllegalStateException("AUTHENTICATION_TOKEN_NOT_AVAILABLE");
+        }
         auditService.recordEvent(
                 company.getId(),
                 savedUser.getId(),
@@ -272,9 +237,6 @@ public class AgentInvitationService {
                 request
         );
 
-        // Generate immediate JWT token for seamless workspace entry
-        String token = jwtTokenProvider.generateToken(savedUser);
-
         LoginResponse.CompanyInfo compInfo = LoginResponse.CompanyInfo.builder()
                 .id(company.getId())
                 .companyCode(company.getCompanyCode())
@@ -282,6 +244,7 @@ public class AgentInvitationService {
                 .subdomain(company.getSubdomain())
                 .status(company.getStatus().name())
                 .primaryColor(company.getPrimaryColor())
+                .planName(company.getPlanName())
                 .build();
 
         return LoginResponse.builder()
@@ -297,7 +260,9 @@ public class AgentInvitationService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
     public List<AgentInvitationDto> getPendingInvitations(Long companyId) {
+        requireAdmin(companyId, TenantContext.requireUserId());
         List<AgentInvitation> list = invitationRepository.findByCompanyIdOrderByCreatedAtDesc(companyId);
         List<AgentInvitationDto> dtos = new ArrayList<>();
         for (AgentInvitation inv : list) {
@@ -318,47 +283,56 @@ public class AgentInvitationService {
         return dtos;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> resendInvitation(Long invitationId, Long adminUserId, HttpServletRequest request) {
-        AgentInvitation invitation = invitationRepository.findById(invitationId)
-                .orElseThrow(() -> new RuntimeException("Invitation not found."));
+        requireActorId(adminUserId);
+        Long companyId = invitationRepository.findCompanyIdByInvitationId(invitationId)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        User actor = requireAdmin(companyId, adminUserId);
+        accountEmailService.requireReady();
+        String baseUrl = frontendBaseUrl();
+        Company company = lockCompany(companyId);
+        requireActiveCompany(company);
+        AgentInvitation invitation = invitationRepository.findForUpdateByIdAndCompanyId(invitationId, companyId)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        requireUnusedInvitation(invitation, companyId);
+        if (invitation.getRoleId() == null) throw new SecurityException("The invited role is no longer available.");
+        Role role = resolveRole(invitation.getRoleId(), companyId);
+        String email = invitation.getEmail() != null ? invitation.getEmail().trim().toLowerCase(Locale.ROOT) : "";
+        validateIdentity(email, invitation.getName());
+        userRepository.findForAuthenticationByCompanyAndEmail(companyId, email)
+                .ifPresent(user -> requireInvitableAccount(user, companyId, email));
+        assertSeatAvailable(company, email);
+        revokeOtherInvitations(companyId, email, invitationId);
 
         String rawToken = generateRandomHex(32);
         invitation.setTokenHash(sha256(rawToken));
         invitation.setStatus(AgentInvitation.InvitationStatus.PENDING);
         invitation.setExpiresAt(LocalDateTime.now().plusDays(7));
         invitationRepository.save(invitation);
-
-        auditService.recordEvent(
-                invitation.getCompanyId(),
-                adminUserId,
-                "INVITATION_RESENT",
-                invitation.getEmail(),
-                "Regenerated 7-day invitation link",
-                request
-        );
-
-        String inviteUrl = "http://localhost:5174/accept-invitation?token=" + rawToken;
-        log.info("Invitation resent for {}: {}", invitation.getEmail(), inviteUrl);
-
-        return Map.of(
-                "success", true,
-                "message", "New invitation link generated successfully.",
-                "inviteUrl", inviteUrl
-        );
+        queueInvitation(invitation, company, role, baseUrl, rawToken, "resend:" + UUID.randomUUID());
+        auditService.recordEvent(companyId, actor.getId(), "INVITATION_RESEND_QUEUED", invitation.getEmail(),
+                "Replacement invitation email queued; link valid for seven days.", request);
+        return Map.of("success", true, "message", "Invitation email queued.", "invitationId", invitationId);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> revokeInvitation(Long invitationId, Long adminUserId, HttpServletRequest request) {
-        AgentInvitation invitation = invitationRepository.findById(invitationId)
-                .orElseThrow(() -> new RuntimeException("Invitation not found."));
+        requireActorId(adminUserId);
+        Long companyId = invitationRepository.findCompanyIdByInvitationId(invitationId)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        User actor = requireAdmin(companyId, adminUserId);
+        lockCompany(companyId);
+        AgentInvitation invitation = invitationRepository.findForUpdateByIdAndCompanyId(invitationId, companyId)
+                .orElseThrow(() -> new IllegalArgumentException(INVALID_INVITATION));
+        requireUnusedInvitation(invitation, companyId);
 
         invitation.setStatus(AgentInvitation.InvitationStatus.REVOKED);
         invitationRepository.save(invitation);
 
         auditService.recordEvent(
                 invitation.getCompanyId(),
-                adminUserId,
+                actor.getId(),
                 "INVITATION_REVOKED",
                 invitation.getEmail(),
                 "Revoked by administrator",
@@ -371,14 +345,194 @@ public class AgentInvitationService {
         );
     }
 
-    private void validatePassword(String password) {
-        boolean hasUpper = password.chars().anyMatch(Character::isUpperCase);
-        boolean hasLower = password.chars().anyMatch(Character::isLowerCase);
-        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
-        boolean hasSpecial = password.chars().anyMatch(ch -> "!@#$%^&*()_+-=[]{}|;':,.<>?".indexOf(ch) >= 0);
+    private Long requireActorId(Long suppliedId) {
+        Long actorId = TenantContext.requireUserId();
+        if (!actorId.equals(suppliedId) || (!TenantContext.isSuperAdmin()
+                && !Role.RoleType.COMPANY_ADMIN.name().equals(TenantContext.getUserRole()))) {
+            throw new SecurityException("The current company administrator must perform this action.");
+        }
+        return actorId;
+    }
 
-        if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
-            throw new RuntimeException("Password must contain uppercase, lowercase, numbers, and at least one special character.");
+    private User requireAdmin(Long companyId, Long suppliedId) {
+        Long actorId = requireActorId(suppliedId);
+        TenantContext.assertCompanyAdminAccessTo(companyId);
+        User actor = userRepository.findById(actorId)
+                .orElseThrow(() -> new SecurityException("The current administrator is unavailable."));
+        if (!actorId.equals(actor.getId()) || !Boolean.TRUE.equals(actor.getIsActive())
+                || !"ACTIVE".equalsIgnoreCase(actor.getStatus()) || actor.getRole() == null
+                || actor.getRole().getRoleType() == null || actor.getCompany() == null
+                || actor.getCompany().getId() == null || actor.getCompany().getId() <= 0
+                || !Objects.equals(actor.getEmail(), TenantContext.getUserEmail())
+                || !actor.getRole().getRoleType().name().equals(TenantContext.getUserRole())) {
+            throw new SecurityException("The current administrator is unavailable.");
+        }
+        if (actor.getRole().getRoleType() == Role.RoleType.SUPER_ADMIN) {
+            if (actor.getRole().getCompany() != null || !Boolean.TRUE.equals(actor.getRole().getIsSystemRole())) {
+                throw new SecurityException("A system administrator role is required.");
+            }
+        } else {
+            if (actor.getRole().getRoleType() != Role.RoleType.COMPANY_ADMIN
+                    || !companyId.equals(actor.getCompany().getId()) || !allowedRole(actor.getRole(), companyId)) {
+                throw new SecurityException("Company administrator access is required for this workspace.");
+            }
+            requireActiveCompany(actor.getCompany());
+        }
+        return actor;
+    }
+
+    private Company lockCompany(Long companyId) {
+        if (companyId == null || companyId <= 0) throw new IllegalArgumentException(INVALID_INVITATION);
+        Company company = companyRepository.findById(companyId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace company no longer exists."));
+        // Refresh as well as lock: an eager actor relationship may already have loaded this company.
+        entityManager.refresh(company, LockModeType.PESSIMISTIC_WRITE);
+        if (!companyId.equals(company.getId())) throw new SecurityException("Workspace identity changed.");
+        return company;
+    }
+
+    private void requireActiveCompany(Company company) {
+        if (company.getStatus() != Company.CompanyStatus.ACTIVE && company.getStatus() != Company.CompanyStatus.TRIAL) {
+            throw new IllegalStateException("This workspace is not active.");
+        }
+    }
+
+    private Role resolveRole(Long roleId, Long companyId) {
+        Optional<Role> selected = roleId != null ? roleRepository.findById(roleId)
+                : roleRepository.findByCompanyIdAndRoleType(companyId, Role.RoleType.AGENT)
+                    .filter(role -> role.getRoleType() == Role.RoleType.AGENT && allowedRole(role, companyId))
+                    .or(() -> roleRepository.findByCompanyIdOrIsSystemRoleTrue(companyId).stream()
+                            .filter(role -> role.getRoleType() == Role.RoleType.AGENT && allowedRole(role, companyId))
+                            .findFirst());
+        return selected.filter(role -> allowedRole(role, companyId))
+                .orElseThrow(() -> new SecurityException("Select an allowed staff role in this workspace."));
+    }
+
+    private boolean allowedRole(Role role, Long companyId) {
+        return role != null && role.getId() != null && role.getId() > 0 && role.getRoleType() != null
+                && STAFF_ROLES.contains(role.getRoleType())
+                && (role.getCompany() == null ? Boolean.TRUE.equals(role.getIsSystemRole())
+                    : companyId.equals(role.getCompany().getId()));
+    }
+
+    private void requireInvitableAccount(User user, Long companyId, String email) {
+        if (user.getId() == null || user.getId() <= 0 || user.getCompany() == null
+                || !companyId.equals(user.getCompany().getId()) || !email.equalsIgnoreCase(user.getEmail())
+                || !allowedRole(user.getRole(), companyId)) {
+            throw new SecurityException("This invitation cannot change the existing account.");
+        }
+        if (!Boolean.FALSE.equals(user.getIsActive()) || !("INACTIVE".equalsIgnoreCase(user.getStatus())
+                || "INVITED".equalsIgnoreCase(user.getStatus()) || "PENDING".equalsIgnoreCase(user.getStatus()))) {
+            throw new IllegalStateException("An active or unavailable account cannot be replaced by an invitation.");
+        }
+        // An email link must not bypass an existing account's second factor.
+        if (Boolean.TRUE.equals(user.getIsTwoFactorEnabled())) {
+            throw new IllegalStateException("An account with two-factor authentication must use its existing sign-in and recovery flow.");
+        }
+    }
+
+    private void requireUnusedInvitation(AgentInvitation invitation, Long companyId) {
+        if (!companyId.equals(invitation.getCompanyId()) || invitation.getStatus() == null
+                || !UNUSED_STATUSES.contains(invitation.getStatus())) {
+            throw new IllegalArgumentException(INVALID_INVITATION);
+        }
+    }
+
+    private void assertSeatAvailable(Company company, String email) {
+        Integer limit = company.getMaxAgents();
+        if (limit != null && limit < 0) throw new IllegalStateException("Workspace seat limits are not configured.");
+        Optional<CompanySubscription> configured = subscriptionRepository.findByCompanyId(company.getId());
+        LocalDateTime now = LocalDateTime.now();
+        if (configured.isPresent()) {
+            CompanySubscription subscription = configured.get();
+            LocalDateTime end = subscription.getCurrentPeriodEnd();
+            LocalDateTime grace = subscription.getGracePeriodEndsAt() != null ? subscription.getGracePeriodEndsAt()
+                    : end != null ? end.plusDays(7) : null;
+            boolean current = (subscription.getStatus() == CompanySubscription.SubscriptionStatus.ACTIVE
+                    || subscription.getStatus() == CompanySubscription.SubscriptionStatus.TRIAL)
+                    && end != null && end.isAfter(now);
+            boolean inGrace = subscription.getStatus() == CompanySubscription.SubscriptionStatus.PAST_DUE
+                    && end != null && grace != null && grace.isAfter(now);
+            if (!company.getId().equals(subscription.getCompanyId()) || (!current && !inGrace)
+                    || subscription.getCurrentPeriodStart() == null || subscription.getCurrentPeriodStart().isAfter(now)
+                    || subscription.getAgentLimit() == null || subscription.getAgentLimit() < 0) {
+                throw new IllegalStateException("The workspace subscription does not permit adding staff.");
+            }
+            limit = limit == null ? subscription.getAgentLimit() : Math.min(limit, subscription.getAgentLimit());
+        }
+        if (limit == null) throw new IllegalStateException("Workspace seat limits are not configured.");
+        long active = userRepository.countByCompanyIdAndIsActiveTrue(company.getId());
+        long pending = invitationRepository.countLiveInvitationsExcludingEmail(company.getId(),
+                AgentInvitation.InvitationStatus.PENDING, now, email);
+        if (active < 0 || pending < 0 || active >= limit || pending >= (long) limit - active) {
+            throw new IllegalStateException("The workspace has reached its staff seat limit, including pending invitations.");
+        }
+    }
+
+    private void revokeOtherInvitations(Long companyId, String email, Long keepId) {
+        List<AgentInvitation> unused = invitationRepository.findByCompanyIdAndEmailIgnoreCaseAndStatusIn(
+                companyId, email, UNUSED_STATUSES);
+        for (AgentInvitation other : unused) {
+            if (!Objects.equals(keepId, other.getId())) {
+                other.setStatus(AgentInvitation.InvitationStatus.REVOKED);
+                invitationRepository.save(other);
+            }
+        }
+    }
+
+    private void queueInvitation(AgentInvitation invitation, Company company, Role role,
+                                 String baseUrl, String rawToken, String deliveryId) {
+        if (invitation.getId() == null) throw new IllegalStateException("ACCOUNT_EMAIL_ENQUEUE_FAILED");
+        String url = baseUrl + "/accept-invitation#token=" + rawToken;
+        accountEmailService.enqueue(company.getId(), invitation.getEmail(), "You're invited to Helpdesk",
+                "<p>Hello " + HtmlUtils.htmlEscape(invitation.getName()) + ",</p>"
+                        + "<p>You were invited to " + HtmlUtils.htmlEscape(Objects.toString(company.getName(), "Helpdesk"))
+                        + " as " + HtmlUtils.htmlEscape(Objects.toString(role.getName(), "staff")) + ".</p>"
+                        + "<p><a href=\"" + HtmlUtils.htmlEscape(url) + "\">Accept invitation</a></p>"
+                        + "<p>This link expires in seven days and can be used only once. "
+                        + "If you did not expect this invitation, ignore this email.</p>",
+                "agent-invitation:" + invitation.getId() + ":" + deliveryId);
+    }
+
+    private void validateIdentity(String email, String name) {
+        if (email == null || email.length() > 254 || email.indexOf('@') <= 0
+                || email.chars().anyMatch(Character::isISOControl) || name == null || name.isBlank()
+                || name.length() > 150 || name.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("A valid staff name and email are required.");
+        }
+        String[] names = name.trim().split("\\s+", 2);
+        if (names[0].length() > 100 || (names.length > 1 && names[1].length() > 100)) {
+            throw new IllegalArgumentException("Staff first and last names must each be at most 100 characters.");
+        }
+        try {
+            InternetAddress address = new InternetAddress(email, true);
+            address.validate();
+            if (address.isGroup() || address.getPersonal() != null || !email.equals(address.getAddress())) {
+                throw new IllegalArgumentException();
+            }
+        } catch (Exception invalid) {
+            throw new IllegalArgumentException("A valid staff email is required.");
+        }
+    }
+
+    private boolean validToken(String rawToken) {
+        return rawToken != null && rawToken.length() <= 256 && rawToken.trim().matches("[0-9a-f]{64}");
+    }
+
+    private String frontendBaseUrl() {
+        try {
+            URI uri = URI.create(frontendUrl);
+            if (frontendUrl.length() > 2048 || !uri.isAbsolute() || uri.getHost() == null
+                    || (!"https".equalsIgnoreCase(uri.getScheme()) && !"http".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || uri.getPort() == 0 || uri.getPort() > 65535 || !uri.equals(uri.normalize())
+                    || uri.getPath().contains("..")
+                    || uri.getPath().chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException();
+            }
+            return uri.toASCIIString().replaceAll("/+$", "");
+        } catch (RuntimeException invalid) {
+            throw new IllegalStateException("ACCOUNT_EMAIL_NOT_READY");
         }
     }
 
