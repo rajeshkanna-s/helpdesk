@@ -8,10 +8,14 @@ import com.kuwy.helpdesk.models.Role;
 import com.kuwy.helpdesk.models.Ticket;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.repositories.*;
+import com.kuwy.helpdesk.tenant.TenantContext;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -26,9 +30,12 @@ public class SupportEngineerService {
     private final RoleRepository roleRepository;
     private final TicketRepository ticketRepository;
     private final PasswordEncoder passwordEncoder;
+    private final SubscriptionService subscriptionService;
+    private final EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public List<SupportEngineerDto> getEngineersByCategory(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         List<User> users = userRepository.findByCompanyId(companyId);
         List<Ticket> allTickets = ticketRepository.findAll().stream()
                 .filter(t -> t.getCompany().getId().equals(companyId))
@@ -63,22 +70,31 @@ public class SupportEngineerService {
         }).collect(Collectors.toList());
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public SupportEngineerDto createSupportEngineer(SupportEngineerCreateDto dto) {
+        TenantContext.assertCompanyAdminAccessTo(dto.getCompanyId());
         Company company = companyRepository.findById(dto.getCompanyId())
                 .orElseThrow(() -> new RuntimeException("Company not found: " + dto.getCompanyId()));
+        // Serialize seat changes and last-admin checks within this tenant.
+        entityManager.lock(company, LockModeType.PESSIMISTIC_WRITE);
+        assertSeatAvailable(company);
 
         Department dept = null;
         if (dto.getDepartmentId() != null) {
             dept = departmentRepository.findById(dto.getDepartmentId())
-                    .orElse(null);
+                    .filter(d -> d.getCompany() != null && company.getId().equals(d.getCompany().getId()))
+                    .orElseThrow(() -> new SecurityException("Department not found in this workspace."));
         }
 
         Role.RoleType targetRoleType = "COMPANY_ADMIN".equalsIgnoreCase(dto.getRoleType())
                 ? Role.RoleType.COMPANY_ADMIN
                 : Role.RoleType.AGENT;
 
-        Role role = roleRepository.findFirstByRoleType(targetRoleType)
+        Role role = roleRepository.findByCompanyIdAndRoleType(company.getId(), targetRoleType)
+                .filter(r -> r.getCompany() != null && company.getId().equals(r.getCompany().getId()))
+                .or(() -> roleRepository.findByCompanyIdOrIsSystemRoleTrue(company.getId()).stream()
+                        .filter(r -> r.getRoleType() == targetRoleType && r.getCompany() == null && Boolean.TRUE.equals(r.getIsSystemRole()))
+                        .findFirst())
                 .orElseThrow(() -> new RuntimeException("Role not found for " + targetRoleType));
 
         String categoryLabel = (dept != null && dept.getCode() != null) ? dept.getCode() : "Support";
@@ -119,11 +135,42 @@ public class SupportEngineerService {
                 .build();
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public User toggleEngineerActive(Long userId) {
+        TenantContext.requireUserId();
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found: " + userId));
-        user.setIsActive(!Boolean.TRUE.equals(user.getIsActive()));
+        Company company = user.getCompany();
+        TenantContext.assertCompanyAdminAccessTo(company != null ? company.getId() : null);
+        entityManager.lock(company, LockModeType.PESSIMISTIC_WRITE);
+        entityManager.refresh(user);
+        if (user.getCompany() == null || !company.getId().equals(user.getCompany().getId())
+                || user.getRole() == null || user.getRole().getRoleType() == null
+                || user.getRole().getRoleType() == Role.RoleType.SUPER_ADMIN
+                || user.getRole().getRoleType() == Role.RoleType.CUSTOMER) {
+            throw new SecurityException("Only staff belonging to this workspace can be managed here.");
+        }
+        boolean active = Boolean.TRUE.equals(user.getIsActive());
+        if (active && user.getRole().getRoleType() == Role.RoleType.COMPANY_ADMIN) {
+            long activeAdmins = userRepository.findByCompanyIdAndIsActiveTrue(company.getId()).stream()
+                    .filter(u -> u.getRole() != null && u.getRole().getRoleType() == Role.RoleType.COMPANY_ADMIN)
+                    .count();
+            if (activeAdmins <= 1) {
+                throw new IllegalStateException("The last active company administrator cannot be disabled.");
+            }
+        }
+        if (!active) {
+            assertSeatAvailable(company);
+        }
+        user.setIsActive(!active);
         return userRepository.save(user);
+    }
+
+    private void assertSeatAvailable(Company company) {
+        subscriptionService.assertCanAddAgent(company.getId());
+        if (company.getMaxAgents() != null
+                && userRepository.countByCompanyIdAndIsActiveTrue(company.getId()) >= company.getMaxAgents()) {
+            throw new IllegalStateException("The workspace has reached its support agent seat limit.");
+        }
     }
 }

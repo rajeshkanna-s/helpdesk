@@ -6,6 +6,7 @@ import com.kuwy.helpdesk.dto.TicketCreateDto;
 import com.kuwy.helpdesk.dto.TicketReplyDto;
 import com.kuwy.helpdesk.models.*;
 import com.kuwy.helpdesk.repositories.*;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,11 +14,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class TicketService {
+
+    public static final int MAX_PAGE_SIZE = 100;
+    public static final int MAX_PAGE_NUMBER = 100_000;
+    private static final Set<String> SORT_FIELDS = Set.of("createdAt", "updatedAt", "priority", "status");
 
     private final TicketRepository ticketRepository;
     private final TicketThreadRepository threadRepository;
@@ -29,27 +38,59 @@ public class TicketService {
 
     @Transactional(readOnly = true)
     public Page<Ticket> getCompanyTickets(Long companyId, String status, Long agentId, Pageable pageable) {
-        if (status != null && !status.isBlank()) {
-            return ticketRepository.findByCompanyIdAndStatus(companyId, Ticket.TicketStatus.valueOf(status.toUpperCase()), pageable);
+        requireActor(false);
+        Long targetCompanyId = resolveCompanyId(companyId);
+        Company company = companyRepository.findById(targetCompanyId)
+                .orElseThrow(() -> new IllegalArgumentException("Company not found."));
+        assertCompanyAccess(company);
+        if (pageable == null || pageable.isUnpaged() || pageable.getPageNumber() > MAX_PAGE_NUMBER
+                || pageable.getPageSize() < 1 || pageable.getPageSize() > MAX_PAGE_SIZE
+                || pageable.getSort().stream().anyMatch(order -> !SORT_FIELDS.contains(order.getProperty()))) {
+            throw new IllegalArgumentException("Invalid ticket page, page size or sort field.");
         }
         if (agentId != null) {
-            return ticketRepository.findByCompanyIdAndAssignedAgentId(companyId, agentId, pageable);
+            requireAssignee(agentId, targetCompanyId);
         }
-        return ticketRepository.findByCompanyId(companyId, pageable);
+        Ticket.TicketStatus ticketStatus = parseStatus(status);
+        Page<Ticket> tickets;
+        if (ticketStatus != null) {
+            tickets = ticketRepository.findByCompanyIdAndStatus(targetCompanyId, ticketStatus, pageable);
+        } else if (agentId != null) {
+            tickets = ticketRepository.findByCompanyIdAndAssignedAgentId(targetCompanyId, agentId, pageable);
+        } else {
+            tickets = ticketRepository.findByCompanyId(targetCompanyId, pageable);
+        }
+        tickets.forEach(ticket -> {
+            assertTicketAccess(ticket);
+            assertOwnedBy(ticket.getCompany(), targetCompanyId);
+        });
+        return tickets;
     }
 
     @Transactional(readOnly = true)
     public Ticket getTicketById(Long id) {
-        Ticket ticket = ticketRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + id));
-        List<TicketThread> threads = getTicketThreads(id);
+        requireActor(false);
+        Ticket ticket = findAccessibleTicket(id);
+        List<TicketThread> threads = loadTicketThreads(ticket);
         ticket.setThreads(threads);
         return ticket;
     }
 
     @Transactional(readOnly = true)
     public List<TicketThread> getTicketThreads(Long ticketId) {
+        requireActor(false);
+        return loadTicketThreads(findAccessibleTicket(ticketId));
+    }
+
+    private List<TicketThread> loadTicketThreads(Ticket ticket) {
+        Long ticketId = ticket.getId();
         List<TicketThread> threads = threadRepository.findByTicketIdOrderByCreatedAtAsc(ticketId);
+        for (TicketThread thread : threads) {
+            assertOwnedBy(thread.getCompany(), ticket.getCompany().getId());
+            if (thread.getTicket() == null || !Objects.equals(thread.getTicket().getId(), ticketId)) {
+                throw new SecurityException("Thread does not belong to this ticket.");
+            }
+        }
         List<TicketAttachment> ticketLevelAtts = attachmentRepository.findByTicketIdAndThreadIsNullOrderByCreatedAtAsc(ticketId);
 
         for (int i = 0; i < threads.size(); i++) {
@@ -78,26 +119,41 @@ public class TicketService {
 
     @Transactional
     public Ticket createTicket(TicketCreateDto dto) {
-        Company company = companyRepository.findById(dto.getCompanyId())
-                .orElseThrow(() -> new RuntimeException("Company not found: " + dto.getCompanyId()));
-
-        Department department = departmentRepository.findById(dto.getDepartmentId())
-                .orElseThrow(() -> new RuntimeException("Department not found: " + dto.getDepartmentId()));
-
-        // Resolve or create customer contact
-        Contact contact = contactRepository.findByCompanyIdAndEmail(company.getId(), dto.getRequesterEmail())
-                .orElseGet(() -> {
-                    Contact newContact = new Contact();
-                    newContact.setCompany(company);
-                    newContact.setEmail(dto.getRequesterEmail());
-                    newContact.setFirstName(dto.getRequesterName() != null ? dto.getRequesterName() : dto.getRequesterEmail());
-                    return contactRepository.save(newContact);
-                });
+        requireActor(true);
+        if (dto == null) throw new IllegalArgumentException("Ticket request is required.");
+        dto.validate();
+        Long companyId = resolveCompanyId(dto.getCompanyId());
+        Company company = companyRepository.findById(companyId)
+                .orElseThrow(() -> new IllegalArgumentException("Company not found."));
+        assertCompanyAccess(company);
+        Department department = requireDepartment(dto.getDepartmentId(), companyId);
+        User assignee = dto.getAssignedAgentId() == null ? null : requireAssignee(dto.getAssignedAgentId(), companyId);
+        List<User> eligibleAgents = dto.getAssignedAgentId() == null
+                ? userRepository.findByCompanyIdAndIsActiveTrue(companyId).stream()
+                    .filter(user -> isEligibleAssignee(user, companyId)).toList()
+                : List.of();
+        Contact contact = contactRepository.findByCompanyIdAndEmail(companyId, dto.getRequesterEmail()).orElse(null);
+        if (contact != null) assertContactAccess(contact, companyId);
 
         // Generate Ticket Number (e.g. KUWY-1009)
         Long maxSeq = ticketRepository.findMaxTicketSequenceForCompany(company.getId());
         long nextSeq = (maxSeq != null && maxSeq >= 1000 ? maxSeq : 1000) + 1;
         String ticketNumber = company.getCompanyCode() + "-" + nextSeq;
+
+        if (assignee == null && !eligibleAgents.isEmpty()) {
+            assignee = eligibleAgents.get((int) (nextSeq % eligibleAgents.size()));
+        }
+
+        // Resolve every supplied reference before creating even the customer contact.
+        if (contact == null) {
+            contact = new Contact();
+            contact.setCompany(company);
+            contact.setEmail(dto.getRequesterEmail());
+            String requesterName = dto.getRequesterName() == null || dto.getRequesterName().isBlank()
+                    ? dto.getRequesterEmail() : dto.getRequesterName();
+            contact.setFirstName(requesterName.substring(0, Math.min(requesterName.length(), 100)));
+            contact = contactRepository.save(contact);
+        }
 
         Ticket ticket = new Ticket();
         ticket.setCompany(company);
@@ -112,15 +168,7 @@ public class TicketService {
         ticket.setChannel(dto.getChannel() != null ? dto.getChannel() : Ticket.TicketChannel.WEB_PORTAL);
         ticket.setFirstResponseDueAt(LocalDateTime.now().plusHours(4)); // Default 4-hour SLA
 
-        if (dto.getAssignedAgentId() != null) {
-            userRepository.findById(dto.getAssignedAgentId()).ifPresent(ticket::setAssignedAgent);
-        } else {
-            // Auto-assign round robin among active company agents
-            List<User> activeAgents = userRepository.findByCompanyIdAndIsActiveTrue(company.getId());
-            if (!activeAgents.isEmpty()) {
-                ticket.setAssignedAgent(activeAgents.get((int) (nextSeq % activeAgents.size())));
-            }
-        }
+        ticket.setAssignedAgent(assignee);
 
         Ticket savedTicket = ticketRepository.save(ticket);
 
@@ -144,35 +192,25 @@ public class TicketService {
 
     @Transactional
     public TicketThread addReply(Long ticketId, TicketReplyDto dto) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        User actor = requireActor(true);
+        if (dto == null) throw new IllegalArgumentException("Reply request is required.");
+        requireBody(dto.getBody());
+        Ticket ticket = findAccessibleTicket(ticketId);
 
         TicketThread thread = new TicketThread();
         thread.setCompany(ticket.getCompany());
         thread.setTicket(ticket);
-        thread.setSubject("Re: [" + ticket.getTicketNumber() + "] " + ticket.getSubject());
+        thread.setSubject(replySubject(ticket));
         thread.setBodyText(dto.getBody());
         thread.setBodyHtml("<p>" + dto.getBody() + "</p>");
         thread.setIsPrivate(Boolean.TRUE.equals(dto.getIsPrivate()));
+        setAuthor(thread, actor);
 
         if (Boolean.TRUE.equals(dto.getIsPrivate())) {
             thread.setThreadType(TicketThread.ThreadType.PRIVATE_NOTE);
-            thread.setSenderType(TicketThread.SenderType.AGENT);
-            thread.setFromEmail(dto.getSenderEmail() != null ? dto.getSenderEmail() : "testinternal@kuwy.in");
-            thread.setFromName(dto.getSenderName() != null ? dto.getSenderName() : "Support Agent");
-            if (dto.getSenderUserId() != null) {
-                userRepository.findById(dto.getSenderUserId()).ifPresent(thread::setSenderUser);
-            }
         } else {
             thread.setThreadType(TicketThread.ThreadType.REPLY);
-            thread.setSenderType(TicketThread.SenderType.AGENT);
-            thread.setFromEmail(dto.getSenderEmail() != null ? dto.getSenderEmail() : "testsupport@kuwy.in");
-            thread.setFromName(dto.getSenderName() != null ? dto.getSenderName() : "Kuwy Support Team");
             thread.setToEmails(ticket.getContact().getEmail());
-
-            if (dto.getSenderUserId() != null) {
-                userRepository.findById(dto.getSenderUserId()).ifPresent(thread::setSenderUser);
-            }
 
             // Update ticket first response timestamp if not already set
             if (ticket.getFirstResponseAt() == null) {
@@ -182,8 +220,8 @@ public class TicketService {
             // Set ticket to Waiting on Customer or In Progress
             if (ticket.getStatus() == Ticket.TicketStatus.OPEN) {
                 ticket.setStatus(Ticket.TicketStatus.WAITING_ON_CUSTOMER);
-                ticketRepository.save(ticket);
             }
+            ticketRepository.save(ticket);
         }
 
         return threadRepository.save(thread);
@@ -191,8 +229,9 @@ public class TicketService {
 
     @Transactional
     public Ticket updateStatus(Long ticketId, Ticket.TicketStatus newStatus) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        requireActor(true);
+        if (newStatus == null) throw new IllegalArgumentException("Ticket status is required.");
+        Ticket ticket = findAccessibleTicket(ticketId);
         ticket.setStatus(newStatus);
         if (newStatus == Ticket.TicketStatus.RESOLVED) {
             ticket.setResolvedAt(LocalDateTime.now());
@@ -202,28 +241,27 @@ public class TicketService {
 
     @Transactional
     public Ticket updatePriority(Long ticketId, Ticket.TicketPriority newPriority) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        requireActor(true);
+        if (newPriority == null) throw new IllegalArgumentException("Ticket priority is required.");
+        Ticket ticket = findAccessibleTicket(ticketId);
         ticket.setPriority(newPriority);
         return ticketRepository.save(ticket);
     }
 
     @Transactional
     public Ticket updateDepartment(Long ticketId, Long departmentId) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
-        Department department = departmentRepository.findById(departmentId)
-                .orElseThrow(() -> new RuntimeException("Department not found: " + departmentId));
+        requireActor(true);
+        Ticket ticket = findAccessibleTicket(ticketId);
+        Department department = requireDepartment(departmentId, ticket.getCompany().getId());
         ticket.setDepartment(department);
         return ticketRepository.save(ticket);
     }
 
     @Transactional
     public Ticket assignAgent(Long ticketId, Long agentId) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
-        User agent = userRepository.findById(agentId)
-                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+        requireActor(true);
+        Ticket ticket = findAccessibleTicket(ticketId);
+        User agent = requireAssignee(agentId, ticket.getCompany().getId());
         ticket.setAssignedAgent(agent);
         if (ticket.getStatus() == Ticket.TicketStatus.OPEN) {
             ticket.setStatus(Ticket.TicketStatus.IN_PROGRESS);
@@ -233,20 +271,42 @@ public class TicketService {
 
     @Transactional
     public void bulkUpdate(BulkUpdateDto dto) {
-        if (dto.getTicketIds() == null || dto.getTicketIds().isEmpty()) return;
-        List<Ticket> tickets = ticketRepository.findAllById(dto.getTicketIds());
-        User agent = (dto.getAgentId() != null) ? userRepository.findById(dto.getAgentId()).orElse(null) : null;
-        Department dept = (dto.getDepartmentId() != null) ? departmentRepository.findById(dto.getDepartmentId()).orElse(null) : null;
+        requireActor(true);
+        if (dto == null) throw new IllegalArgumentException("Bulk update request is required.");
+        dto.validate();
+        Ticket.TicketStatus status = parseStatus(dto.getStatus());
+        Ticket.TicketPriority priority = parsePriority(dto.getPriority());
+        List<Long> ids = List.copyOf(dto.getTicketIds());
+        List<Ticket> tickets = ticketRepository.findAllById(ids);
+        Set<Long> remainingIds = new HashSet<>(ids);
+        if (tickets.size() != ids.size()) {
+            throw new IllegalArgumentException("One or more tickets were not found.");
+        }
+        Long companyId = null;
+        for (Ticket ticket : tickets) {
+            if (!remainingIds.remove(ticket.getId())) {
+                throw new IllegalArgumentException("One or more tickets were not found.");
+            }
+            assertTicketAccess(ticket);
+            if (companyId == null) companyId = ticket.getCompany().getId();
+            else if (!companyId.equals(ticket.getCompany().getId())) {
+                throw new SecurityException("Bulk tickets must belong to one workspace.");
+            }
+        }
+        User agent = dto.getAgentId() == null ? null : requireAssignee(dto.getAgentId(), companyId);
+        Department dept = dto.getDepartmentId() == null ? null : requireDepartment(dto.getDepartmentId(), companyId);
 
+        // No managed entity is changed until every ticket, enum and replacement has passed validation.
+        LocalDateTime resolvedAt = LocalDateTime.now();
         for (Ticket t : tickets) {
-            if (dto.getStatus() != null && !dto.getStatus().isBlank()) {
-                t.setStatus(Ticket.TicketStatus.valueOf(dto.getStatus().toUpperCase()));
-                if (t.getStatus() == Ticket.TicketStatus.RESOLVED) {
-                    t.setResolvedAt(LocalDateTime.now());
+            if (status != null) {
+                t.setStatus(status);
+                if (status == Ticket.TicketStatus.RESOLVED) {
+                    t.setResolvedAt(resolvedAt);
                 }
             }
-            if (dto.getPriority() != null && !dto.getPriority().isBlank()) {
-                t.setPriority(Ticket.TicketPriority.valueOf(dto.getPriority().toUpperCase()));
+            if (priority != null) {
+                t.setPriority(priority);
             }
             if (agent != null) {
                 t.setAssignedAgent(agent);
@@ -260,74 +320,207 @@ public class TicketService {
 
     @Transactional
     public Ticket executeScenario(Long ticketId, ScenarioExecuteDto dto) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("Ticket not found: " + ticketId));
+        User actor = requireActor(true);
+        if (dto == null || dto.getScenarioKey() == null || dto.getScenarioKey().isBlank()
+                || dto.getScenarioKey().length() > 64
+                || dto.getCustomNote() != null && dto.getCustomNote().length() > TicketCreateDto.MAX_BODY_LENGTH) {
+            throw new IllegalArgumentException("A valid scenario key and bounded note are required.");
+        }
+        Ticket ticket = findAccessibleTicket(ticketId);
 
         String noteText = "";
         String replyText = "";
         boolean isReply = false;
+        Ticket.TicketStatus status = ticket.getStatus();
+        Ticket.TicketPriority priority = ticket.getPriority();
+        boolean resolved = false;
 
-        switch (dto.getScenarioKey()) {
+        switch (dto.getScenarioKey().trim()) {
             case "KYC_RESUBMIT":
-                ticket.setStatus(Ticket.TicketStatus.WAITING_ON_CUSTOMER);
-                ticket.setPriority(Ticket.TicketPriority.HIGH);
+                status = Ticket.TicketStatus.WAITING_ON_CUSTOMER;
+                priority = Ticket.TicketPriority.HIGH;
                 replyText = "Hello " + ticket.getContact().getFirstName() + ",\n\nWe have reviewed your application and noticed a verification discrepancy with your submitted KYC documents. Please re-upload clear copies of your PAN and Aadhaar cards through our partner portal.\n\nThank you,\nKuwy Support Team";
                 isReply = true;
                 break;
             case "ESCALATE_LEAD":
-                ticket.setPriority(Ticket.TicketPriority.URGENT);
-                ticket.setStatus(Ticket.TicketStatus.IN_PROGRESS);
-                noteText = "⚡ Scenario Macro Executed: Escalated to Senior Support Lead for critical review. Turnaround required within 2 hours.";
+                priority = Ticket.TicketPriority.URGENT;
+                status = Ticket.TicketStatus.IN_PROGRESS;
+                noteText = "Scenario Macro Executed: Escalated to Senior Support Lead for critical review. Turnaround required within 2 hours.";
                 break;
             case "LOAN_APPROVED":
-                ticket.setStatus(Ticket.TicketStatus.RESOLVED);
-                ticket.setResolvedAt(LocalDateTime.now());
-                replyText = "Dear " + ticket.getContact().getFirstName() + ",\n\nCongratulations! Your loan verification has been successfully approved by the underwriting team. Disbursement details have been dispatched to your registered mobile and email.\n\nRegards,\nKuwy Finance Operations";
+                status = Ticket.TicketStatus.RESOLVED;
+                resolved = true;
+                replyText = "Dear " + ticket.getContact().getFirstName() + ",\n\nCongratulations! Your loan verification has been successfully approved by the underwriting team. Please refer to your application for disbursement details.\n\nRegards,\nKuwy Finance Operations";
                 isReply = true;
                 break;
             case "CUSTOMER_INACTIVE":
-                ticket.setStatus(Ticket.TicketStatus.CLOSED);
-                ticket.setResolvedAt(LocalDateTime.now());
-                noteText = "⚡ Scenario Macro Executed: Closed ticket due to customer non-response after follow-up period.";
+                status = Ticket.TicketStatus.CLOSED;
+                resolved = true;
+                noteText = "Scenario Macro Executed: Closed ticket due to customer non-response after follow-up period.";
                 break;
             default:
-                if (dto.getCustomNote() != null) {
-                    noteText = dto.getCustomNote();
-                }
+                requireBody(dto.getCustomNote());
+                noteText = dto.getCustomNote();
                 break;
         }
 
+        ticket.setStatus(status);
+        ticket.setPriority(priority);
+        if (resolved) ticket.setResolvedAt(LocalDateTime.now());
+        if (isReply && ticket.getFirstResponseAt() == null) ticket.setFirstResponseAt(LocalDateTime.now());
         Ticket saved = ticketRepository.save(ticket);
 
-        if (isReply && !replyText.isBlank()) {
-            TicketThread thread = new TicketThread();
-            thread.setCompany(ticket.getCompany());
-            thread.setTicket(saved);
-            thread.setThreadType(TicketThread.ThreadType.REPLY);
-            thread.setSenderType(TicketThread.SenderType.AGENT);
-            thread.setFromEmail("testsupport@kuwy.in");
-            thread.setFromName(dto.getAuthorName() != null ? dto.getAuthorName() : "Kuwy Automation Lead");
-            thread.setToEmails(ticket.getContact().getEmail());
-            thread.setSubject("Re: [" + ticket.getTicketNumber() + "] " + ticket.getSubject());
-            thread.setBodyText(replyText);
-            thread.setBodyHtml("<p>" + replyText.replace("\n", "<br/>") + "</p>");
-            thread.setIsPrivate(false);
-            threadRepository.save(thread);
-        } else if (!noteText.isBlank()) {
-            TicketThread note = new TicketThread();
-            note.setCompany(ticket.getCompany());
-            note.setTicket(saved);
-            note.setThreadType(TicketThread.ThreadType.PRIVATE_NOTE);
-            note.setSenderType(TicketThread.SenderType.AGENT);
-            note.setFromEmail("testinternal@kuwy.in");
-            note.setFromName(dto.getAuthorName() != null ? dto.getAuthorName() : "Support System");
-            note.setSubject("Internal Note: Scenario Executed");
-            note.setBodyText(noteText);
-            note.setBodyHtml("<p>" + noteText + "</p>");
-            note.setIsPrivate(true);
-            threadRepository.save(note);
-        }
+        TicketThread thread = new TicketThread();
+        thread.setCompany(ticket.getCompany());
+        thread.setTicket(saved);
+        thread.setThreadType(isReply ? TicketThread.ThreadType.REPLY : TicketThread.ThreadType.PRIVATE_NOTE);
+        setAuthor(thread, actor);
+        if (isReply) thread.setToEmails(ticket.getContact().getEmail());
+        thread.setSubject(isReply ? replySubject(ticket) : "Internal Note: Scenario Executed");
+        thread.setBodyText(isReply ? replyText : noteText);
+        thread.setBodyHtml("<p>" + (isReply ? replyText.replace("\n", "<br/>") : noteText) + "</p>");
+        thread.setIsPrivate(!isReply);
+        threadRepository.save(thread);
 
         return saved;
+    }
+
+    private User requireActor(boolean writable) {
+        Long userId = TenantContext.requireUserId();
+        User actor = userRepository.findById(userId)
+                .orElseThrow(() -> new SecurityException("An active staff identity is required."));
+        Role role = actor.getRole();
+        if (!isActiveUser(actor) || role == null || role.getRoleType() == null
+                || role.getRoleType() == Role.RoleType.CUSTOMER
+                || !Objects.equals(actor.getId(), userId)
+                || !role.getRoleType().name().equals(TenantContext.getUserRole())
+                || actor.getEmail() == null || !actor.getEmail().equalsIgnoreCase(TenantContext.getUserEmail())) {
+            throw new SecurityException("An active staff identity is required.");
+        }
+        if (role.getRoleType() != Role.RoleType.SUPER_ADMIN) {
+            assertOwnedBy(actor.getCompany(), TenantContext.getCompanyId());
+            assertCompanyAccess(actor.getCompany());
+        }
+        if (role.getCompany() != null) {
+            if (actor.getCompany() == null) throw new SecurityException("Invalid staff role ownership.");
+            assertOwnedBy(role.getCompany(), actor.getCompany().getId());
+        }
+        if (writable && role.getRoleType() == Role.RoleType.LIGHT_AGENT) {
+            throw new SecurityException("Light agents have read-only ticket access.");
+        }
+        return actor;
+    }
+
+    private Long resolveCompanyId(Long requestedCompanyId) {
+        Long companyId = requestedCompanyId != null ? requestedCompanyId : TenantContext.getCompanyId();
+        requirePositiveId(companyId);
+        TenantContext.assertAccessTo(companyId);
+        return companyId;
+    }
+
+    private Ticket findAccessibleTicket(Long ticketId) {
+        requirePositiveId(ticketId);
+        Ticket ticket = ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new IllegalArgumentException("Ticket not found."));
+        assertTicketAccess(ticket);
+        return ticket;
+    }
+
+    private void assertTicketAccess(Ticket ticket) {
+        assertCompanyAccess(ticket.getCompany());
+        Long companyId = ticket.getCompany().getId();
+        if (ticket.getDepartment() != null) assertOwnedBy(ticket.getDepartment().getCompany(), companyId);
+        if (ticket.getAssignedAgent() != null) assertOwnedBy(ticket.getAssignedAgent().getCompany(), companyId);
+        assertContactAccess(ticket.getContact(), companyId);
+    }
+
+    private void assertCompanyAccess(Company company) {
+        if (company == null) throw new SecurityException("Workspace access is not permitted.");
+        TenantContext.assertAccessTo(company.getId());
+        if (company.getStatus() != Company.CompanyStatus.ACTIVE && company.getStatus() != Company.CompanyStatus.TRIAL) {
+            throw new SecurityException("Workspace is not active.");
+        }
+    }
+
+    private void assertContactAccess(Contact contact, Long companyId) {
+        if (contact == null) throw new SecurityException("Ticket contact is not available.");
+        assertOwnedBy(contact.getCompany(), companyId);
+        if (contact.getAccount() != null) assertOwnedBy(contact.getAccount().getCompany(), companyId);
+    }
+
+    private Department requireDepartment(Long departmentId, Long companyId) {
+        requirePositiveId(departmentId);
+        Department department = departmentRepository.findById(departmentId)
+                .orElseThrow(() -> new IllegalArgumentException("Department not found."));
+        assertOwnedBy(department.getCompany(), companyId);
+        if (!Boolean.TRUE.equals(department.getIsActive())) {
+            throw new IllegalArgumentException("Department must be active.");
+        }
+        return department;
+    }
+
+    private User requireAssignee(Long agentId, Long companyId) {
+        requirePositiveId(agentId);
+        User agent = userRepository.findById(agentId)
+                .orElseThrow(() -> new IllegalArgumentException("Assignee not found."));
+        assertOwnedBy(agent.getCompany(), companyId);
+        if (!isEligibleAssignee(agent, companyId)) {
+            throw new IllegalArgumentException("Assignee must be an active company administrator, team lead or agent.");
+        }
+        return agent;
+    }
+
+    private boolean isEligibleAssignee(User user, Long companyId) {
+        if (!isActiveUser(user) || user.getCompany() == null || !Objects.equals(user.getCompany().getId(), companyId)
+                || user.getRole() == null || user.getRole().getRoleType() == null) return false;
+        Role role = user.getRole();
+        if (role.getCompany() != null && !Objects.equals(role.getCompany().getId(), companyId)) return false;
+        return role.getRoleType() == Role.RoleType.COMPANY_ADMIN || role.getRoleType() == Role.RoleType.TEAM_LEAD
+                || role.getRoleType() == Role.RoleType.AGENT;
+    }
+
+    private boolean isActiveUser(User user) {
+        return user != null && Boolean.TRUE.equals(user.getIsActive()) && "ACTIVE".equalsIgnoreCase(user.getStatus());
+    }
+
+    private void assertOwnedBy(Company company, Long companyId) {
+        if (company == null || companyId == null || !companyId.equals(company.getId())) {
+            throw new SecurityException("Referenced record does not belong to this workspace.");
+        }
+    }
+
+    private void requirePositiveId(Long id) {
+        if (id == null || id <= 0) throw new IllegalArgumentException("A positive resource ID is required.");
+    }
+
+    private Ticket.TicketStatus parseStatus(String status) {
+        if (status == null) return null;
+        if (status.length() > 32) throw new IllegalArgumentException("Invalid ticket status.");
+        return status.isBlank() ? null : Ticket.TicketStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+    }
+
+    private Ticket.TicketPriority parsePriority(String priority) {
+        if (priority == null) return null;
+        if (priority.length() > 16) throw new IllegalArgumentException("Invalid ticket priority.");
+        return priority.isBlank() ? null : Ticket.TicketPriority.valueOf(priority.trim().toUpperCase(Locale.ROOT));
+    }
+
+    private void requireBody(String body) {
+        if (body == null || body.isBlank() || body.length() > TicketCreateDto.MAX_BODY_LENGTH) {
+            throw new IllegalArgumentException("Message body must contain 1 to " + TicketCreateDto.MAX_BODY_LENGTH + " characters.");
+        }
+    }
+
+    private String replySubject(Ticket ticket) {
+        String subject = "Re: [" + ticket.getTicketNumber() + "] " + ticket.getSubject();
+        return subject.substring(0, Math.min(subject.length(), 500));
+    }
+
+    private void setAuthor(TicketThread thread, User actor) {
+        thread.setSenderType(TicketThread.SenderType.AGENT);
+        thread.setSenderUser(actor);
+        thread.setFromEmail(actor.getEmail());
+        thread.setFromName(actor.getDisplayName() == null || actor.getDisplayName().isBlank()
+                ? actor.getEmail() : actor.getDisplayName());
     }
 }
