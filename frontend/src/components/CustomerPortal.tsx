@@ -4,7 +4,8 @@ import {
   Paperclip, FileText, Download,
   ArrowLeft, Clock, LogOut, Sparkles, Building2,
   RotateCcw, ThumbsUp, ThumbsDown, Star, Printer, Copy,
-  ChevronRight, AlertCircle, Phone, Mail, Lock, User
+  ChevronRight, AlertCircle, Phone, Mail, Lock, User,
+  Menu, X
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { Company, Department, Ticket, TicketThread, KbArticle } from '../types';
@@ -51,6 +52,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [authStep, setAuthStep] = useState<'input' | 'otp'>('input');
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -75,6 +77,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     } else if (subView === 'home') {
       setActiveTab('home');
     }
+    setMobileMenuOpen(false);
+    setShowUserMenu(false);
   }, [subView]);
 
   // Reset logo failure on company change
@@ -441,9 +445,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   // Suggested KB articles for deflection on Screen 11
   const suggestedArticles = subject.trim().length > 3
     ? kbArticles.filter(a =>
-        a.title.toLowerCase().includes(subject.toLowerCase()) ||
-        a.categoryName.toLowerCase().includes(subject.toLowerCase())
-      ).slice(0, 3)
+      a.title.toLowerCase().includes(subject.toLowerCase()) ||
+      a.categoryName.toLowerCase().includes(subject.toLowerCase())
+    ).slice(0, 3)
     : [];
 
   const primaryColor = company?.primaryColor || '#0d6efd';
@@ -452,23 +456,23 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const renderAuthBarrier = (target: 'ticket' | 'ticketstatus') => {
     const isTicket = target === 'ticket';
     return (
-      <div className="card border-0 shadow-sm rounded-4 p-4 p-md-5 bg-white mx-auto animate-fade-in my-3" style={{ maxWidth: '580px' }}>
-        <div className="text-center mb-4">
+      <div className="card border-0 shadow-sm rounded-4 p-3.5 p-sm-4 p-md-5 bg-white mx-auto animate-fade-in my-2 my-md-3 w-100" style={{ maxWidth: '580px' }}>
+        <div className="text-center mb-3 mb-md-4">
           <div
-            className="p-3 rounded-circle d-inline-flex align-items-center justify-content-center mb-3 shadow-xs"
+            className="p-3 rounded-circle d-inline-flex align-items-center justify-content-center mb-2.5 mb-md-3 shadow-xs"
             style={{ backgroundColor: `${primaryColor}15`, color: primaryColor }}
           >
-            <Lock size={32} />
+            <Lock size={28} />
           </div>
           <div>
-            <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-1 mb-2 fw-semibold">
+            <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-1 mb-2 fw-semibold" style={{ fontSize: '0.72rem' }}>
               Authentication Required • Access Protected
             </span>
           </div>
-          <h4 className="fw-bolder text-dark mb-1">
+          <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">
             {isTicket ? 'Sign In to Submit Support Ticket' : 'Sign In to Track Tickets & Status'}
           </h4>
-          <p className="text-muted small mb-0" style={{ maxWidth: '460px', margin: '0 auto' }}>
+          <p className="text-muted small mb-0 px-2" style={{ maxWidth: '460px', margin: '0 auto', fontSize: '0.84rem' }}>
             {isTicket
               ? 'Without sign-in, ticket creation cannot be granted. Whichever email ID you sign in with becomes the locked default "from" email for SLA tracking and notifications.'
               : 'Without sign-in, access cannot be granted. Sign in with your customer email to view your open requests, SLA countdowns, and engineer replies.'}
@@ -476,38 +480,38 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         </div>
 
         {/* 1. Quick One-Click Demo Logins */}
-        <div className="p-3 rounded-3 bg-light border mb-4">
+        <div className="p-2.5 p-sm-3 rounded-3 bg-light border mb-3 mb-md-4">
           <div className="d-flex align-items-center justify-content-between mb-2">
-            <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.68rem', letterSpacing: '0.04em' }}>
+            <small className="text-secondary fw-bold text-uppercase" style={{ fontSize: '0.66rem', letterSpacing: '0.04em' }}>
               One-Click Demo Customer Access
             </small>
-            <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.65rem' }}>Instant Sign-in</span>
+            <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.62rem' }}>Instant Sign-in</span>
           </div>
           <div className="d-grid gap-2">
             <button
               type="button"
-              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-3 rounded-3 hover-shadow transition-all"
+              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-2.5 px-sm-3 rounded-3 hover-shadow transition-all"
               onClick={() => handleQuickCustomerLogin('loan.applicant@gmail.com', 'Rajesh Kannan')}
             >
-              <div>
-                <div className="fw-bold text-dark small">Rajesh Kannan</div>
-                <div className="text-muted" style={{ fontSize: '0.74rem' }}>loan.applicant@gmail.com • Loan Customer</div>
+              <div className="text-truncate me-2">
+                <div className="fw-bold text-dark small text-truncate">Rajesh Kannan</div>
+                <div className="text-muted text-truncate" style={{ fontSize: '0.72rem' }}>loan.applicant@gmail.com • Loan Customer</div>
               </div>
-              <span className="btn btn-xs btn-primary rounded-pill px-2.5 py-1 fw-bold" style={{ fontSize: '0.7rem' }}>
+              <span className="btn btn-xs btn-primary rounded-pill px-2.5 py-1 fw-bold flex-shrink-0" style={{ fontSize: '0.68rem' }}>
                 Sign In →
               </span>
             </button>
 
             <button
               type="button"
-              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-3 rounded-3 hover-shadow transition-all"
+              className="btn btn-sm btn-white bg-white border text-start d-flex align-items-center justify-content-between py-2 px-2.5 px-sm-3 rounded-3 hover-shadow transition-all"
               onClick={() => handleQuickCustomerLogin('priya.customer@gmail.com', 'Priya Sharma')}
             >
-              <div>
-                <div className="fw-bold text-dark small">Priya Sharma</div>
-                <div className="text-muted" style={{ fontSize: '0.74rem' }}>priya.customer@gmail.com • KYC Applicant</div>
+              <div className="text-truncate me-2">
+                <div className="fw-bold text-dark small text-truncate">Priya Sharma</div>
+                <div className="text-muted text-truncate" style={{ fontSize: '0.72rem' }}>priya.customer@gmail.com • KYC Applicant</div>
               </div>
-              <span className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-bold" style={{ fontSize: '0.7rem' }}>
+              <span className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-bold flex-shrink-0" style={{ fontSize: '0.68rem' }}>
                 Sign In →
               </span>
             </button>
@@ -517,7 +521,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         {/* Divider */}
         <div className="position-relative text-center my-3">
           <hr className="border-secondary-subtle" />
-          <span className="position-absolute top-50 start-50 translate-middle bg-white px-3 small text-muted">
+          <span className="position-absolute top-50 start-50 translate-middle bg-white px-2 small text-muted" style={{ fontSize: '0.72rem' }}>
             OR VERIFY YOUR EMAIL
           </span>
         </div>
@@ -549,7 +553,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             {otpNotice && (
               <div className="small text-danger mt-1">{otpNotice}</div>
             )}
-            <small className="text-muted d-block" style={{ fontSize: '0.74rem' }}>
+            <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>
               We'll send a 6-digit verification code. Test OTP: <code>123456</code>
             </small>
           </form>
@@ -565,7 +569,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 Change Email
               </button>
             </div>
-            <div className="badge bg-info-subtle text-info mb-2 text-wrap text-start">
+            <div className="badge bg-info-subtle text-info mb-2 text-wrap text-start w-100">
               {authEmailInput}
             </div>
             <div className="input-group mb-2">
@@ -593,7 +597,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
         {/* 3. Social SSO */}
         <div className="row g-2 mb-3">
-          <div className="col-6">
+          <div className="col-12 col-sm-6">
             <button
               type="button"
               className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
@@ -608,7 +612,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <span>Google SSO</span>
             </button>
           </div>
-          <div className="col-6">
+          <div className="col-12 col-sm-6">
             <button
               type="button"
               className="btn btn-light border w-100 py-2 d-flex align-items-center justify-content-center gap-2 small fw-semibold"
@@ -657,43 +661,50 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
       {/* HEADER & NAVIGATION */}
       <header className="bg-white border-bottom sticky-top shadow-xs">
-        <div className="container d-flex justify-content-between align-items-center py-2.5 px-3" style={{ maxWidth: '1200px' }}>
+        <div className="container d-flex justify-content-between align-items-center py-2 px-3" style={{ maxWidth: '1200px' }}>
           {/* Company Brand */}
           <div
-            className="d-flex align-items-center gap-2.5 cursor-pointer"
+            className="d-flex align-items-center gap-2 cursor-pointer"
             onClick={() => {
               setActiveTab('home');
+              setMobileMenuOpen(false);
               onNavigate?.('/' + companySlug);
             }}
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: 'pointer', maxWidth: 'calc(100% - 95px)' }}
           >
-            {company?.logoUrl && !logoFailed ? (
+            {company?.logoUrl && !logoFailed && companySlug !== 'kuwy' ? (
               <img
                 src={company.logoUrl}
                 alt=""
                 onError={() => setLogoFailed(true)}
-                style={{ height: '32px', maxWidth: '140px', objectFit: 'contain' }}
+                style={{ height: '30px', maxWidth: '110px', objectFit: 'contain' }}
               />
             ) : (
               <div
-                className="p-2 rounded-3 text-white d-flex align-items-center justify-content-center shadow-xs"
-                style={{ backgroundColor: primaryColor }}
+                className="rounded-3 text-white d-flex align-items-center justify-content-center shadow-xs flex-shrink-0 fw-bold"
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  backgroundColor: primaryColor,
+                  fontSize: '0.95rem',
+                  letterSpacing: '-0.02em',
+                }}
               >
-                <Building2 size={20} />
+                {company?.name ? company.name.charAt(0).toUpperCase() : 'K'}
               </div>
             )}
-            <div>
-              <h5 className="fw-bolder mb-0 text-dark" style={{ letterSpacing: '-0.02em', fontSize: '1.05rem' }}>
+            <div className="text-truncate">
+              <h5 className="fw-bolder mb-0 text-dark text-truncate" style={{ letterSpacing: '-0.02em', fontSize: '0.96rem' }}>
                 {company?.name || 'Customer Support'}
               </h5>
-              <small className="text-muted d-block" style={{ fontSize: '0.72rem', marginTop: '-2px' }}>
+              <small className="text-muted d-none d-sm-block text-truncate" style={{ fontSize: '0.7rem', marginTop: '-2px' }}>
                 Official Help Center & Support Portal
               </small>
             </div>
           </div>
 
-          {/* Navigation Items */}
-          <div className="d-flex align-items-center gap-1.5">
+          {/* Desktop Navigation Items (Hidden on mobile) */}
+          <div className="d-none d-md-flex align-items-center gap-1.5">
             <button
               type="button"
               className={`btn btn-sm rounded-3 fw-semibold ${activeTab === 'home' ? 'btn-light text-primary fw-bold' : 'btn-link text-secondary text-decoration-none'}`}
@@ -738,7 +749,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               )}
             </button>
 
-            {/* Customer Account / Sign In Dropdown */}
+            {/* Desktop Customer Account Dropdown */}
             {isAuthenticated ? (
               <div className="position-relative ms-2">
                 <button
@@ -826,7 +837,180 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               </button>
             )}
           </div>
+
+          {/* Mobile Right Controls: Avatar/Sign-in + Hamburger Toggle (Mobile only) */}
+          <div className="d-flex d-md-none align-items-center gap-1.5">
+            {isAuthenticated ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-light border rounded-circle p-0 d-flex align-items-center justify-content-center"
+                style={{ width: '30px', height: '30px' }}
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                aria-label="User Account Menu"
+              >
+                <div
+                  className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold"
+                  style={{ width: '24px', height: '24px', backgroundColor: primaryColor, fontSize: '0.72rem' }}
+                >
+                  {customerName ? customerName.charAt(0).toUpperCase() : 'C'}
+                </div>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-xs btn-outline-primary rounded-pill px-2.5 py-1 fw-semibold"
+                style={{ fontSize: '0.74rem' }}
+                onClick={() => { setAuthStep('input'); setShowAuthModal(true); }}
+              >
+                Sign In
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-sm btn-light border rounded-3 p-1 d-flex align-items-center justify-content-center"
+              style={{ width: '32px', height: '32px' }}
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              aria-label="Toggle navigation menu"
+            >
+              {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+            </button>
+          </div>
         </div>
+
+        {/* Collapsible Mobile Navigation Drawer */}
+        {mobileMenuOpen && (
+          <div className="d-md-none bg-white border-top shadow-lg p-3 animate-fade-in">
+            {isAuthenticated ? (
+              <div className="p-2.5 rounded-3 bg-light border mb-2.5 d-flex align-items-center justify-content-between">
+                <div className="d-flex align-items-center gap-2 text-truncate me-2">
+                  <div
+                    className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold flex-shrink-0"
+                    style={{ width: '30px', height: '30px', backgroundColor: primaryColor, fontSize: '0.75rem' }}
+                  >
+                    {customerName ? customerName.charAt(0).toUpperCase() : 'C'}
+                  </div>
+                  <div className="text-truncate">
+                    <div className="fw-bold small text-dark text-truncate">{customerName}</div>
+                    <div className="text-muted text-truncate" style={{ fontSize: '0.7rem' }}>{customerEmail}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-outline-danger rounded-pill px-2 py-0.5 flex-shrink-0"
+                  style={{ fontSize: '0.7rem' }}
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleSignOut();
+                  }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <div className="mb-2.5">
+                <button
+                  type="button"
+                  className="btn btn-primary w-100 py-2 fw-semibold rounded-3 d-flex align-items-center justify-content-center gap-2 shadow-xs"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setAuthStep('input');
+                    setShowAuthModal(true);
+                  }}
+                >
+                  <User size={16} /> Sign In to Your Account
+                </button>
+              </div>
+            )}
+
+            <div className="d-grid gap-1">
+              <button
+                type="button"
+                className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center justify-content-between ${activeTab === 'home' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
+                onClick={() => {
+                  setActiveTab('home');
+                  setMobileMenuOpen(false);
+                  onNavigate?.('/' + companySlug);
+                }}
+              >
+                <div className="d-flex align-items-center gap-2">
+                  <Building2 size={16} />
+                  <span className="fw-semibold">Portal Home</span>
+                </div>
+                <span className="small opacity-75">/{companySlug}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center justify-content-between ${activeTab === 'submit' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
+                onClick={() => {
+                  setActiveTab('submit');
+                  setSubmitSuccess(null);
+                  setMobileMenuOpen(false);
+                  onNavigate?.('/' + companySlug + '/ticket');
+                }}
+              >
+                <div className="d-flex align-items-center gap-2">
+                  <Send size={16} />
+                  <span className="fw-semibold">Submit Support Ticket</span>
+                </div>
+                <span className="badge bg-primary-subtle text-primary border border-primary-subtle" style={{ fontSize: '0.65rem' }}>
+                  /ticket
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center justify-content-between ${activeTab === 'tickets' || activeTab === 'ticket-detail' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
+                onClick={() => {
+                  setActiveTab('tickets');
+                  setMobileMenuOpen(false);
+                  onNavigate?.('/' + companySlug + '/ticketstatus');
+                }}
+              >
+                <div className="d-flex align-items-center gap-2">
+                  <Clock size={16} />
+                  <span className="fw-semibold">Track Tickets & Status</span>
+                </div>
+                <div className="d-flex align-items-center gap-1.5">
+                  {myTickets.length > 0 && (
+                    <span className="badge rounded-pill bg-danger" style={{ fontSize: '0.68rem' }}>
+                      {myTickets.length}
+                    </span>
+                  )}
+                  <span className="small opacity-75">/ticketstatus</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center gap-2 ${activeTab === 'kb' || activeTab === 'article' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
+                onClick={() => {
+                  setActiveTab('kb');
+                  setSelectedKbCategory(null);
+                  setMobileMenuOpen(false);
+                }}
+              >
+                <FileText size={16} />
+                <span className="fw-semibold">Help Center & Knowledge Base</span>
+              </button>
+
+              {isAuthenticated && (
+                <button
+                  type="button"
+                  className={`btn btn-sm text-start py-2 px-3 rounded-3 d-flex align-items-center gap-2 ${activeTab === 'profile' ? 'btn-primary text-white' : 'btn-light text-dark'}`}
+                  onClick={() => {
+                    setActiveTab('profile');
+                    setMobileMenuOpen(false);
+                  }}
+                >
+                  <User size={16} />
+                  <span className="fw-semibold">Account Preferences</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       {loading && (
@@ -840,17 +1024,17 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           ============================================================== */}
       {activeTab === 'home' && (
         <section
-          className="text-white py-5 text-center position-relative shadow-sm"
+          className="text-white py-4 py-md-5 text-center position-relative shadow-sm px-3"
           style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, #0f172a 100%)` }}
         >
           <div className="container" style={{ maxWidth: '720px' }}>
-            <span className="badge bg-white text-dark fw-bold mb-2 shadow-xs" style={{ fontSize: '0.75rem' }}>
+            <span className="badge bg-white text-dark fw-bold mb-2 shadow-xs" style={{ fontSize: '0.72rem' }}>
               Screen 9 • Public Customer Portal
             </span>
-            <h2 className="fw-bolder mb-2 text-white" style={{ letterSpacing: '-0.02em' }}>
+            <h2 className="fw-bolder mb-2 text-white fs-3 fs-md-2" style={{ letterSpacing: '-0.02em' }}>
               How can we assist you today?
             </h2>
-            <p className="text-white-50 mb-4" style={{ fontSize: '0.95rem' }}>
+            <p className="text-white-50 mb-3 mb-md-4 small px-2" style={{ fontSize: '0.9rem' }}>
               Search help articles, check ticket status, or submit a request directly to our verified engineers.
             </p>
 
@@ -860,7 +1044,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               <input
                 type="text"
                 className="form-control form-control-lg rounded-pill ps-5 pe-4 shadow-lg border-0"
-                style={{ fontSize: '0.95rem' }}
+                style={{ fontSize: '0.92rem' }}
                 placeholder="Search solutions, loan disbursals, KYC, or error codes..."
                 value={searchQuery}
                 onChange={e => {
@@ -889,11 +1073,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         setSearchQuery('');
                       }}
                     >
-                      <div>
-                        <div className="fw-semibold text-dark small mb-0.5">{art.title}</div>
+                      <div className="text-truncate me-2">
+                        <div className="fw-semibold text-dark small mb-0.5 text-truncate">{art.title}</div>
                         <small className="text-muted">{art.categoryName}</small>
                       </div>
-                      <ChevronRight size={16} className="text-muted" />
+                      <ChevronRight size={16} className="text-muted flex-shrink-0" />
                     </div>
                   ))}
                 </div>
@@ -904,7 +1088,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       )}
 
       {/* MAIN CONTENT CONTAINER */}
-      <main className="container py-4 flex-grow-1" style={{ maxWidth: '1100px' }}>
+      <main className="container py-3 py-md-4 flex-grow-1 pb-5 mb-5 mb-md-0 px-2 px-sm-3" style={{ maxWidth: '1100px' }}>
 
         {/* ==============================================================
             SCREEN 9: PORTAL HOME BODY
@@ -913,26 +1097,26 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           <div>
             {/* Authenticated Customer Welcome Card */}
             {isAuthenticated && (
-              <div className="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white border-start border-4 border-primary">
+              <div className="card border-0 shadow-sm rounded-4 p-3 p-md-4 mb-3 mb-md-4 bg-white border-start border-4 border-primary">
                 <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
                   <div>
-                    <h5 className="fw-bold text-dark mb-1">Welcome back, {customerName}!</h5>
+                    <h5 className="fw-bold text-dark mb-1 fs-6 fs-md-5">Welcome back, {customerName}!</h5>
                     <p className="text-muted small mb-0">
                       Logged in as <code>{customerEmail}</code> • {myTickets.length} ticket(s) recorded in {company?.name}.
                     </p>
                   </div>
-                  <div className="d-flex align-items-center gap-2">
-                    <span className="badge bg-primary-subtle text-primary px-3 py-1.5 rounded-pill">
+                  <div className="d-flex flex-wrap align-items-center gap-1.5 gap-md-2 mt-1 mt-sm-0">
+                    <span className="badge bg-primary-subtle text-primary px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
                       {myTickets.filter(t => t.status === 'OPEN').length} Open
                     </span>
-                    <span className="badge bg-warning-subtle text-warning-emphasis px-3 py-1.5 rounded-pill">
+                    <span className="badge bg-warning-subtle text-warning-emphasis px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
                       {myTickets.filter(t => t.status === 'WAITING_ON_CUSTOMER').length} Waiting on you
                     </span>
-                    <span className="badge bg-success-subtle text-success px-3 py-1.5 rounded-pill">
+                    <span className="badge bg-success-subtle text-success px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem' }}>
                       {myTickets.filter(t => t.status === 'RESOLVED').length} Resolved
                     </span>
                     <button
-                      className="btn btn-sm btn-outline-primary fw-semibold rounded-pill ms-2"
+                      className="btn btn-sm btn-outline-primary fw-semibold rounded-pill ms-auto ms-sm-2 px-3 py-1"
                       onClick={() => {
                         setActiveTab('tickets');
                         onNavigate?.('/' + companySlug + '/ticketstatus');
@@ -946,10 +1130,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             )}
 
             {/* Two Action Cards */}
-            <div className="row g-4 mb-4">
-              <div className="col-md-6">
+            <div className="row g-3 g-md-4 mb-3 mb-md-4">
+              <div className="col-12 col-md-6">
                 <div
-                  className="card border-0 shadow-sm rounded-4 p-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
+                  className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
                   onClick={() => {
                     setActiveTab('submit');
                     setSubmitSuccess(null);
@@ -957,16 +1141,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   }}
                   style={{ cursor: 'pointer' }}
                 >
-                  <div className="d-flex align-items-center gap-3 mb-3">
-                    <div className="p-3 rounded-3 bg-primary-subtle text-primary">
-                      <Send size={24} />
+                  <div className="d-flex align-items-center gap-3 mb-2.5 mb-md-3">
+                    <div className="p-2.5 p-md-3 rounded-3 bg-primary-subtle text-primary flex-shrink-0">
+                      <Send size={22} />
                     </div>
                     <div>
-                      <h5 className="fw-bold mb-0 text-dark">Submit a New Ticket</h5>
-                      <small className="text-muted">Intake routed to dedicated category engineers</small>
+                      <h5 className="fw-bold mb-0 text-dark fs-6 fs-md-5">Submit a New Ticket</h5>
+                      <small className="text-muted" style={{ fontSize: '0.75rem' }}>Intake routed to dedicated category engineers</small>
                     </div>
                   </div>
-                  <p className="text-secondary small mb-3">
+                  <p className="text-secondary small mb-3" style={{ fontSize: '0.82rem' }}>
                     Raise an inquiry with documents, loan contracts, proof receipts, or error logs. You receive an immediate tracking ticket number e.g. <code>#KUWY-1042</code>.
                   </p>
                   <span className="text-primary fw-bold small d-inline-flex align-items-center gap-1">
@@ -975,25 +1159,25 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 </div>
               </div>
 
-              <div className="col-md-6">
+              <div className="col-12 col-md-6">
                 <div
-                  className="card border-0 shadow-sm rounded-4 p-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
+                  className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 h-100 cursor-pointer hover-shadow transition-all bg-white"
                   onClick={() => {
                     setActiveTab('tickets');
                     onNavigate?.('/' + companySlug + '/ticketstatus');
                   }}
                   style={{ cursor: 'pointer' }}
                 >
-                  <div className="d-flex align-items-center gap-3 mb-3">
-                    <div className="p-3 rounded-3 bg-success-subtle text-success">
-                      <Clock size={24} />
+                  <div className="d-flex align-items-center gap-3 mb-2.5 mb-md-3">
+                    <div className="p-2.5 p-md-3 rounded-3 bg-success-subtle text-success flex-shrink-0">
+                      <Clock size={22} />
                     </div>
                     <div>
-                      <h5 className="fw-bold mb-0 text-dark">Track Your Tickets</h5>
-                      <small className="text-muted">Check live status, SLAs and engineer replies</small>
+                      <h5 className="fw-bold mb-0 text-dark fs-6 fs-md-5">Track Your Tickets</h5>
+                      <small className="text-muted" style={{ fontSize: '0.75rem' }}>Check live status, SLAs and engineer replies</small>
                     </div>
                   </div>
-                  <p className="text-secondary small mb-3">
+                  <p className="text-secondary small mb-3" style={{ fontSize: '0.82rem' }}>
                     Access conversation threads, download attachments sent by our team, reply with more details, or reopen resolved requests.
                   </p>
                   <span className="text-success fw-bold small d-inline-flex align-items-center gap-1">
@@ -1004,24 +1188,24 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             </div>
 
             {/* Popular Topics / Category Cards */}
-            <div className="card border-0 shadow-sm rounded-4 p-4 bg-white mb-4">
+            <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white mb-3 mb-md-4">
               <h6 className="fw-bold text-dark mb-3">Popular Categories</h6>
-              <div className="row g-3">
+              <div className="row g-2.5 g-md-3">
                 {departments.slice(0, 4).map(d => (
                   <div key={d.id} className="col-6 col-md-3">
                     <div
-                      className="p-3 border rounded-3 bg-light hover-bg-white cursor-pointer transition-all h-100 text-center"
+                      className="p-2.5 p-sm-3 border rounded-3 bg-light hover-bg-white cursor-pointer transition-all h-100 text-center"
                       style={{ cursor: 'pointer' }}
                       onClick={() => {
                         setSelectedKbCategory(d.name);
                         setActiveTab('kb');
                       }}
                     >
-                      <div className="p-2.5 rounded-circle bg-white d-inline-flex text-primary mb-2 shadow-xs">
-                        <Building2 size={20} />
+                      <div className="p-2 rounded-circle bg-white d-inline-flex text-primary mb-1.5 shadow-xs">
+                        <Building2 size={18} />
                       </div>
-                      <div className="fw-bold small text-dark mb-1">{d.name}</div>
-                      <small className="text-muted d-block text-truncate" style={{ fontSize: '0.72rem' }}>
+                      <div className="fw-bold small text-dark mb-1 text-truncate">{d.name}</div>
+                      <small className="text-muted d-block text-truncate" style={{ fontSize: '0.7rem' }}>
                         {d.description || 'Guides and answers'}
                       </small>
                     </div>
@@ -1031,8 +1215,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             </div>
 
             {/* Popular Solutions & Guides List */}
-            <div className="card border-0 shadow-sm rounded-4 p-4 bg-white mb-4">
-              <div className="d-flex justify-content-between align-items-center mb-3">
+            <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white mb-3 mb-md-4">
+              <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                 <h6 className="fw-bold text-dark mb-0 d-flex align-items-center gap-2">
                   <Sparkles size={16} className="text-warning" />
                   <span>Popular Solutions & Guides</span>
@@ -1046,9 +1230,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 </button>
               </div>
 
-              <div className="row g-3">
+              <div className="row g-2.5 g-md-3">
                 {kbArticles.slice(0, 4).map(art => (
-                  <div key={art.id} className="col-md-6">
+                  <div key={art.id} className="col-12 col-md-6">
                     <div
                       className="p-3 border rounded-3 bg-light hover-bg-white cursor-pointer transition-all h-100"
                       style={{ cursor: 'pointer' }}
@@ -1067,7 +1251,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         </small>
                       </div>
                       <h6 className="fw-semibold text-dark small mb-1">{art.title}</h6>
-                      <p className="text-muted mb-0 text-truncate" style={{ fontSize: '0.78rem' }}>
+                      <p className="text-muted mb-0 text-truncate" style={{ fontSize: '0.76rem' }}>
                         Click to view complete troubleshooting steps and resolution guide.
                       </p>
                     </div>
@@ -1077,38 +1261,38 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             </div>
 
             {/* Contact Details & Hours Card */}
-            <div className="card border-0 shadow-sm rounded-4 p-4 bg-white">
+            <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white">
               <div className="row g-3 align-items-center">
-                <div className="col-md-4">
+                <div className="col-12 col-md-4">
                   <div className="d-flex align-items-center gap-3">
-                    <div className="p-2.5 rounded-3 bg-primary-subtle text-primary">
-                      <Mail size={20} />
+                    <div className="p-2.5 rounded-3 bg-primary-subtle text-primary flex-shrink-0">
+                      <Mail size={18} />
                     </div>
-                    <div>
-                      <small className="text-muted d-block">Support Email</small>
-                      <span className="fw-bold text-dark small">{portalMetadata.supportEmail}</span>
+                    <div className="text-truncate">
+                      <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Support Email</small>
+                      <span className="fw-bold text-dark small text-truncate d-block">{portalMetadata.supportEmail}</span>
                     </div>
                   </div>
                 </div>
-                <div className="col-md-4">
+                <div className="col-12 col-md-4">
                   <div className="d-flex align-items-center gap-3">
-                    <div className="p-2.5 rounded-3 bg-success-subtle text-success">
-                      <Phone size={20} />
+                    <div className="p-2.5 rounded-3 bg-success-subtle text-success flex-shrink-0">
+                      <Phone size={18} />
                     </div>
                     <div>
-                      <small className="text-muted d-block">Helpline Phone</small>
-                      <span className="fw-bold text-dark small">{portalMetadata.supportPhone}</span>
+                      <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Helpline Phone</small>
+                      <span className="fw-bold text-dark small d-block">{portalMetadata.supportPhone}</span>
                     </div>
                   </div>
                 </div>
-                <div className="col-md-4">
+                <div className="col-12 col-md-4">
                   <div className="d-flex align-items-center gap-3">
-                    <div className="p-2.5 rounded-3 bg-warning-subtle text-warning">
-                      <Clock size={20} />
+                    <div className="p-2.5 rounded-3 bg-warning-subtle text-warning flex-shrink-0">
+                      <Clock size={18} />
                     </div>
                     <div>
-                      <small className="text-muted d-block">Business Hours</small>
-                      <span className="fw-bold text-dark small">{portalMetadata.businessHours}</span>
+                      <small className="text-muted d-block" style={{ fontSize: '0.72rem' }}>Business Hours</small>
+                      <span className="fw-bold text-dark small d-block">{portalMetadata.businessHours}</span>
                     </div>
                   </div>
                 </div>
@@ -1122,7 +1306,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             ============================================================== */}
         {activeTab === 'submit' && (
           <div>
-            <div className="d-flex align-items-center justify-content-between mb-3">
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
               <button
                 type="button"
                 className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
@@ -1140,26 +1324,26 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
             {!isAuthenticated ? (
               renderAuthBarrier('ticket')
             ) : submitSuccess ? (
-              <div className="card border-0 shadow-sm rounded-4 p-5 text-center bg-white animate-fade-in mx-auto" style={{ maxWidth: '640px' }}>
-                <div className="rounded-circle bg-success-subtle text-success mx-auto d-flex align-items-center justify-content-center mb-3" style={{ width: '64px', height: '64px' }}>
-                  <CheckCircle2 size={36} />
+              <div className="card border-0 shadow-sm rounded-4 p-4 p-md-5 text-center bg-white animate-fade-in mx-auto" style={{ maxWidth: '640px' }}>
+                <div className="rounded-circle bg-success-subtle text-success mx-auto d-flex align-items-center justify-content-center mb-3" style={{ width: '56px', height: '56px' }}>
+                  <CheckCircle2 size={32} />
                 </div>
-                <h4 className="fw-bolder text-dark mb-1">Ticket Submitted Successfully!</h4>
+                <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">Ticket Submitted Successfully!</h4>
                 <p className="text-muted small mb-3">
                   We've emailed a confirmation receipt to <strong>{customerEmail}</strong>.
                 </p>
 
-                <div className="p-3 bg-light rounded-3 border mx-auto mb-4" style={{ maxWidth: '420px' }}>
+                <div className="p-3 bg-light rounded-3 border mx-auto mb-4 w-100" style={{ maxWidth: '420px' }}>
                   <div className="small text-secondary mb-1">Your Tracking Number</div>
-                  <h3 className="fw-bolder text-primary mb-1">#{submitSuccess.ticketNumber}</h3>
-                  <div className="small text-muted">Subject: "{submitSuccess.subject}"</div>
+                  <h3 className="fw-bolder text-primary mb-1 fs-4 fs-md-3">#{submitSuccess.ticketNumber}</h3>
+                  <div className="small text-muted text-truncate">Subject: "{submitSuccess.subject}"</div>
                   <div className="badge bg-info-subtle text-info mt-2">Expected Response: Under 15 Minutes</div>
                 </div>
 
-                <div className="d-flex justify-content-center gap-2">
+                <div className="d-flex flex-column flex-sm-row justify-content-center gap-2">
                   <button
                     type="button"
-                    className="btn btn-primary px-4 fw-semibold rounded-3 shadow-sm"
+                    className="btn btn-primary px-3 px-sm-4 py-2 fw-semibold rounded-3 shadow-sm"
                     onClick={() => {
                       handleOpenTicketDetail(submitSuccess);
                       onNavigate?.('/' + companySlug + '/ticketstatus');
@@ -1169,7 +1353,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   </button>
                   <button
                     type="button"
-                    className="btn btn-outline-secondary px-4 fw-semibold rounded-3"
+                    className="btn btn-outline-secondary px-3 px-sm-4 py-2 fw-semibold rounded-3"
                     onClick={() => {
                       setSubmitSuccess(null);
                       setActiveTab('submit');
@@ -1181,18 +1365,18 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="row g-4">
+              <div className="row g-3 g-md-4">
                 {/* Form Column */}
-                <div className={suggestedArticles.length > 0 ? "col-lg-8" : "col-12 mx-auto"} style={{ maxWidth: suggestedArticles.length > 0 ? undefined : '780px' }}>
-                  <div className="card border-0 shadow-sm rounded-4 p-4 bg-white">
-                    <div className="border-bottom pb-3 mb-4">
-                      <div className="d-flex align-items-center justify-content-between">
-                        <h5 className="fw-bolder text-dark mb-1">Create Support Ticket</h5>
-                        <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.72rem' }}>
-                          <CheckCircle2 size={12} /> Verified Customer
+                <div className={suggestedArticles.length > 0 ? "col-12 col-lg-8" : "col-12 mx-auto"} style={{ maxWidth: suggestedArticles.length > 0 ? undefined : '780px' }}>
+                  <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white">
+                    <div className="border-bottom pb-3 mb-3 mb-md-4">
+                      <div className="d-flex flex-wrap align-items-center justify-content-between gap-1 mb-1">
+                        <h5 className="fw-bolder text-dark mb-0 fs-6 fs-md-5">Create Support Ticket</h5>
+                        <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.7rem' }}>
+                          <CheckCircle2 size={11} /> Verified Customer
                         </span>
                       </div>
-                      <p className="text-muted small mb-0">
+                      <p className="text-muted small mb-0" style={{ fontSize: '0.82rem' }}>
                         Fill in details below. Our support agents respond in accordance with your category SLA.
                       </p>
                     </div>
@@ -1211,8 +1395,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                       </div>
 
                       {/* Requester Identity */}
-                      <div className="row g-3 mb-3">
-                        <div className="col-md-6">
+                      <div className="row g-2.5 g-md-3 mb-3">
+                        <div className="col-12 col-md-6">
                           <label className="form-label small fw-bold text-dark">Your Name *</label>
                           <input
                             type="text"
@@ -1223,11 +1407,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             onChange={e => setCustomerName(e.target.value)}
                           />
                         </div>
-                        <div className="col-md-6">
-                          <div className="d-flex justify-content-between align-items-center mb-1">
+                        <div className="col-12 col-md-6">
+                          <div className="d-flex flex-wrap justify-content-between align-items-center gap-1 mb-1">
                             <label className="form-label small fw-bold text-dark mb-0">Your Email Address *</label>
-                            <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.68rem' }}>
-                              <CheckCircle2 size={11} /> Verified Sign-in Email
+                            <span className="badge bg-success-subtle text-success border border-success-subtle d-inline-flex align-items-center gap-1" style={{ fontSize: '0.66rem' }}>
+                              <CheckCircle2 size={10} /> Verified Sign-in
                             </span>
                           </div>
                           <div className="input-group">
@@ -1250,8 +1434,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                       </div>
 
                       {/* Category & Priority */}
-                      <div className="row g-3 mb-3">
-                        <div className="col-md-7">
+                      <div className="row g-2.5 g-md-3 mb-3">
+                        <div className="col-12 col-md-7">
                           <label className="form-label small fw-bold text-dark">Category / Department *</label>
                           <select
                             className="form-select"
@@ -1265,7 +1449,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             ))}
                           </select>
                         </div>
-                        <div className="col-md-5">
+                        <div className="col-12 col-md-5">
                           <label className="form-label small fw-bold text-dark">Priority *</label>
                           <select
                             className="form-select"
@@ -1439,16 +1623,16 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               renderAuthBarrier('ticketstatus')
             ) : (
               <div>
-                <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 mb-md-4">
                   <div>
-                    <h4 className="fw-bold text-dark mb-1">My Support Tickets</h4>
-                    <p className="text-muted small mb-0">
+                    <h4 className="fw-bolder text-dark mb-1 fs-5 fs-md-4">My Support Tickets</h4>
+                    <p className="text-muted small mb-0" style={{ fontSize: '0.82rem' }}>
                       Showing inquiries associated with <strong>{customerEmail}</strong> in {company?.name}.
                     </p>
                   </div>
                   <button
                     type="button"
-                    className="btn btn-primary btn-sm fw-semibold d-flex align-items-center gap-1.5 px-3 py-2 shadow-xs"
+                    className="btn btn-primary btn-sm fw-semibold d-flex align-items-center justify-content-center gap-1.5 px-3 py-2 shadow-xs w-100 w-sm-auto"
                     onClick={() => {
                       setActiveTab('submit');
                       setSubmitSuccess(null);
@@ -1460,110 +1644,170 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   </button>
                 </div>
 
-                {/* Filter Chips & Search Bar */}
-                <div className="card border-0 shadow-sm rounded-4 p-3 mb-4 bg-white">
-              <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
-                <div className="d-flex flex-wrap gap-1.5">
-                  {(['ALL', 'OPEN', 'WAITING', 'RESOLVED', 'CLOSED'] as const).map(f => (
-                    <button
-                      key={f}
-                      type="button"
-                      className={`btn btn-sm rounded-pill px-3 py-1 fw-semibold ${ticketFilter === f ? 'btn-primary' : 'btn-light text-muted'}`}
-                      onClick={() => setTicketFilter(f)}
-                    >
-                      {f === 'WAITING' ? 'Waiting on You' : f}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="input-group input-group-sm" style={{ maxWidth: '280px' }}>
-                  <span className="input-group-text bg-white border-end-0">
-                    <Search size={14} className="text-muted" />
-                  </span>
-                  <input
-                    type="text"
-                    className="form-control border-start-0"
-                    placeholder="Search by ticket # or subject..."
-                    value={ticketSearchTerm}
-                    onChange={e => setTicketSearchTerm(e.target.value)}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Tickets Table */}
-            <div className="card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
-              <div className="table-responsive">
-                <table className="table table-hover align-middle mb-0">
-                  <thead className="table-light text-secondary text-uppercase" style={{ fontSize: '0.75rem', letterSpacing: '0.05em' }}>
-                    <tr>
-                      <th className="ps-4 py-3">Ticket #</th>
-                      <th>Subject</th>
-                      <th>Category</th>
-                      <th>Status</th>
-                      <th>Priority</th>
-                      <th className="pe-4 text-end">Last Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTickets.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-5 text-muted">
-                          <LifeBuoy size={36} className="text-muted opacity-50 mb-2 d-block mx-auto" />
-                          <div className="fw-semibold">No tickets found in this view</div>
-                          <small className="text-muted">Submit an inquiry or change the filter tab.</small>
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredTickets.map(t => (
-                        <tr
-                          key={t.id}
-                          className="cursor-pointer"
-                          onClick={() => handleOpenTicketDetail(t)}
-                          style={{ cursor: 'pointer' }}
+                {/* Filter Chips & Search Bar (Mobile Responsive) */}
+                <div className="card border-0 shadow-sm rounded-4 p-2.5 p-sm-3 mb-3 mb-md-4 bg-white">
+                  <div className="d-flex flex-column flex-md-row justify-content-between align-items-stretch align-items-md-center gap-2.5">
+                    <div className="d-flex align-items-center gap-1.5 overflow-x-auto text-nowrap pb-1 pb-md-0 w-100" style={{ WebkitOverflowScrolling: 'touch' }}>
+                      {(['ALL', 'OPEN', 'WAITING', 'RESOLVED', 'CLOSED'] as const).map(f => (
+                        <button
+                          key={f}
+                          type="button"
+                          className={`btn btn-sm rounded-pill px-3 py-1 fw-semibold flex-shrink-0 ${ticketFilter === f ? 'btn-primary shadow-xs' : 'btn-light text-muted border-0'}`}
+                          onClick={() => setTicketFilter(f)}
+                          style={{ fontSize: '0.78rem' }}
                         >
-                          <td className="ps-4">
-                            <span className="fw-bolder font-monospace text-primary">#{t.ticketNumber}</span>
-                          </td>
-                          <td>
-                            <div className="fw-semibold text-dark">{t.subject}</div>
-                            {t.status === 'WAITING_ON_CUSTOMER' && (
-                              <span className="badge bg-warning text-dark mt-1" style={{ fontSize: '0.65rem' }}>
-                                Agent waiting for your reply
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            <span className="badge bg-light text-dark border">
+                          {f === 'WAITING' ? 'Waiting on You' : f}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="input-group input-group-sm w-100 flex-shrink-0" style={{ maxWidth: '280px' }}>
+                      <span className="input-group-text bg-light border-end-0">
+                        <Search size={14} className="text-muted" />
+                      </span>
+                      <input
+                        type="text"
+                        className="form-control bg-light border-start-0"
+                        placeholder="Search ticket # or subject..."
+                        value={ticketSearchTerm}
+                        onChange={e => setTicketSearchTerm(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Desktop Tickets Table (Hidden on mobile) */}
+                <div className="d-none d-md-block card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
+                  <div className="table-responsive">
+                    <table className="table table-hover align-middle mb-0">
+                      <thead className="table-light text-secondary text-uppercase" style={{ fontSize: '0.75rem', letterSpacing: '0.05em' }}>
+                        <tr>
+                          <th className="ps-4 py-3">Ticket #</th>
+                          <th>Subject</th>
+                          <th>Category</th>
+                          <th>Status</th>
+                          <th>Priority</th>
+                          <th className="pe-4 text-end">Last Updated</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTickets.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="text-center py-5 text-muted">
+                              <LifeBuoy size={36} className="text-muted opacity-50 mb-2 d-block mx-auto" />
+                              <div className="fw-semibold">No tickets found in this view</div>
+                              <small className="text-muted">Submit an inquiry or change the filter tab.</small>
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredTickets.map(t => (
+                            <tr
+                              key={t.id}
+                              className="cursor-pointer"
+                              onClick={() => handleOpenTicketDetail(t)}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td className="ps-4">
+                                <span className="fw-bolder font-monospace text-primary">#{t.ticketNumber}</span>
+                              </td>
+                              <td>
+                                <div className="fw-semibold text-dark">{t.subject}</div>
+                                {t.status === 'WAITING_ON_CUSTOMER' && (
+                                  <span className="badge bg-warning text-dark mt-1" style={{ fontSize: '0.65rem' }}>
+                                    Agent waiting for your reply
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                <span className="badge bg-light text-dark border">
+                                  {t.department?.name || 'General'}
+                                </span>
+                              </td>
+                              <td>
+                                <span className={`badge px-2.5 py-1 ${t.status === 'OPEN' ? 'bg-primary-subtle text-primary border border-primary-subtle' :
+                                    t.status === 'RESOLVED' ? 'bg-success-subtle text-success border border-success-subtle' :
+                                      t.status === 'WAITING_ON_CUSTOMER' ? 'bg-warning-subtle text-warning-emphasis border border-warning-subtle' :
+                                        'bg-secondary-subtle text-secondary'
+                                  }`}>
+                                  {t.status}
+                                </span>
+                              </td>
+                              <td>
+                                <span className="badge bg-light text-secondary border">
+                                  {t.priority}
+                                </span>
+                              </td>
+                              <td className="pe-4 text-end text-muted small">
+                                {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Today'}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Mobile Ticket Cards Stack (Screen 12 Mobile - Hidden on desktop) */}
+                <div className="d-md-none d-flex flex-column gap-2.5">
+                  {filteredTickets.length === 0 ? (
+                    <div className="card border-0 shadow-sm rounded-4 p-4 text-center text-muted bg-white">
+                      <LifeBuoy size={36} className="text-muted opacity-50 mb-2 mx-auto" />
+                      <div className="fw-semibold">No tickets found in this view</div>
+                      <small className="text-muted">Submit an inquiry or change the filter tab.</small>
+                    </div>
+                  ) : (
+                    filteredTickets.map(t => (
+                      <div
+                        key={t.id}
+                        className="card border-0 shadow-sm rounded-3 p-3 bg-white cursor-pointer hover-shadow transition-all"
+                        onClick={() => handleOpenTicketDetail(t)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="d-flex align-items-center justify-content-between mb-2">
+                          <span className="badge bg-primary-subtle text-primary border border-primary-subtle font-monospace fw-bold" style={{ fontSize: '0.75rem' }}>
+                            #{t.ticketNumber}
+                          </span>
+                          <span className={`badge px-2 py-0.5 ${
+                            t.status === 'OPEN' ? 'bg-primary-subtle text-primary border border-primary-subtle' :
+                            t.status === 'RESOLVED' ? 'bg-success-subtle text-success border border-success-subtle' :
+                            t.status === 'WAITING_ON_CUSTOMER' ? 'bg-warning-subtle text-warning-emphasis border border-warning-subtle' :
+                            'bg-secondary-subtle text-secondary'
+                          }`} style={{ fontSize: '0.68rem' }}>
+                            {t.status}
+                          </span>
+                        </div>
+
+                        <div className="fw-bold text-dark mb-1.5" style={{ fontSize: '0.92rem', lineHeight: '1.35' }}>
+                          {t.subject}
+                        </div>
+
+                        {t.status === 'WAITING_ON_CUSTOMER' && (
+                          <div className="alert alert-warning py-1 px-2 mb-2 d-flex align-items-center gap-1.5" style={{ fontSize: '0.72rem' }}>
+                            <AlertCircle size={13} className="text-warning-emphasis flex-shrink-0" />
+                            <span>Agent waiting for your reply</span>
+                          </div>
+                        )}
+
+                        <div className="d-flex align-items-center justify-content-between pt-2 border-top mt-1">
+                          <div className="d-flex align-items-center gap-1.5 text-truncate me-2">
+                            <span className="badge bg-light text-secondary border text-truncate" style={{ fontSize: '0.68rem', maxWidth: '140px' }}>
                               {t.department?.name || 'General'}
                             </span>
-                          </td>
-                          <td>
-                            <span className={`badge px-2.5 py-1 ${
-                              t.status === 'OPEN' ? 'bg-primary-subtle text-primary border border-primary-subtle' :
-                              t.status === 'RESOLVED' ? 'bg-success-subtle text-success border border-success-subtle' :
-                              t.status === 'WAITING_ON_CUSTOMER' ? 'bg-warning-subtle text-warning-emphasis border border-warning-subtle' :
-                              'bg-secondary-subtle text-secondary'
-                            }`}>
-                              {t.status}
-                            </span>
-                          </td>
-                          <td>
-                            <span className="badge bg-light text-secondary border">
+                            <span className="badge bg-light text-muted border" style={{ fontSize: '0.65rem' }}>
                               {t.priority}
                             </span>
-                          </td>
-                          <td className="pe-4 text-end text-muted small">
-                            {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Today'}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                          </div>
+                          <div className="d-flex align-items-center gap-1 text-muted flex-shrink-0" style={{ fontSize: '0.72rem' }}>
+                            <span>{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Today'}</span>
+                            <ChevronRight size={14} className="text-muted" />
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
             )}
           </div>
         )}
@@ -1577,7 +1821,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               renderAuthBarrier('ticketstatus')
             ) : selectedTicket ? (
               <div>
-                <div className="d-flex align-items-center justify-content-between mb-3">
+                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                   <button
                     type="button"
                     className="btn btn-sm btn-link text-secondary text-decoration-none p-0 d-flex align-items-center gap-1"
@@ -1589,182 +1833,188 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                   >
                     <ArrowLeft size={15} /> Back to My Tickets
                   </button>
-              <div className="d-flex align-items-center gap-2">
-                {selectedTicket.status === 'OPEN' && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-outline-success fw-semibold"
-                    onClick={handleCloseTicket}
-                  >
-                    Mark as Resolved
-                  </button>
-                )}
-                {(selectedTicket.status === 'RESOLVED' || selectedTicket.status === 'CLOSED') && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-outline-primary fw-semibold d-flex align-items-center gap-1"
-                    onClick={handleReopenTicket}
-                  >
-                    <RotateCcw size={14} /> Reopen Ticket
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Ticket Header Card */}
-            <div className="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white">
-              <div className="d-flex flex-wrap justify-content-between align-items-start gap-3">
-                <div>
-                  <div className="d-flex align-items-center gap-2 mb-1">
-                    <span className="badge bg-primary text-white font-monospace">#{selectedTicket.ticketNumber}</span>
-                    <span className="badge bg-light text-dark border">{selectedTicket.department?.name || 'Support'}</span>
-                    <span className="badge bg-success-subtle text-success">{selectedTicket.status}</span>
-                  </div>
-                  <h4 className="fw-bolder text-dark mb-0">{selectedTicket.subject}</h4>
-                </div>
-                <div className="text-end text-muted small">
-                  <div>Opened on: {selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleDateString() : 'Today'}</div>
-                  <div>SLA Status: <span className="text-success fw-bold">Within SLA</span></div>
-                </div>
-              </div>
-            </div>
-
-            {/* Conversation Thread (Screen 13: Oldest to Newest Timeline) */}
-            <div className="d-flex flex-column gap-3 mb-4">
-              {/* Initial Ticket Description Message */}
-              <div className="card border-0 shadow-sm rounded-4 p-4 bg-white border-start border-4 border-primary">
-                <div className="d-flex justify-content-between align-items-center mb-2">
                   <div className="d-flex align-items-center gap-2">
-                    <div className="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center fw-bold" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>
-                      {selectedTicket.contact?.firstName?.charAt(0) || 'C'}
-                    </div>
+                    {selectedTicket.status === 'OPEN' && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-success fw-semibold"
+                        onClick={handleCloseTicket}
+                      >
+                        Mark as Resolved
+                      </button>
+                    )}
+                    {(selectedTicket.status === 'RESOLVED' || selectedTicket.status === 'CLOSED') && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-primary fw-semibold d-flex align-items-center gap-1"
+                        onClick={handleReopenTicket}
+                      >
+                        <RotateCcw size={14} /> Reopen Ticket
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Ticket Header Card */}
+                <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 mb-3 mb-md-4 bg-white">
+                  <div className="d-flex flex-column flex-sm-row justify-content-between align-items-start gap-2.5">
                     <div>
-                      <div className="fw-bold text-dark small">{selectedTicket.contact?.firstName || 'You'}</div>
-                      <small className="text-muted">Requester</small>
+                      <div className="d-flex flex-wrap align-items-center gap-1.5 mb-1.5">
+                        <span className="badge bg-primary text-white font-monospace">#{selectedTicket.ticketNumber}</span>
+                        <span className="badge bg-light text-dark border">{selectedTicket.department?.name || 'Support'}</span>
+                        <span className={`badge ${
+                          selectedTicket.status === 'OPEN' ? 'bg-primary-subtle text-primary border border-primary-subtle' :
+                          selectedTicket.status === 'RESOLVED' ? 'bg-success-subtle text-success border border-success-subtle' :
+                          selectedTicket.status === 'WAITING_ON_CUSTOMER' ? 'bg-warning-subtle text-warning-emphasis border border-warning-subtle' :
+                          'bg-secondary-subtle text-secondary'
+                        }`}>{selectedTicket.status}</span>
+                      </div>
+                      <h4 className="fw-bolder text-dark mb-0 fs-5 fs-md-4">{selectedTicket.subject}</h4>
+                    </div>
+                    <div className="text-start text-sm-end text-muted small mt-1 mt-sm-0 flex-shrink-0">
+                      <div>Opened: {selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleDateString() : 'Today'}</div>
+                      <div>SLA Status: <span className="text-success fw-bold">Within SLA</span></div>
                     </div>
                   </div>
-                  <small className="text-muted">{selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '09:00 AM'}</small>
                 </div>
-                <div className="text-secondary small mt-2">
-                  {selectedTicket.descriptionText || selectedTicket.descriptionHtml || 'Original ticket description provided during intake.'}
-                </div>
-              </div>
 
-              {/* Dynamic Conversation Threads */}
-              {ticketThreads.map(th => {
-                const isCustomer = th.senderType === 'CUSTOMER';
-                return (
-                  <div
-                    key={th.id}
-                    className={`card border-0 shadow-sm rounded-4 p-4 ${isCustomer ? 'bg-white border-start border-4 border-info' : 'bg-light border-start border-4 border-success'}`}
-                  >
+                {/* Conversation Thread (Screen 13: Oldest to Newest Timeline) */}
+                <div className="d-flex flex-column gap-2.5 gap-md-3 mb-3 mb-md-4">
+                  {/* Initial Ticket Description Message */}
+                  <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white border-start border-4 border-primary">
                     <div className="d-flex justify-content-between align-items-center mb-2">
                       <div className="d-flex align-items-center gap-2">
-                        <div
-                          className={`rounded-circle text-white d-flex align-items-center justify-content-center fw-bold ${isCustomer ? 'bg-info' : 'bg-success'}`}
-                          style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}
-                        >
-                          {isCustomer ? 'You' : 'Staff'}
+                        <div className="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center fw-bold" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>
+                          {selectedTicket.contact?.firstName?.charAt(0) || 'C'}
                         </div>
                         <div>
-                          <div className="fw-bold text-dark small">
-                            {isCustomer ? 'You' : `${th.fromName || 'Support Team'}`}
-                          </div>
-                          <small className="text-muted">{isCustomer ? 'Customer' : 'Certified Support Engineer'}</small>
+                          <div className="fw-bold text-dark small">{selectedTicket.contact?.firstName || 'You'}</div>
+                          <small className="text-muted" style={{ fontSize: '0.7rem' }}>Requester</small>
                         </div>
                       </div>
-                      <small className="text-muted">
-                        {th.createdAt ? new Date(th.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
-                      </small>
+                      <small className="text-muted">{selectedTicket.createdAt ? new Date(selectedTicket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '09:00 AM'}</small>
                     </div>
-                    <div
-                      className="text-secondary small mt-2"
-                      dangerouslySetInnerHTML={{ __html: th.bodyHtml || th.bodyText || '' }}
-                    />
+                    <div className="text-secondary small mt-2 lh-base" style={{ wordBreak: 'break-word' }}>
+                      {selectedTicket.descriptionText || selectedTicket.descriptionHtml || 'Original ticket description provided during intake.'}
+                    </div>
                   </div>
-                );
-              })}
-            </div>
 
-            {/* CSAT Satisfaction Widget when ticket is RESOLVED or CLOSED */}
-            {(selectedTicket.status === 'RESOLVED' || selectedTicket.status === 'CLOSED') && (
-              <div className="card border-0 shadow-sm rounded-4 p-4 mb-4 bg-white border-top border-4 border-warning">
-                <div className="d-flex align-items-center gap-2 mb-2">
-                  <Star size={20} className="text-warning fill-warning" />
-                  <h6 className="fw-bold text-dark mb-0">How satisfied were you with this resolution?</h6>
+                  {/* Dynamic Conversation Threads */}
+                  {ticketThreads.map(th => {
+                    const isCustomer = th.senderType === 'CUSTOMER';
+                    return (
+                      <div
+                        key={th.id}
+                        className={`card border-0 shadow-sm rounded-4 p-3.5 p-md-4 ${isCustomer ? 'bg-white border-start border-4 border-info' : 'bg-light border-start border-4 border-success'}`}
+                      >
+                        <div className="d-flex justify-content-between align-items-center mb-2">
+                          <div className="d-flex align-items-center gap-2">
+                            <div
+                              className={`rounded-circle text-white d-flex align-items-center justify-content-center fw-bold ${isCustomer ? 'bg-info' : 'bg-success'}`}
+                              style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}
+                            >
+                              {isCustomer ? 'You' : 'Staff'}
+                            </div>
+                            <div>
+                              <div className="fw-bold text-dark small">
+                                {isCustomer ? 'You' : `${th.fromName || 'Support Team'}`}
+                              </div>
+                              <small className="text-muted" style={{ fontSize: '0.7rem' }}>{isCustomer ? 'Customer' : 'Certified Support Engineer'}</small>
+                            </div>
+                          </div>
+                          <small className="text-muted">
+                            {th.createdAt ? new Date(th.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                          </small>
+                        </div>
+                        <div
+                          className="text-secondary small mt-2 lh-base"
+                          style={{ wordBreak: 'break-word' }}
+                          dangerouslySetInnerHTML={{ __html: th.bodyHtml || th.bodyText || '' }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-                {csatSubmitted ? (
-                  <div className="alert alert-success py-2 px-3 small d-flex align-items-center gap-2 mb-0">
-                    <CheckCircle2 size={16} />
-                    <span>Thank you for rating our support team! Your feedback helps us maintain strict SLAs.</span>
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmitCsat}>
-                    <p className="text-muted small mb-3">Rate your experience with our engineering support:</p>
-                    <div className="d-flex gap-2 mb-3">
-                      {[1, 2, 3, 4, 5].map(star => (
-                        <button
-                          key={star}
-                          type="button"
-                          className={`btn btn-sm ${csatRating >= star ? 'btn-warning text-dark' : 'btn-outline-secondary'}`}
-                          onClick={() => setCsatRating(star)}
-                        >
-                          ★ {star}
-                        </button>
-                      ))}
-                    </div>
-                    <textarea
-                      className="form-control form-control-sm mb-3"
-                      rows={2}
-                      placeholder="Optional feedback comment on agent helpfulness and response speed..."
-                      value={csatComment}
-                      onChange={e => setCsatComment(e.target.value)}
-                    />
-                    <button type="submit" className="btn btn-warning btn-sm fw-bold">
-                      Submit Feedback
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
 
-            {/* Reply Box */}
-            <div className="card border-0 shadow-sm rounded-4 p-4 bg-white">
-              <h6 className="fw-bold text-dark mb-3">Post a Reply to this Thread</h6>
-              <form onSubmit={handleSendReply}>
-                <textarea
-                  className="form-control mb-3"
-                  rows={4}
-                  required
-                  placeholder="Type your response here... Replying automatically marks this ticket Open."
-                  value={customerReplyText}
-                  onChange={e => setCustomerReplyText(e.target.value)}
-                />
-                <div className="d-flex justify-content-between align-items-center">
-                  <span className="small text-muted">
-                    Your message will be sent to the assigned engineer.
-                  </span>
-                  <button
-                    type="submit"
-                    disabled={isReplying || !customerReplyText.trim()}
-                    className="btn btn-primary btn-sm px-4 fw-semibold d-flex align-items-center gap-2"
-                  >
-                    {isReplying ? (
-                      <>
-                        <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                        <span>Sending...</span>
-                      </>
+                {/* CSAT Satisfaction Widget when ticket is RESOLVED or CLOSED */}
+                {(selectedTicket.status === 'RESOLVED' || selectedTicket.status === 'CLOSED') && (
+                  <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 mb-3 mb-md-4 bg-white border-top border-4 border-warning">
+                    <div className="d-flex align-items-center gap-2 mb-2">
+                      <Star size={20} className="text-warning fill-warning" />
+                      <h6 className="fw-bold text-dark mb-0">How satisfied were you with this resolution?</h6>
+                    </div>
+                    {csatSubmitted ? (
+                      <div className="alert alert-success py-2 px-3 small d-flex align-items-center gap-2 mb-0">
+                        <CheckCircle2 size={16} />
+                        <span>Thank you for rating our support team! Your feedback helps us maintain strict SLAs.</span>
+                      </div>
                     ) : (
-                      <>
-                        <span>Send Reply</span>
-                        <Send size={15} />
-                      </>
+                      <form onSubmit={handleSubmitCsat}>
+                        <p className="text-muted small mb-2.5">Rate your experience with our engineering support:</p>
+                        <div className="d-flex flex-wrap gap-2 mb-3">
+                          {[1, 2, 3, 4, 5].map(star => (
+                            <button
+                              key={star}
+                              type="button"
+                              className={`btn btn-sm ${csatRating >= star ? 'btn-warning text-dark' : 'btn-outline-secondary'}`}
+                              onClick={() => setCsatRating(star)}
+                            >
+                              ★ {star}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          className="form-control form-control-sm mb-3"
+                          rows={2}
+                          placeholder="Optional feedback comment on agent helpfulness and response speed..."
+                          value={csatComment}
+                          onChange={e => setCsatComment(e.target.value)}
+                        />
+                        <button type="submit" className="btn btn-warning btn-sm fw-bold w-100 w-sm-auto">
+                          Submit Feedback
+                        </button>
+                      </form>
                     )}
-                  </button>
+                  </div>
+                )}
+
+                {/* Reply Box */}
+                <div className="card border-0 shadow-sm rounded-4 p-3.5 p-md-4 bg-white">
+                  <h6 className="fw-bold text-dark mb-2.5">Post a Reply to this Thread</h6>
+                  <form onSubmit={handleSendReply}>
+                    <textarea
+                      className="form-control mb-3"
+                      rows={3}
+                      required
+                      placeholder="Type your response here... Replying automatically marks this ticket Open."
+                      value={customerReplyText}
+                      onChange={e => setCustomerReplyText(e.target.value)}
+                    />
+                    <div className="d-flex flex-column flex-sm-row justify-content-between align-items-stretch align-items-sm-center gap-2">
+                      <span className="small text-muted" style={{ fontSize: '0.78rem' }}>
+                        Your message will be sent to the assigned engineer.
+                      </span>
+                      <button
+                        type="submit"
+                        disabled={isReplying || !customerReplyText.trim()}
+                        className="btn btn-primary btn-sm px-4 py-2 fw-semibold d-flex align-items-center justify-content-center gap-2 w-100 w-sm-auto"
+                      >
+                        {isReplying ? (
+                          <>
+                            <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                            <span>Sending...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Send Reply</span>
+                            <Send size={15} />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
                 </div>
-              </form>
-            </div>
-          </div>
+              </div>
             ) : null}
           </div>
         )}
@@ -2108,7 +2358,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       </main>
 
       {/* FOOTER */}
-      <footer className="bg-white border-top py-3.5 text-center text-muted small mt-auto">
+      <footer className="bg-white border-top py-3.5 text-center text-muted small mt-auto mb-5 mb-md-0 pb-4 pb-md-3">
         <div className="container d-flex flex-wrap justify-content-between align-items-center" style={{ maxWidth: '1200px' }}>
           <div>
             © 2026 <strong>{company?.name}</strong>. All rights reserved.
@@ -2140,6 +2390,118 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         </div>
       </footer>
 
+      {/* Mobile Fixed Bottom Navigation Bar (Screens 9, 11, 12, 13, 14, 15) */}
+      <nav
+        className="d-md-none fixed-bottom bg-white border-top shadow-lg py-1 px-2 z-3"
+        style={{
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.06)',
+          zIndex: 1040,
+        }}
+      >
+        <div className="d-flex align-items-center justify-content-around">
+          <button
+            type="button"
+            className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 ${activeTab === 'home' ? 'text-primary fw-bold' : 'text-secondary'}`}
+            style={{ fontSize: '0.68rem', minWidth: 0 }}
+            onClick={() => {
+              setActiveTab('home');
+              setMobileMenuOpen(false);
+              onNavigate?.('/' + companySlug);
+            }}
+          >
+            <Building2 size={19} className="mb-0.5" />
+            <span className="text-truncate">Home</span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 ${activeTab === 'submit' ? 'text-primary fw-bold' : 'text-secondary'}`}
+            style={{ fontSize: '0.68rem', minWidth: 0 }}
+            onClick={() => {
+              setActiveTab('submit');
+              setSubmitSuccess(null);
+              setMobileMenuOpen(false);
+              onNavigate?.('/' + companySlug + '/ticket');
+            }}
+          >
+            <Send size={19} className="mb-0.5" />
+            <span className="text-truncate">New Ticket</span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 position-relative ${activeTab === 'tickets' || activeTab === 'ticket-detail' ? 'text-primary fw-bold' : 'text-secondary'}`}
+            style={{ fontSize: '0.68rem', minWidth: 0 }}
+            onClick={() => {
+              setActiveTab('tickets');
+              setMobileMenuOpen(false);
+              onNavigate?.('/' + companySlug + '/ticketstatus');
+            }}
+          >
+            <div className="position-relative">
+              <Clock size={19} className="mb-0.5" />
+              {myTickets.length > 0 && (
+                <span
+                  className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-white"
+                  style={{ fontSize: '0.55rem', padding: '0.15em 0.35em' }}
+                >
+                  {myTickets.length}
+                </span>
+              )}
+            </div>
+            <span className="text-truncate">My Tickets</span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 ${activeTab === 'kb' || activeTab === 'article' ? 'text-primary fw-bold' : 'text-secondary'}`}
+            style={{ fontSize: '0.68rem', minWidth: 0 }}
+            onClick={() => {
+              setActiveTab('kb');
+              setSelectedKbCategory(null);
+              setMobileMenuOpen(false);
+            }}
+          >
+            <FileText size={19} className="mb-0.5" />
+            <span className="text-truncate">Help / KB</span>
+          </button>
+
+          {isAuthenticated ? (
+            <button
+              type="button"
+              className={`btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 ${activeTab === 'profile' ? 'text-primary fw-bold' : 'text-secondary'}`}
+              style={{ fontSize: '0.68rem', minWidth: 0 }}
+              onClick={() => {
+                setActiveTab('profile');
+                setMobileMenuOpen(false);
+              }}
+            >
+              <div
+                className="rounded-circle text-white d-flex align-items-center justify-content-center fw-bold mb-0.5"
+                style={{ width: '19px', height: '19px', backgroundColor: primaryColor, fontSize: '0.65rem' }}
+              >
+                {customerName ? customerName.charAt(0).toUpperCase() : 'C'}
+              </div>
+              <span className="text-truncate">Account</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-link text-decoration-none py-1 px-1 d-flex flex-column align-items-center justify-content-center flex-grow-1 text-primary fw-semibold"
+              style={{ fontSize: '0.68rem', minWidth: 0 }}
+              onClick={() => {
+                setAuthStep('input');
+                setShowAuthModal(true);
+                setMobileMenuOpen(false);
+              }}
+            >
+              <Lock size={19} className="mb-0.5" />
+              <span className="text-truncate">Sign In</span>
+            </button>
+          )}
+        </div>
+      </nav>
+
       {/* ==============================================================
           SCREEN 10: CUSTOMER LOGIN MODAL (OTP & OAUTH)
           ============================================================== */}
@@ -2149,7 +2511,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
           tabIndex={-1}
           style={{ backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', zIndex: 1060 }}
         >
-          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '440px' }}>
+          <div className="modal-dialog modal-dialog-centered mx-3 mx-sm-auto" style={{ maxWidth: '440px' }}>
             <div className="modal-content rounded-4 border-0 shadow-2xl overflow-hidden">
               <div className="bg-primary p-4 text-white text-center position-relative">
                 <button

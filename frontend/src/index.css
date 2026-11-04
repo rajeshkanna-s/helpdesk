@@ -925,9 +925,10 @@ h1, h2, h3, h4, h5, h6 {
 .filter-count { padding: 0 4px; background: #e6efff; border-radius: 3px; }
 .ticket-sort-control { display: flex; align-items: center; gap: 7px; color: #91a0b5; }
 .ticket-sort-control select { max-width: 150px; padding: 5px 0; border: 0; background: #fff; font-size: 12px; color: #64748b; }
-.ticket-filter-panel { display: flex; align-items: end; gap: 14px; padding: 12px 26px; background: #f8faff; border-bottom: 1px solid var(--workspace-border); flex-shrink: 0; }
+.ticket-filter-panel { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 12px 26px; background: #f8faff; border-bottom: 1px solid var(--workspace-border); flex-shrink: 0; }
 .ticket-filter-panel > label { display: grid; gap: 5px; font-size: 11px; color: #64748b; width: 220px; max-width: 100%; }
 .ticket-filter-panel .form-select { background-color: #fff; }
+.ticket-filter-scope { align-self: center; color: #64748b; font-size: 10px; }
 .ticket-workbench { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .ticket-queue { display: flex; flex-direction: column; flex: 0 0 310px; min-width: 0; min-height: 0; border-right: 1px solid var(--workspace-border); background: #fff; }
 .ticket-queue-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; min-height: 43px; border-bottom: 1px solid var(--workspace-border); background: #fcfdfe; color: #64748b; font-size: 11px; }
@@ -960,7 +961,9 @@ h1, h2, h3, h4, h5, h6 {
 .ticket-priority.priority-high::before { background: #d8a55c; }
 .ticket-priority.priority-urgent::before { background: #d57575; }
 .ticket-priority.priority-medium::before { background: #8c9dcc; }
-.ticket-queue-footer { border-top: 1px solid var(--workspace-border); padding: 13px 16px; color: #64748b; background: #fcfdfe; font-size: 10px; }
+.ticket-queue-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--workspace-border); padding: 8px 12px; min-height: 46px; color: #64748b; background: #fcfdfe; font-size: 10px; }
+.ticket-pagination { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ticket-pagination .workspace-icon-button { width: 27px; height: 29px; }
 .ticket-bulk-actions { padding: 11px 14px; border-bottom: 1px solid #dfe9fb; background: #f0f5ff; color: #4b6fab; }
 .ticket-bulk-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
 .ticket-bulk-controls .form-select { min-height: 30px; }
@@ -1247,4 +1250,151 @@ h1, h2, h3, h4, h5, h6 {
 
 @media (prefers-reduced-motion: reduce) {
   .company-workspace *, .company-workspace *::before, .company-workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Platform administration shares the workspace shell, with denser operational panels. */
+.platform-console .enterprise-content { background: #f7f9fc; }
+.platform-console code { color: #64748b; }
+.platform-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.platform-content-inner { max-width: 1560px; margin: 0 auto; min-width: 0; }
+.platform-console .enterprise-card-header { padding: 17px 20px; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--workspace-border); background: #fff; }
+.platform-console .enterprise-card-header h6 { font-size: 14px; color: #304662; }
+.platform-console .enterprise-card-header small { display: block; margin-top: 5px; color: #64748b; font-size: 11px; }
+.platform-console .workspace-page-heading { margin-bottom: 24px; }
+.platform-console .workspace-page-heading p { max-width: 650px; line-height: 1.7; }
+.platform-console .workspace-wordmark strong { font-size: 21px; letter-spacing: -0.04em; }
+.platform-console .workspace-wordmark strong span { margin-left: 4px; font-size: 13px; letter-spacing: -0.01em; }
+.platform-console .workspace-company-label { justify-content: flex-start; color: #5d7394; background: #f0f4fb; border-color: #e1e8f4; }
+.platform-console .sidebar-footer { margin-top: auto; }
+.platform-console .sidebar-section-label { padding-top: 20px; }
+.platform-snapshot { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 11px; white-space: nowrap; }
+.platform-source-note { margin: 12px 0 0; color: #64748b; font-size: 11px; line-height: 1.7; }
+.platform-source-note a { color: #2563eb; text-decoration: none; }
+.platform-source-note a:hover { text-decoration: underline; }
+
+.platform-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 22px; }
+.platform-stat-card { display: block; width: 100%; min-width: 0; padding: 20px; border: 1px solid var(--workspace-border); border-radius: 8px; background: #fff; color: #203047; text-align: left; }
+button.platform-stat-card:hover { border-color: #b9cceb; background: #fcfdff; }
+.platform-stat-label { display: block; color: #64748b; font-size: 11px; font-weight: 550; }
+.platform-stat-value { display: block; margin: 12px 0 8px; color: #253c5b; font-size: 30px; line-height: 1.2; font-weight: 700; letter-spacing: -0.055em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.platform-stat-value.is-unavailable { font-size: 20px; letter-spacing: -0.025em; }
+.platform-stat-note { display: block; color: #64748b; font-size: 11px; line-height: 1.6; }
+.platform-stat-card .stat-icon { width: 34px; height: 34px; border-radius: 7px; }
+.platform-stat-card .stat-icon svg { width: 18px; height: 18px; }
+.platform-overview-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 22px; margin-bottom: 22px; }
+.platform-overview-grid > * { min-width: 0; }
+.platform-plan-row { display: grid; grid-template-columns: 95px minmax(0, 1fr) 32px; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid #edf1f6; font-size: 12px; color: #526985; }
+.platform-plan-row:last-child { border-bottom: 0; }
+.platform-plan-row .quota-bar, .platform-plan-row .progress { height: 7px; background: #edf2f8; border-radius: 5px; }
+.platform-plan-row .quota-bar-fill { background: #7b9fdd; border-radius: 5px; }
+.platform-plan-row > :last-child { text-align: right; font-size: 11px; color: #64748b; }
+.platform-workspace-row { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 15px 18px; border: 0; border-bottom: 1px solid #edf1f6; background: #fff; color: #405978; text-align: left; }
+.platform-workspace-row:hover { background: #f8faff; }
+.platform-workspace-row:last-child { border-bottom: 0; border-radius: 0 0 8px 8px; }
+.platform-workspace-row strong { display: block; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.platform-workspace-row small { display: block; color: #64748b; font-size: 10px; margin-top: 4px; }
+.platform-workspace-copy { flex: 1; min-width: 0; }
+.platform-company-avatar { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex-shrink: 0; border-radius: 7px; background: #eaf1fc; color: #5676a5; font-size: 10px; font-weight: 650; }
+.platform-usage-grid, .platform-health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.platform-usage-grid > *, .platform-health-grid > * { min-width: 0; }
+.platform-usage-grid strong, .platform-health-grid strong { display: block; font-size: 22px; color: #365274; font-weight: 650; margin: 8px 0; }
+.platform-usage-grid small, .platform-health-grid small { color: #64748b; font-size: 11px; }
+.platform-unavailable { padding: 22px; border: 1px solid #e3e9f2; border-radius: 7px; background: #fafcff; color: #64748b; font-size: 12px; line-height: 1.8; }
+.platform-unavailable > strong { display: block; margin-bottom: 5px; color: #425b7b; font-size: 13px; }
+.platform-attention-empty { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 9px; padding: 24px 20px; min-height: 140px; color: #64748b; font-size: 12px; line-height: 1.7; }
+.platform-attention-empty svg { color: #7993b9; }
+
+.platform-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.platform-toolbar .workspace-search { flex: 1; min-width: 210px; max-width: 440px; background: #fff; }
+.platform-toolbar .workspace-search input { font-size: 12px; padding-top: 10px; padding-bottom: 10px; }
+.platform-filter-group { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.platform-filter-group .form-select { width: auto; min-width: 140px; }
+.platform-console .table-responsive { max-width: 100%; overflow-x: auto; border-radius: 7px; }
+.platform-console .table-responsive:focus-visible { outline: 2px solid #89abeb; outline-offset: 2px; }
+.platform-console .table-enterprise th { font-size: 11px; letter-spacing: 0; text-transform: none; }
+.platform-console .table-enterprise td { font-size: 12px; padding-top: 15px; padding-bottom: 15px; vertical-align: middle; }
+.platform-company-table { min-width: 960px; }
+.platform-company-table td:first-child { min-width: 235px; }
+.platform-company-table td:nth-child(2) { min-width: 85px; }
+.platform-company-table .btn { min-height: 31px; }
+.platform-company-detail-header { min-width: 0; }
+.platform-company-detail-header h5 { font-size: 18px; line-height: 1.5; overflow-wrap: anywhere; }
+.platform-company-detail-header > div { min-width: 0; }
+.platform-company-detail-header code { overflow-wrap: anywhere; }
+.platform-detail-tabs { display: flex; gap: 6px; width: 100%; max-width: 100%; padding-top: 14px; overflow-x: auto; }
+.platform-detail-tabs > button { flex: 0 0 auto; white-space: nowrap; min-height: 34px; font-size: 11px !important; border-radius: 5px !important; }
+.platform-mobile-companies { display: none; }
+.platform-company-mobile-card { padding: 17px; margin-bottom: 12px; border: 1px solid var(--workspace-border); border-radius: 8px; background: #fff; }
+.platform-company-mobile-card h3 { font-size: 14px; line-height: 1.6; color: #354e6f; }
+.platform-company-mobile-card code { overflow-wrap: anywhere; font-size: 11px; }
+.platform-company-mobile-card .platform-mobile-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; font-size: 11px; color: #64748b; }
+.platform-company-mobile-card .platform-mobile-metrics strong { display: block; color: #365171; font-size: 13px; margin-bottom: 4px; }
+.platform-company-mobile-card .btn { min-height: 36px; }
+
+.platform-dialog { width: min(700px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); margin: auto; padding: 0; border: 0; border-radius: 11px; background: #fff; color: #203047; box-shadow: 0 24px 80px #172d4b40; }
+.platform-dialog.platform-dialog-wide { width: min(840px, calc(100vw - 32px)); }
+.platform-dialog::backdrop { background: #172d4b66; backdrop-filter: blur(3px); }
+.platform-dialog .modal-dialog { width: 100%; max-width: none; margin: 0; }
+.platform-dialog .modal-dialog-centered { min-height: 0; }
+.platform-dialog .modal-content { overflow: visible !important; border: 0 !important; border-radius: 11px !important; box-shadow: none !important; }
+.platform-dialog .modal-header { position: sticky; top: 0; z-index: 2; align-items: flex-start; background: #fff !important; color: #203047 !important; border-bottom: 1px solid #e5eaf1; }
+.platform-dialog .modal-header > div { min-width: 0; }
+.platform-dialog .modal-header .text-white { color: #304765 !important; }
+.platform-dialog .modal-header svg { flex-shrink: 0; color: #567cae; }
+.platform-dialog .modal-title { font-size: 18px; line-height: 1.5; }
+.platform-dialog .modal-header .btn-close { margin-left: auto; margin-top: 0; flex-shrink: 0; }
+.platform-dialog .btn-close-white { filter: none; }
+.platform-dialog .modal-footer { position: sticky; bottom: 0; z-index: 2; border-top: 1px solid #e5eaf1; background: #fafbfd !important; }
+.platform-dialog .form-label { font-size: 12px; font-weight: 550 !important; color: #526782; }
+.platform-dialog .form-control, .platform-dialog .form-select { min-height: 37px; font-size: 13px; }
+.platform-dialog .form-check-label { font-size: 12px; line-height: 1.7; }
+.platform-dialog .alert { font-size: 12px; line-height: 1.8; }
+
+@media (max-width: 1199px) {
+  .platform-stat-grid { gap: 12px; }
+  .platform-stat-card { padding: 16px; }
+  .platform-stat-value { font-size: 27px; }
+  .platform-overview-grid { gap: 16px; }
+}
+
+@media (max-width: 991px) {
+  .platform-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .platform-health-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 767px) {
+  .platform-console .enterprise-content { padding: 18px 16px; }
+  .platform-console .workspace-page-heading { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .platform-console .workspace-page-heading h1 { font-size: 24px; }
+  .platform-console .workspace-page-heading p { font-size: 12px; }
+  .platform-console .enterprise-card-header { padding: 15px 16px; }
+  .platform-console .enterprise-card-header h6 { font-size: 13px; line-height: 1.6; }
+  .platform-stat-grid { gap: 10px; }
+  .platform-stat-card { padding: 16px 13px; }
+  .platform-stat-label { font-size: 11px; line-height: 1.6; }
+  .platform-stat-value { font-size: 27px; }
+  .platform-stat-note { font-size: 10px; line-height: 1.7; }
+  .platform-usage-grid, .platform-health-grid { grid-template-columns: minmax(0, 1fr); }
+  .platform-plan-row { grid-template-columns: 82px minmax(0, 1fr) 28px; gap: 10px; }
+  .platform-toolbar .workspace-search { flex-basis: 100%; max-width: none; }
+  .platform-filter-group { width: 100%; }
+  .platform-filter-group .form-select { flex: 1; min-width: 120px; }
+  .platform-mobile-companies { display: block; }
+  .platform-company-detail-header { padding: 18px !important; }
+  .platform-company-detail-header h5 { font-size: 16px; }
+  .platform-company-detail-header .d-flex { flex-wrap: wrap; }
+  .platform-company-detail-header .btn { min-height: 36px; }
+  .platform-console .enterprise-content > :not(.workspace-page-heading) .p-4 { padding: 18px !important; }
+  .platform-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .platform-dialog .modal-body, .platform-dialog .modal-header, .platform-dialog .modal-footer { padding: 18px !important; }
+  .platform-dialog .row > .col { flex: 0 0 100%; max-width: 100%; }
+  .platform-dialog .form-control, .platform-dialog .form-select { min-height: 42px; font-size: 16px; }
+  .platform-dialog .modal-footer .btn { min-height: 38px; }
+  .platform-dialog .modal-title { font-size: 17px; }
+}
+
+@media (max-width: 359px) {
+  .platform-stat-grid { grid-template-columns: minmax(0, 1fr); }
+  .platform-console .enterprise-content { padding-left: 12px; padding-right: 12px; }
 }

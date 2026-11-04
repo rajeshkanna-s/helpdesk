@@ -9,6 +9,7 @@ import com.kuwy.helpdesk.repositories.CompanyRepository;
 import com.kuwy.helpdesk.repositories.DepartmentRepository;
 import com.kuwy.helpdesk.repositories.TicketRepository;
 import com.kuwy.helpdesk.repositories.UserRepository;
+import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ public class DepartmentService {
 
     @Transactional(readOnly = true)
     public List<DepartmentDetailDto> getDepartmentsWithDetails(Long companyId) {
+        TenantContext.assertAccessTo(companyId);
         List<Department> depts = departmentRepository.findByCompanyId(companyId);
         List<Ticket> allTickets = ticketRepository.findAll().stream()
                 .filter(t -> t.getCompany().getId().equals(companyId))
@@ -57,6 +59,7 @@ public class DepartmentService {
 
     @Transactional
     public Department createDepartment(DepartmentCreateDto dto) {
+        TenantContext.assertCompanyAdminAccessTo(dto.getCompanyId());
         Company company = companyRepository.findById(dto.getCompanyId())
                 .orElseThrow(() -> new RuntimeException("Company not found: " + dto.getCompanyId()));
 
@@ -72,8 +75,10 @@ public class DepartmentService {
 
     @Transactional
     public Department toggleDepartmentActive(Long departmentId) {
+        TenantContext.requireUserId();
         Department dept = departmentRepository.findById(departmentId)
                 .orElseThrow(() -> new RuntimeException("Department not found: " + departmentId));
+        TenantContext.assertCompanyAdminAccessTo(dept.getCompany() != null ? dept.getCompany().getId() : null);
         dept.setIsActive(!Boolean.TRUE.equals(dept.getIsActive()));
         return departmentRepository.save(dept);
     }

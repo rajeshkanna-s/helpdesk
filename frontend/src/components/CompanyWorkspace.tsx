@@ -103,6 +103,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
   const propertiesRef = useRef<HTMLElement>(null);
   const loadedCompanyRef = useRef<number | null>(null);
   const workspaceRequestRef = useRef(0);
+  const workspaceMetadataRequestRef = useRef(0);
   const ticketRequestRef = useRef(0);
 
   // Stats & Tickets
@@ -409,6 +410,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
 
   const loadCompanyData = async (companyId: number, resetSelection = false, queueOnly = false) => {
     const requestId = ++workspaceRequestRef.current;
+    const metadataRequestId = queueOnly ? workspaceMetadataRequestRef.current : ++workspaceMetadataRequestRef.current;
     setIsLoadingWorkspace(true);
     if (resetSelection) {
       ticketRequestRef.current += 1;
@@ -418,6 +420,16 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
       setShowMobileTicket(false);
       setDeptFilter(null);
       setPriorityFilter('ALL');
+      setStats(null);
+      setDepartments([]);
+      setAgents([]);
+      setMailboxes([]);
+      setKbArticles([]);
+      setCannedResponses([]);
+      setCustomers([]);
+      setNotifications([]);
+      setCurrentSubscription(null);
+      setTicketCounts({});
     }
     try {
       const [pageData, workspaceData] = await Promise.all([
@@ -440,8 +452,8 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         ]),
       ]);
 
-      if (requestId !== workspaceRequestRef.current) return;
-      if (workspaceData) {
+      // A new queue view must not discard reference data that is still loading.
+      if (workspaceData && metadataRequestId === workspaceMetadataRequestRef.current && loadedCompanyRef.current === companyId) {
         const [statsData, mailboxesData, deptsData, agentsData, kbData, crData, subData, custData, notifsData, catsData, countsData] = workspaceData;
         if (statsData) setStats(statsData);
         setMailboxes(mailboxesData);
@@ -459,6 +471,7 @@ export const CompanyWorkspace: React.FC<CompanyWorkspaceProps> = ({
         if (deptsData.length) setNewDeptId(deptsData[0].id);
       }
 
+      if (requestId !== workspaceRequestRef.current) return;
       const ticketsData = pageData.content;
       setTickets(ticketsData);
       setTicketPageInfo({ number: pageData.number, size: pageData.size, totalElements: pageData.totalElements, totalPages: pageData.totalPages });

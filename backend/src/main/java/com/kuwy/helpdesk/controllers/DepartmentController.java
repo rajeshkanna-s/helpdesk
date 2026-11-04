@@ -7,7 +7,6 @@ import com.kuwy.helpdesk.dto.SupportEngineerDto;
 import com.kuwy.helpdesk.models.Department;
 import com.kuwy.helpdesk.models.User;
 import com.kuwy.helpdesk.services.DepartmentService;
-import com.kuwy.helpdesk.services.SubscriptionService;
 import com.kuwy.helpdesk.services.SupportEngineerService;
 import com.kuwy.helpdesk.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
@@ -24,13 +23,10 @@ public class DepartmentController {
 
     private final DepartmentService departmentService;
     private final SupportEngineerService supportEngineerService;
-    private final SubscriptionService subscriptionService;
 
     @GetMapping
     public ResponseEntity<List<DepartmentDetailDto>> getDepartments(@RequestParam(required = false) Long companyId) {
-        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
-                ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
         return ResponseEntity.ok(departmentService.getDepartmentsWithDetails(targetCompanyId));
@@ -39,10 +35,9 @@ public class DepartmentController {
     @PostMapping
     public ResponseEntity<Department> createDepartment(@RequestBody DepartmentCreateDto dto) {
         if (dto.getCompanyId() == null) {
-            Long cid = TenantContext.getCompanyId();
-            dto.setCompanyId(cid != null ? cid : 1L);
+            dto.setCompanyId(TenantContext.getCompanyId());
         }
-        TenantContext.assertAccessTo(dto.getCompanyId());
+        TenantContext.assertCompanyAdminAccessTo(dto.getCompanyId());
         return ResponseEntity.ok(departmentService.createDepartment(dto));
     }
 
@@ -53,9 +48,7 @@ public class DepartmentController {
 
     @GetMapping("/engineers")
     public ResponseEntity<List<SupportEngineerDto>> getEngineers(@RequestParam(required = false) Long companyId) {
-        Long targetCompanyId = TenantContext.isSuperAdmin() && companyId != null
-                ? companyId
-                : (TenantContext.getCompanyId() != null ? TenantContext.getCompanyId() : 1L);
+        Long targetCompanyId = companyId != null ? companyId : TenantContext.getCompanyId();
         TenantContext.assertAccessTo(targetCompanyId);
 
         return ResponseEntity.ok(supportEngineerService.getEngineersByCategory(targetCompanyId));
@@ -64,13 +57,9 @@ public class DepartmentController {
     @PostMapping("/engineers")
     public ResponseEntity<SupportEngineerDto> createEngineer(@RequestBody SupportEngineerCreateDto dto) {
         if (dto.getCompanyId() == null) {
-            Long cid = TenantContext.getCompanyId();
-            dto.setCompanyId(cid != null ? cid : 1L);
+            dto.setCompanyId(TenantContext.getCompanyId());
         }
-        TenantContext.assertAccessTo(dto.getCompanyId());
-
-        // Enforce Agent limit per subscription tier
-        subscriptionService.assertCanAddAgent(dto.getCompanyId());
+        TenantContext.assertCompanyAdminAccessTo(dto.getCompanyId());
 
         return ResponseEntity.ok(supportEngineerService.createSupportEngineer(dto));
     }

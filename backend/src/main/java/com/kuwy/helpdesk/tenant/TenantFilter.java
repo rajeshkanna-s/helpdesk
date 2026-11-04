@@ -28,6 +28,8 @@ public class TenantFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        TenantContext.clear();
+        SecurityContextHolder.clearContext();
         try {
             String authHeader = request.getHeader("Authorization");
             String token = null;
@@ -42,7 +44,6 @@ public class TenantFilter extends OncePerRequestFilter {
                 Long userId = claims.get("userId", Long.class);
                 Long tokenCompanyId = claims.get("companyId", Long.class);
                 String role = claims.get("role", String.class);
-                if (role == null) role = "AGENT";
 
                 Long resolvedCompanyId = tokenCompanyId;
 
@@ -61,8 +62,8 @@ public class TenantFilter extends OncePerRequestFilter {
                         try {
                             Long requestedId = Long.parseLong(untrustedHeader.trim());
                             if (tokenCompanyId != null && !tokenCompanyId.equals(requestedId)) {
-                                log.warn("SECURITY ALERT: User [{}] from company [{}] attempted to spoof X-Company-ID [{}]! Blocked override.",
-                                        email, tokenCompanyId, requestedId);
+                                log.warn("Rejected tenant override for user [{}]: signed tenant [{}], requested tenant [{}].",
+                                        userId, tokenCompanyId, requestedId);
                             }
                         } catch (NumberFormatException ignored) {}
                     }
@@ -70,20 +71,15 @@ public class TenantFilter extends OncePerRequestFilter {
 
                 TenantContext.setContext(resolvedCompanyId, userId, role, email);
 
-                // Set Spring Security context
-                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                        email,
-                        null,
-                        Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + role))
-                );
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-            } else {
-                // Unauthenticated request (Public portal, webhooks, or health checks)
-                String companyIdHeader = request.getHeader("X-Company-ID");
-                if (companyIdHeader != null && !companyIdHeader.isBlank()) {
-                    try {
-                        TenantContext.setCompanyId(Long.parseLong(companyIdHeader.trim()));
-                    } catch (NumberFormatException ignored) {}
+                if (TenantContext.isAuthenticated()) {
+                    UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                            email,
+                            null,
+                            Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + TenantContext.getUserRole()))
+                    );
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                } else {
+                    TenantContext.clear();
                 }
             }
 

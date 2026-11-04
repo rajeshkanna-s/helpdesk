@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Building2, ShieldCheck, Users, Ticket as TicketIcon, Plus, Power,
   KeyRound, RefreshCw, LogOut, ArrowRight, CheckCircle2,
@@ -6,8 +6,8 @@ import {
   Database, Globe, Search, Layers, Lock, Server, Mail,
   FileSpreadsheet, BarChart3, ChevronRight, Activity,
   CreditCard, Clock, Sliders, Tag, Ban,
-  Eye, EyeOff, Download, Trash2, AlertTriangle,
-  X, TrendingUp, DollarSign
+  Eye, EyeOff, Download, Trash2,
+  X, Menu, MoreHorizontal
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { AdminOverview, CompanyDetail, User, AuthUser } from '../types';
@@ -30,6 +30,21 @@ type AdminMenuSection =
   | 'workspaces'     // Tenant Workspaces & Direct Launchers
   | 'system';        // MySQL DB Schema & Security Architecture
 
+function PlatformDialog({ title, onClose, children, wide = false, busy = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; busy?: boolean }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    dialog?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')?.focus();
+    return () => dialog?.close();
+  }, []);
+  return (
+    <dialog ref={dialogRef} className={`platform-dialog ${wide ? 'platform-dialog-wide' : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); if (!busy) onClose(); }} onClick={event => { if (!busy && event.target === event.currentTarget) onClose(); }}>
+      {children}
+    </dialog>
+  );
+}
+
 export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   currentUser,
   onLogout,
@@ -41,12 +56,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   const [users, setUsers] = useState<User[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
-  const [emailHealth, setEmailHealth] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [alertNotice, setAlertNotice] = useState<{ type: 'success' | 'danger'; message: string } | null>(null);
-
-  // Screen 40: Date Range & Chart States
-  const [dateRange, setDateRange] = useState<'7d' | '30d' | '90d' | 'ytd'>('30d');
+  const [isNavigationOpen, setIsNavigationOpen] = useState(false);
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+  const navigationRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDetailsElement>(null);
+  const dataRequestRef = useRef(0);
 
   // Screen 41: Companies List & Filter States
   const [compSearch, setCompSearch] = useState('');
@@ -58,12 +76,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   // Screen 41b: Company Detail Drawer / Modal State
   const [selectedCompanyDetail, setSelectedCompanyDetail] = useState<CompanyDetail | null>(null);
   const [companyDetailTab, setCompanyDetailTab] = useState<'overview' | 'billing' | 'usage' | 'email' | 'users' | 'security' | 'notes' | 'audit'>('overview');
-  const [staffNotes, setStaffNotes] = useState<Record<number, string[]>>({
-    1: ['Flagship enterprise tenant. Annual renewal due in Q3.', 'Verified SPF and DKIM on custom domain helpdesk.kuwy.in.'],
-    2: ['Pilot trial tenant. Requested extended evaluation for 10 agents.', 'Customer contact confirmed integration with Razorpay.'],
-    3: ['Scale professional plan subscriber. Consistent low bounce rate.'],
-    4: ['Starter evaluation account. Outreach sent regarding SLA automation setup.']
-  });
+  const [staffNotes, setStaffNotes] = useState<Record<number, string[]>>({});
   const [newStaffNoteInput, setNewStaffNoteInput] = useState('');
 
   // Modals for Actions on Companies (Section F Safety Rails)
@@ -73,17 +86,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
   const [showChangePlanModal, setShowChangePlanModal] = useState<CompanyDetail | null>(null);
   const [newPlanTarget, setNewPlanTarget] = useState<string>('PRO');
-  const [planChangeProrate, setPlanChangeProrate] = useState<boolean>(true);
 
   const [showSuspendModal, setShowSuspendModal] = useState<CompanyDetail | null>(null);
-  const [suspendReason, setSuspendReason] = useState<string>('Payment past due after 14-day grace period');
+  const [suspendReason, setSuspendReason] = useState<string>('');
 
   const [showDeleteModal, setShowDeleteModal] = useState<CompanyDetail | null>(null);
   const [deleteConfirmationInput, setDeleteConfirmationInput] = useState<string>('');
 
   const [showSupportSessionModal, setShowSupportSessionModal] = useState<CompanyDetail | null>(null);
   const [supportSessionReason, setSupportSessionReason] = useState<string>('Investigating customer mailbox inbound sync issue');
-  const [activeSupportSession, setActiveSupportSession] = useState<{ companyName: string; expiresAt: string; token: string } | null>(null);
 
   // Screen 42: Plans & Coupons States
   const [showPlanEditorModal, setShowPlanEditorModal] = useState<any | null>(null);
@@ -111,11 +122,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   const [emergencyOutboundPaused, setEmergencyOutboundPaused] = useState<boolean>(false);
 
   // Screen 43c: Abuse Reports & Platform Blocklist
-  const [abuseReports, setAbuseReports] = useState<any[]>([
-    { id: 1, reporterEmail: 'security-team@externalorg.com', reportedCompany: 'Apex Global Logistics', reason: 'High bounce rate with generic marketing subject', riskScore: 'Low', status: 'INVESTIGATING', reportedAt: '2 hours ago' },
-    { id: 2, reporterEmail: 'postmaster@deliverability.net', reportedCompany: 'FastTrack Logistics', reason: 'Unverified sender domain SPF mismatch', riskScore: 'Medium', status: 'PENDING_REVIEW', reportedAt: 'Yesterday' }
-  ]);
-  const [blockedIps, setBlockedIps] = useState<string[]>(['198.51.100.42', '203.0.113.89', '185.220.101.5']);
+  const [abuseReports, setAbuseReports] = useState<any[]>([]);
+  const [blockedIps, setBlockedIps] = useState<string[]>([]);
   const [newBlockedIpInput, setNewBlockedIpInput] = useState<string>('');
 
   // Credentials & Workspace States
@@ -137,56 +145,97 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   const [newCompAdminFirst, setNewCompAdminFirst] = useState('');
   const [newCompAdminLast, setNewCompAdminLast] = useState('');
   const [newCompAdminEmail, setNewCompAdminEmail] = useState('');
-  const [newCompAdminPassword, setNewCompAdminPassword] = useState('Password@123');
+  const [newCompAdminPassword, setNewCompAdminPassword] = useState('');
 
   // New Credential Form Data
   const [credCompanyId, setCredCompanyId] = useState<number>(1);
   const [credEmail, setCredEmail] = useState('');
-  const [credPassword, setCredPassword] = useState('Password@123');
+  const [credPassword, setCredPassword] = useState('');
   const [credFirstName, setCredFirstName] = useState('');
   const [credLastName, setCredLastName] = useState('');
   const [credPhone, setCredPhone] = useState('');
   const [credRoleType, setCredRoleType] = useState('AGENT');
 
   // Reset Password Form Data
-  const [newPasswordVal, setNewPasswordVal] = useState('Password@123');
+  const [newPasswordVal, setNewPasswordVal] = useState('');
 
   useEffect(() => {
     loadAdminData();
+    return () => { dataRequestRef.current += 1; };
   }, []);
 
-  const loadAdminData = async () => {
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsNavigationOpen(false);
+        actionsRef.current?.removeAttribute('open');
+      }
+    };
+    const onOutsideActions = (event: PointerEvent) => {
+      if (actionsRef.current && !actionsRef.current.contains(event.target as Node)) actionsRef.current.removeAttribute('open');
+    };
+    const desktop = window.matchMedia('(min-width: 1100px)');
+    const onDesktop = () => { if (desktop.matches) setIsNavigationOpen(false); };
+    document.addEventListener('keydown', onEscape);
+    document.addEventListener('pointerdown', onOutsideActions);
+    desktop.addEventListener('change', onDesktop);
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      document.removeEventListener('pointerdown', onOutsideActions);
+      desktop.removeEventListener('change', onDesktop);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isNavigationOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const controls = navigationRef.current?.querySelectorAll<HTMLElement>('button, a, select');
+    controls?.[0]?.focus();
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !controls?.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', trapFocus);
+    return () => { document.removeEventListener('keydown', trapFocus); if (previous?.isConnected) previous.focus(); };
+  }, [isNavigationOpen]);
+
+  async function loadAdminData() {
+    const requestId = ++dataRequestRef.current;
     setIsLoading(true);
     try {
-      const [overviewData, companiesData, usersData, plansData, couponsData, emailHealthData] = await Promise.all([
+      const [overviewData, companiesData, usersData, plansData, couponsData] = await Promise.all([
         apiService.getAdminOverview(),
         apiService.getAdminCompanies(),
         apiService.getAdminUsers(),
         apiService.getPlatformPlans(),
         apiService.getPlatformCoupons(),
-        apiService.getEmailSystemHealth(),
       ]);
+      if (requestId !== dataRequestRef.current) return;
       setOverview(overviewData);
       setCompanies(companiesData);
+      setSelectedCompanyDetail(current => current ? companiesData.find(company => company.id === current.id) ?? null : null);
       setUsers(usersData);
       setPlans(plansData);
       setCoupons(couponsData);
-      setEmailHealth(emailHealthData);
-      if (companiesData.length > 0 && !credCompanyId) {
+      setLastRefreshed(new Date().toISOString());
+      if (companiesData.length > 0 && !companiesData.some(company => company.id === credCompanyId)) {
         setCredCompanyId(companiesData[0].id);
       }
-    } catch (err: any) {
-      console.error('Failed to load Super Admin telemetry:', err);
+    } catch {
+      if (requestId === dataRequestRef.current) setAlertNotice({ type: 'danger', message: 'Platform data could not be loaded. Please try refreshing.' });
     } finally {
-      setIsLoading(false);
+      if (requestId === dataRequestRef.current) setIsLoading(false);
     }
-  };
+  }
 
   // Helper to mask owner emails for super admin privacy: e.g. "admin@kuwy.in" -> "adm***@kuwy.in"
   const maskEmail = (email: string) => {
-    if (!email) return 'adm***@tenant.com';
+    if (!email) return 'Not available';
     const parts = email.split('@');
-    if (parts.length < 2) return 'adm***@tenant.com';
+    if (parts.length < 2) return 'Not available';
     const name = parts[0];
     const domain = parts[1];
     const visiblePrefix = name.slice(0, Math.min(3, name.length));
@@ -201,7 +250,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
       await apiService.extendCompanyTrial(showExtendTrialModal.id, trialDaysToAdd, trialExtendReason);
       setAlertNotice({
         type: 'success',
-        message: `Extended trial for ${showExtendTrialModal.name} by +${trialDaysToAdd} days.`,
+        message: `${showExtendTrialModal.name} is now marked as a trial workspace. An expiry date has not been scheduled.`,
       });
       setShowExtendTrialModal(null);
       loadAdminData();
@@ -215,10 +264,11 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     e.preventDefault();
     if (!showChangePlanModal) return;
     try {
-      await apiService.updateCompanyLimits(showChangePlanModal.id, newPlanTarget, showChangePlanModal.maxAgents);
+      const maxAgents = plans.find(plan => plan.code === newPlanTarget)?.maxAgents ?? showChangePlanModal.maxAgents;
+      await apiService.updateCompanyLimits(showChangePlanModal.id, newPlanTarget, maxAgents);
       setAlertNotice({
         type: 'success',
-        message: `Plan for ${showChangePlanModal.name} changed to ${newPlanTarget} with prorated billing adjustments.`,
+        message: `Company plan and staff capacity updated for ${showChangePlanModal.name}. No payment was processed.`,
       });
       setShowChangePlanModal(null);
       loadAdminData();
@@ -232,42 +282,17 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     e.preventDefault();
     if (!showSuspendModal) return;
     try {
-      await apiService.suspendCompany(showSuspendModal.id, suspendReason);
+      const nextStatus = showSuspendModal.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+      if (nextStatus === 'SUSPENDED') await apiService.suspendCompany(showSuspendModal.id, suspendReason);
+      else await apiService.updateCompanyStatus(showSuspendModal.id, nextStatus);
       setAlertNotice({
         type: 'success',
-        message: `Organization ${showSuspendModal.name} status updated to SUSPENDED. Reason logged in audit trail.`,
+        message: `${showSuspendModal.name} status updated to ${nextStatus.toLowerCase()}.`,
       });
       setShowSuspendModal(null);
       loadAdminData();
     } catch (err: any) {
       setAlertNotice({ type: 'danger', message: err.message || 'Failed to update company suspension state' });
-    }
-  };
-
-  // Quick Action: Support Access / Consent-based 60-min impersonation
-  const handleStartSupportSession = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!showSupportSessionModal) return;
-    try {
-      const session = await apiService.impersonateCompany(
-        showSupportSessionModal.id,
-        currentUser.displayName || 'Super Admin Staff',
-        supportSessionReason
-      );
-      setActiveSupportSession({
-        companyName: showSupportSessionModal.name,
-        expiresAt: session.expiresAt || new Date(Date.now() + 60 * 60 * 1000).toLocaleTimeString(),
-        token: session.sessionToken || 'active-session-token'
-      });
-      setShowSupportSessionModal(null);
-      setAlertNotice({
-        type: 'success',
-        message: `Support impersonation active for ${showSupportSessionModal.name}. 60-minute audit-logged read-only session started.`,
-      });
-      // Switch into company workspace with support banner
-      onSwitchToCompany(showSupportSessionModal.id, 'tickets');
-    } catch (err: any) {
-      setAlertNotice({ type: 'danger', message: err.message || 'Failed to initiate support session' });
     }
   };
 
@@ -283,7 +308,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
       await apiService.deleteCompany(showDeleteModal.id, showDeleteModal.name);
       setAlertNotice({
         type: 'success',
-        message: `Company ${showDeleteModal.name} queued for deletion with 30-day grace recovery hold.`,
+        message: `${showDeleteModal.name} has been deactivated. Stored data is retained; automatic deletion is not configured.`,
       });
       setShowDeleteModal(null);
       setDeleteConfirmationInput('');
@@ -320,7 +345,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     setCoupons([newEntry, ...coupons]);
     setShowNewCouponModal(false);
     setNewCouponCode('');
-    setAlertNotice({ type: 'success', message: `Coupon code '${newEntry.code}' created successfully.` });
+    setAlertNotice({ type: 'success', message: `Coupon '${newEntry.code}' added to the local preview only. It has not been published.` });
   };
 
   // Filtered Companies List (Screen 41a)
@@ -358,337 +383,142 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
   const menuTitleMap: Record<AdminMenuSection, { title: string; subtitle: string }> = {
     overview: {
-      title: 'Executive Platform Overview (Screen 40)',
-      subtitle: 'Real-time cross-tenant telemetry, MRR/ARR growth, infrastructure diagnostics & critical alerts',
+      title: 'Overview',
+      subtitle: 'A clear view of your companies, workspace usage, and next actions.',
     },
     companies: {
-      title: 'Organizations & Multi-Tenant Directory (Screen 41)',
-      subtitle: 'Inspect tenant health, manage quotas, trials, plan migrations, and consent-based support access',
+      title: 'Companies',
+      subtitle: 'Manage company accounts, plans, and workspace capacity in one place.',
     },
     plans: {
-      title: 'Plans, Pricing & Entitlements Management (Screen 42)',
-      subtitle: 'Manage subscription tiers, feature flags, coupon campaigns, and grandfathering versions',
+      title: 'Plans & pricing',
+      subtitle: 'Review your plan catalog, pricing, and included capabilities.',
     },
     platform: {
-      title: 'Platform Settings, System Health & Abuse (Screen 43)',
-      subtitle: 'Global sign-up controls, inbound/outbound email telemetry, rate limits, and abuse mitigation',
+      title: 'Platform settings',
+      subtitle: 'Configuration, monitoring availability, and platform-wide controls.',
     },
     credentials: {
-      title: 'Identity, Roles & Login Credentials',
-      subtitle: 'Provision administrator and support engineer accounts across all registered organizations',
+      title: 'Staff access',
+      subtitle: 'Manage staff accounts and role assignments across your companies.',
     },
     workspaces: {
-      title: 'Tenant Workspaces & Queue Launcher',
-      subtitle: 'Inspect and launch directly into any client organization’s live HelpDesk workspace',
+      title: 'Workspaces',
+      subtitle: 'Choose a company before opening its support workspace.',
     },
     system: {
-      title: 'System Architecture, Security & Database',
-      subtitle: 'MySQL 24-table multi-tenant schema, strict tenant isolation boundaries, and RBAC matrix',
+      title: 'System reference',
+      subtitle: 'Reference information about the application structure and data model.',
     },
   };
+
+  const navigateToMenu = (section: AdminMenuSection) => {
+    setActiveMenu(section);
+    setSelectedCompanyDetail(null);
+    setIsNavigationOpen(false);
+    contentRef.current?.scrollTo({ top: 0 });
+  };
+  const openCompanyDetail = (company: CompanyDetail) => {
+    navigateToMenu('companies');
+    setSelectedCompanyDetail(company);
+    setCompanyDetailTab('overview');
+  };
+  const openNewCompanyForm = () => {
+    setAlertNotice(null);
+    const plan = plans.find(item => item.code === newCompPlan);
+    if (plan?.maxAgents > 0) setNewCompMaxAgents(plan.maxAgents);
+    setShowNewCompanyModal(true);
+  };
+  const companyPlanMix = [...new Set([...plans.map(plan => String(plan.code)), ...companies.map(company => company.planName)])].map(plan => ({ plan, count: companies.filter(company => company.planName === plan).length }));
+  const recentCompanies = [...companies].sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)).slice(0, 5);
+  const attentionCompanies = companies.filter(company => ['SUSPENDED', 'PAST_DUE'].includes(company.status) || company.userCount / Math.max(1, company.maxAgents) >= 0.85);
 
   // Helper for KPI card click-throughs to filter Companies list (Screen 40 -> Screen 41 interaction)
   const jumpToFilteredCompanies = (status: string) => {
     setCompStatusFilter(status);
-    setActiveMenu('companies');
+    setCompPlanFilter('ALL');
+    setCompHealthFilter('ALL');
+    setCompSearch('');
+    navigateToMenu('companies');
   };
 
   return (
-    <div className="enterprise-shell">
-      {/* ====================================================================
-          LEFT SIDEBAR NAVIGATION (ALL ADMIN & WORKSPACE MENUS)
-          ==================================================================== */}
-      <aside className="enterprise-sidebar">
-        <div>
-          {/* Brand Header */}
-          <div className="sidebar-brand-header">
-            <div className="sidebar-brand-icon admin-mode">
-              <ShieldCheck size={22} />
-            </div>
-            <div className="overflow-hidden">
-              <h6 className="mb-0 fw-bolder text-white text-truncate" style={{ fontSize: '1.05rem', letterSpacing: '-0.2px' }}>
-                Admin Console
-              </h6>
-              <small className="text-secondary" style={{ fontSize: '0.72rem' }}>Super Admin Governance</small>
-            </div>
-          </div>
-
-          {/* Active Impersonation Warning Banner (if active) */}
-          {activeSupportSession && (
-            <div className="mx-2.5 my-2 p-2.5 rounded-3 bg-warning text-dark border border-warning shadow-xs" style={{ fontSize: '0.75rem' }}>
-              <div className="d-flex align-items-center gap-1.5 fw-bold mb-0.5">
-                <Clock size={14} />
-                <span>Support Impersonation Active</span>
-              </div>
-              <div className="text-truncate">Tenant: <strong>{activeSupportSession.companyName}</strong></div>
-              <div className="d-flex justify-content-between align-items-center mt-1 pt-1 border-top border-dark border-opacity-25">
-                <span style={{ fontSize: '0.68rem' }}>Read-only (60m)</span>
-                <button
-                  type="button"
-                  className="btn btn-dark btn-xs px-1.5 py-0.5"
-                  style={{ fontSize: '0.65rem' }}
-                  onClick={() => setActiveSupportSession(null)}
-                >
-                  End Session
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* SECTION 1: PLATFORM GOVERNANCE */}
-          <div className="sidebar-section-label">
-            <span>Platform Governance</span>
-          </div>
-          <div className="sidebar-nav-group">
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'overview' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('overview')}
-            >
-              <LayoutDashboard size={18} />
-              <span>Super Admin Dashboard</span>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'companies' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('companies')}
-            >
-              <Building2 size={18} />
-              <span>Companies & Tenants</span>
-              <span className="sidebar-badge">{companies.length}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'plans' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('plans')}
-            >
-              <CreditCard size={18} />
-              <span>Plans & Pricing</span>
-              <span className="sidebar-badge">{plans.length || 4}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'platform' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('platform')}
-            >
-              <Sliders size={18} />
-              <span>Platform Health & Abuse</span>
-              {abuseReports.length > 0 && (
-                <span className="badge bg-danger rounded-pill ms-auto" style={{ fontSize: '0.65rem' }}>
-                  {abuseReports.length}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'credentials' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('credentials')}
-            >
-              <KeyRound size={18} />
-              <span>Staff Identity & Roles</span>
-              <span className="sidebar-badge">{users.length}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'workspaces' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('workspaces')}
-            >
-              <Layers size={18} />
-              <span>Tenant Workspaces</span>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'system' ? 'admin-active' : ''}`}
-              onClick={() => setActiveMenu('system')}
-            >
-              <Database size={18} />
-              <span>System & DB Schema</span>
-              <span className="sidebar-badge">24 Tbls</span>
-            </button>
-          </div>
-
-          {/* SECTION 2: QUICK HELPDESK MODULE JUMP */}
-          <div className="sidebar-section-label">
-            <span>HelpDesk Direct Jump</span>
-          </div>
-          <div className="sidebar-nav-group">
-            <button
-              type="button"
-              className="sidebar-menu-btn"
-              onClick={() => onSwitchToCompany(companies[0]?.id || 1, 'tickets')}
-            >
-              <TicketIcon size={17} className="text-info" />
-              <span>Tickets & Live Queue</span>
-              <ChevronRight size={14} className="ms-auto opacity-50" />
-            </button>
-
-            <button
-              type="button"
-              className="sidebar-menu-btn"
-              onClick={() => onSwitchToCompany(companies[0]?.id || 1, 'engineers')}
-            >
-              <Users size={17} className="text-success" />
-              <span>Support Engineers</span>
-              <ChevronRight size={14} className="ms-auto opacity-50" />
-            </button>
-
-            <button
-              type="button"
-              className="sidebar-menu-btn"
-              onClick={() => onSwitchToCompany(companies[0]?.id || 1, 'mis')}
-            >
-              <FileSpreadsheet size={17} className="text-warning" />
-              <span>Track & 100k MIS</span>
-              <ChevronRight size={14} className="ms-auto opacity-50" />
-            </button>
-          </div>
-
-          {/* SECTION 3: REGISTERED TENANTS QUICK SWITCHER */}
-          <div className="sidebar-section-label">
-            <span>Registered Tenants</span>
-          </div>
-          <div className="sidebar-nav-group">
-            {companies.map(comp => (
-              <button
-                key={comp.id}
-                type="button"
-                className="sidebar-menu-btn py-1.5"
-                onClick={() => onSwitchToCompany(comp.id, 'tickets')}
-                title={`Launch ${comp.name} HelpDesk Workspace`}
-              >
-                <span
-                  className="rounded-2 d-inline-flex align-items-center justify-content-center text-white fw-bold flex-shrink-0"
-                  style={{
-                    width: '22px',
-                    height: '22px',
-                    fontSize: '0.62rem',
-                    backgroundColor: comp.primaryColor || '#2563eb',
-                  }}
-                >
-                  {comp.companyCode.slice(0, 2)}
-                </span>
-                <span className="text-truncate" style={{ fontSize: '0.8rem' }}>{comp.name}</span>
-                <span
-                  className={`pulse-dot ms-auto ${comp.status === 'ACTIVE' ? 'pulse-dot-success' : 'pulse-dot-danger'}`}
-                  style={{ width: '6px', height: '6px' }}
-                />
-              </button>
-            ))}
-          </div>
+    <div className={`enterprise-shell company-workspace platform-console ${isNavigationOpen ? 'navigation-open' : ''}`}>
+      {isNavigationOpen && <button type="button" className="workspace-nav-backdrop" aria-label="Close navigation" tabIndex={-1} onClick={() => setIsNavigationOpen(false)} />}
+      <aside ref={navigationRef} id="platform-navigation" className="enterprise-sidebar" aria-label="Platform navigation">
+        <div className="sidebar-brand-header">
+          <div className="sidebar-brand-icon"><ShieldCheck size={22} /></div>
+          <div className="workspace-wordmark"><strong>kuwy<span>admin</span></strong><small>Platform operations</small></div>
+          <button type="button" className="workspace-icon-button workspace-nav-close" aria-label="Close navigation" onClick={() => setIsNavigationOpen(false)}><X size={18} /></button>
         </div>
-
-        {/* Sidebar Footer: Platform Health & Super Admin Account */}
+        <div className="workspace-company-label"><Layers size={15} /><span>Platform administration</span></div>
+        <nav className="workspace-sidebar-scroll" aria-label="Main">
+          {[
+            { label: 'Platform', items: [
+              { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+              { id: 'companies' as const, label: 'Companies', icon: Building2 },
+              { id: 'plans' as const, label: 'Plans & pricing', icon: CreditCard },
+            ] },
+            { label: 'Administration', items: [
+              { id: 'credentials' as const, label: 'Staff access', icon: Users },
+              { id: 'workspaces' as const, label: 'Workspaces', icon: Layers },
+              { id: 'platform' as const, label: 'Platform settings', icon: Settings },
+              { id: 'system' as const, label: 'System reference', icon: Database },
+            ] },
+          ].map(group => (
+            <div key={group.label}>
+              <div className="sidebar-section-label">{group.label}</div>
+              <div className="sidebar-nav-group">
+                {group.items.map(item => (
+                  <button key={item.id} id={`platform-tab-${item.id}`} type="button" className={`sidebar-menu-btn ${activeMenu === item.id ? 'active' : ''}`} aria-current={activeMenu === item.id ? 'page' : undefined} onClick={() => navigateToMenu(item.id)}>
+                    <item.icon size={18} /><span>{item.label}</span>
+                    {item.id === 'companies' && <span className="sidebar-badge">{companies.length}</span>}
+                    {item.id === 'credentials' && <span className="sidebar-badge">{users.length}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
+        <div className="workspace-plan-card">
+          <span className="workspace-eyebrow">Company operations</span>
+          <div><strong>Workspace directory</strong><Layers size={14} className="text-muted" /></div>
+          <button type="button" onClick={() => navigateToMenu('workspaces')}>Choose a workspace <ChevronRight size={14} /></button>
+        </div>
         <div className="sidebar-footer">
-          <div className="p-2.5 rounded-3 mb-2.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-            <div className="d-flex align-items-center justify-content-between mb-1">
-              <div className="d-flex align-items-center gap-1.5">
-                <span className="pulse-dot pulse-dot-success" style={{ width: '7px', height: '7px' }}></span>
-                <span className="fw-bold text-white" style={{ fontSize: '0.74rem' }}>MySQL 8.4 Connected</span>
-              </div>
-              <span className="badge bg-success bg-opacity-25 text-success" style={{ fontSize: '0.62rem' }}>:3306</span>
-            </div>
-            <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
-              Multi-Tenant DB: <code className="text-info">kuwy_helpdesk</code>
-            </div>
-          </div>
-
-          <div className="d-flex align-items-center justify-content-between pt-1">
-            <div className="d-flex align-items-center gap-2 overflow-hidden">
-              <div
-                className="rounded-circle bg-warning text-dark fw-bold d-flex align-items-center justify-content-center flex-shrink-0"
-                style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}
-              >
-                {currentUser.firstName?.charAt(0) || 'S'}
-              </div>
-              <div className="overflow-hidden">
-                <div className="fw-bold text-white text-truncate" style={{ fontSize: '0.8rem' }}>
-                  {currentUser.displayName || 'Platform Owner'}
-                </div>
-                <div className="badge bg-warning bg-opacity-25 text-warning" style={{ fontSize: '0.65rem' }}>
-                  Super Admin
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-outline-danger border-0 p-1.5 text-danger"
-              onClick={onLogout}
-              title="Sign Out of Admin Console"
-            >
-              <LogOut size={16} />
-            </button>
+          <div className="workspace-user">
+            <div className="workspace-avatar">{currentUser.firstName?.charAt(0) || 'S'}{currentUser.lastName?.charAt(0)}</div>
+            <div className="workspace-user-info"><strong title={currentUser.displayName}>{currentUser.displayName || 'Platform owner'}</strong><span>Super admin</span></div>
+            <button type="button" className="workspace-icon-button" onClick={onLogout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
           </div>
         </div>
       </aside>
 
-      {/* ====================================================================
-          RIGHT MAIN AREA (CONTEXTUAL TOPBAR + CONTENT)
-          ==================================================================== */}
-      <div className="enterprise-main">
-        {/* Top Contextual Header */}
+      <div className="enterprise-main" inert={isNavigationOpen}>
         <header className="enterprise-topbar">
-          <div>
-            <div className="d-flex align-items-center gap-2 text-muted small mb-0.5" style={{ fontSize: '0.75rem' }}>
-              <span className="fw-semibold text-primary">Admin Console</span>
-              <ChevronRight size={13} />
-              <span className="fw-semibold text-dark">{menuTitleMap[activeMenu].title}</span>
-            </div>
-            <h5 className="fw-bolder mb-0 text-dark" style={{ fontSize: '1.15rem' }}>
-              {menuTitleMap[activeMenu].title}
-            </h5>
+          <div className="workspace-header-context">
+            <button id="btn-platform-menu" type="button" className="workspace-icon-button workspace-menu-toggle" aria-label="Open navigation" aria-expanded={isNavigationOpen} aria-controls="platform-navigation" onClick={() => setIsNavigationOpen(true)}><Menu size={20} /></button>
+            <div className="workspace-breadcrumb"><span>Platform</span><ChevronRight size={14} /><strong>{menuTitleMap[activeMenu].title}</strong></div>
           </div>
-
-          <div className="d-flex align-items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3"
-              onClick={loadAdminData}
-              disabled={isLoading}
-            >
-              <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
-              <span>Sync Telemetry</span>
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-semibold"
-              onClick={() => setShowNewCredModal(true)}
-            >
-              <KeyRound size={14} />
-              <span>Issue Staff Login</span>
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-semibold shadow-sm"
-              onClick={() => setShowNewCompanyModal(true)}
-            >
-              <Plus size={15} />
-              <span>Onboard Organization</span>
-            </button>
-
-            <div className="vr mx-1 text-muted d-none d-md-block" style={{ height: '24px' }}></div>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-dark d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-semibold shadow-sm"
-              onClick={() => onSwitchToCompany(companies.length > 0 ? companies[0].id : 1, 'tickets')}
-            >
-              <span>Launch HelpDesk Queue</span>
-              <ArrowRight size={14} />
-            </button>
+          <div className="workspace-topbar-actions">
+            <button id="btn-platform-refresh" type="button" className="workspace-icon-button" onClick={loadAdminData} disabled={isLoading} aria-label="Refresh platform data" title="Refresh platform data"><RefreshCw size={17} className={isLoading ? 'spin' : ''} /></button>
+            <details ref={actionsRef} className="workspace-tools-menu">
+              <summary className="workspace-icon-button" aria-label="Platform quick actions" title="Quick actions"><MoreHorizontal size={20} /></summary>
+              <div className="workspace-tools-popover">
+                <span className="workspace-eyebrow">Quick actions</span>
+                <button type="button" onClick={event => { setShowNewCredModal(true); event.currentTarget.closest('details')?.removeAttribute('open'); }}><KeyRound size={16} /><span>Add staff account</span></button>
+                <button type="button" onClick={event => { navigateToMenu('workspaces'); event.currentTarget.closest('details')?.removeAttribute('open'); }}><Layers size={16} /><span>Open workspace directory</span></button>
+              </div>
+            </details>
+            <button id="btn-new-company" type="button" className="btn btn-primary workspace-new-ticket" onClick={openNewCompanyForm} aria-label="New company" title="New company"><Plus size={16} /><span>New company</span></button>
           </div>
         </header>
 
-        {/* Main Scrollable Content */}
-        <div className="enterprise-content">
+        <div ref={contentRef} className="enterprise-content" role="main">
+          <div className="workspace-page-heading">
+            <div><span className="workspace-eyebrow">Platform administration</span><h1>{menuTitleMap[activeMenu].title}</h1><p>{menuTitleMap[activeMenu].subtitle}</p></div>
+            <span className="platform-snapshot"><Clock size={13} />{isLoading ? 'Refreshing...' : lastRefreshed ? `Refreshed ${new Date(lastRefreshed).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : 'No snapshot yet'}</span>
+          </div>
           {/* Alert Notification */}
           {alertNotice && (
             <div
@@ -711,431 +541,72 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               SCREEN 40: SUPER ADMIN DASHBOARD
               ================================================================ */}
           {activeMenu === 'overview' && (
-            <div className="animate-fade-in">
-              {/* Date Range Selector & Period Controls */}
-              <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-                <div>
-                  <h6 className="fw-bold mb-0 text-dark">Platform Telemetry & Financial Health</h6>
-                  <small className="text-muted">Consolidated multi-tenant KPIs across all client workspaces</small>
-                </div>
+            <div className="platform-content-inner" aria-busy={isLoading}>
+              <div className="platform-stat-grid">
+                {[
+                  { label: 'Total companies', value: overview?.totalCompanies ?? companies.length, note: 'All registered workspaces', icon: Building2, action: () => jumpToFilteredCompanies('ALL') },
+                  { label: 'Active workspaces', value: overview?.activeCompanies ?? companies.filter(company => company.status === 'ACTIVE').length, note: 'Currently marked active', icon: CheckCircle2, action: () => jumpToFilteredCompanies('ACTIVE') },
+                  { label: 'On trial', value: overview?.trialCompanies ?? companies.filter(company => company.status === 'TRIAL').length, note: 'Companies evaluating the platform', icon: Clock, action: () => jumpToFilteredCompanies('TRIAL') },
+                  { label: 'Estimated monthly plan value', value: overview?.mrr == null ? 'Not available' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(overview.mrr), note: 'Plan estimate, not collected revenue', icon: CreditCard, action: () => navigateToMenu('plans') },
+                ].map(metric => (
+                  <button key={metric.label} type="button" className="platform-stat-card" onClick={metric.action}>
+                    <span className="d-flex align-items-center justify-content-between gap-2"><span className="platform-stat-label">{metric.label}</span><span className="stat-icon bg-primary-subtle text-primary"><metric.icon size={18} /></span></span>
+                    <span className={`platform-stat-value ${metric.value === 'Not available' ? 'is-unavailable' : ''}`}>{isLoading && !overview ? '...' : metric.value}</span>
+                    <span className="platform-stat-note">{metric.note}</span>
+                  </button>
+                ))}
+              </div>
 
-                <div className="btn-group btn-group-sm bg-white p-1 rounded-3 border shadow-xs">
-                  {(['7d', '30d', '90d', 'ytd'] as const).map(range => (
-                    <button
-                      key={range}
-                      type="button"
-                      className={`btn btn-sm px-3 rounded-2 fw-semibold ${dateRange === range ? 'btn-primary' : 'btn-light border-0 text-secondary'}`}
-                      onClick={() => setDateRange(range)}
-                    >
-                      {range === '7d' ? 'Last 7 Days' : range === '30d' ? 'Last 30 Days' : range === '90d' ? 'Last 90 Days' : 'Year to Date'}
+              <div className="platform-overview-grid">
+                <section className="enterprise-card">
+                  <div className="enterprise-card-header"><div><h6 className="fw-bold mb-0">Company plan mix</h6><small>Current assignments across registered companies</small></div><span className="badge bg-light text-secondary border">{companies.length} companies</span></div>
+                  <div className="p-4">
+                    {companyPlanMix.map(({ plan, count }) => <div key={plan} className="platform-plan-row"><span>{plan}</span><div className="quota-bar" aria-hidden="true"><div className="quota-bar-fill" style={{ width: `${count / Math.max(1, companies.length) * 100}%` }} /></div><span>{count}</span></div>)}
+                    {!companyPlanMix.length && <p className="text-muted small mb-0">Plan assignments will appear when companies are available.</p>}
+                    <p className="platform-source-note">Includes all company statuses. These counts are not a revenue or retention report.</p>
+                  </div>
+                </section>
+                <section className="enterprise-card">
+                  <div className="enterprise-card-header"><div><h6 className="fw-bold mb-0">Recent companies</h6><small>Your newest registered workspaces</small></div><Building2 size={17} className="text-muted" /></div>
+                  {recentCompanies.map(company => (
+                    <button key={company.id} type="button" className="platform-workspace-row" onClick={() => openCompanyDetail(company)}>
+                      <span className="platform-company-avatar">{company.companyCode.slice(0, 2)}</span>
+                      <span className="platform-workspace-copy"><strong>{company.name}</strong><small>{company.subdomain} / {company.planName}</small></span>
+                      <ChevronRight size={15} className="text-muted flex-shrink-0" />
                     </button>
                   ))}
-                </div>
+                  {!recentCompanies.length && <div className="platform-attention-empty"><Building2 size={24} /><span>No companies yet. Create your first workspace to get started.</span></div>}
+                  <div className="p-3 border-top"><button type="button" className="btn btn-link btn-sm text-decoration-none p-0" onClick={() => jumpToFilteredCompanies('ALL')}>View all companies <ArrowRight size={13} /></button></div>
+                </section>
               </div>
 
-              {/* Row 1: Business KPI Cards (Clickable into Screen 41 Filters) */}
-              <div className="row g-3 mb-4">
-                <div className="col-12 col-sm-6 col-xl-3">
-                  <div className="stat-card h-100" onClick={() => jumpToFilteredCompanies('ALL')} style={{ cursor: 'pointer' }}>
-                    <div className="d-flex justify-content-between align-items-start">
-                      <div>
-                        <small className="text-muted fw-bold text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-                          Total Companies
-                        </small>
-                        <h3 className="fw-bolder mb-1 mt-1">{overview?.totalCompanies || companies.length}</h3>
-                        <div className="d-flex align-items-center gap-1.5 small text-success fw-bold">
-                          <span className="pulse-dot pulse-dot-success"></span>
-                          <span>{overview?.activeCompanies || 3} Active</span>
-                          <span className="text-muted ms-1">• {overview?.trialCompanies || 1} Trial</span>
-                        </div>
-                      </div>
-                      <div className="stat-icon bg-primary-subtle text-primary">
-                        <Building2 size={24} />
-                      </div>
+              <div className="platform-overview-grid">
+                <section className="enterprise-card">
+                  <div className="enterprise-card-header"><div><h6 className="fw-bold mb-0">Needs attention</h6><small>Company status and staff-capacity checks</small></div><span className="badge bg-light text-secondary border">{attentionCompanies.length}</span></div>
+                  {attentionCompanies.map(company => <button key={company.id} type="button" className="platform-workspace-row" onClick={() => openCompanyDetail(company)}><AlertCircle size={18} className="text-warning flex-shrink-0" /><span className="platform-workspace-copy"><strong>{company.name}</strong><small>{['SUSPENDED', 'PAST_DUE'].includes(company.status) ? company.status.replace(/_/g, ' ').toLowerCase() : `${company.userCount} of ${company.maxAgents} staff slots used`}</small></span><ChevronRight size={15} /></button>)}
+                  {!attentionCompanies.length && <div className="platform-attention-empty"><CheckCircle2 size={25} /><strong>No matching flags</strong><span>No loaded companies are suspended, past due, or above 85% staff capacity.</span></div>}
+                </section>
+                <section className="enterprise-card">
+                  <div className="enterprise-card-header"><div><h6 className="fw-bold mb-0">Workspace footprint</h6><small>Stored records across the platform</small></div><Layers size={17} className="text-muted" /></div>
+                  <div className="p-4">
+                    <div className="platform-usage-grid">
+                      <div><TicketIcon size={19} className="text-primary" /><strong>{(overview?.totalTickets ?? companies.reduce((sum, company) => sum + company.ticketCount, 0)).toLocaleString()}</strong><small>Total tickets</small></div>
+                      <div><Users size={19} className="text-primary" /><strong>{(overview?.totalAgents ?? users.length).toLocaleString()}</strong><small>User accounts</small></div>
+                      <div><Power size={19} className="text-primary" /><strong>{overview?.suspendedCompanies ?? companies.filter(company => company.status === 'SUSPENDED').length}</strong><small>Suspended</small></div>
                     </div>
+                    <p className="platform-source-note">Counts only. Customer conversations are not displayed in this overview.</p>
                   </div>
-                </div>
-
-                <div className="col-12 col-sm-6 col-xl-3">
-                  <div className="stat-card h-100" onClick={() => jumpToFilteredCompanies('ACTIVE')} style={{ cursor: 'pointer' }}>
-                    <div className="d-flex justify-content-between align-items-start">
-                      <div>
-                        <small className="text-muted fw-bold text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-                          Monthly Recurring Revenue (MRR)
-                        </small>
-                        <h3 className="fw-bolder mb-1 mt-1 text-success">
-                          ₹{(overview?.mrr || 41996).toLocaleString()}
-                        </h3>
-                        <div className="d-flex align-items-center gap-1 small text-success fw-semibold">
-                          <TrendingUp size={14} />
-                          <span>+14.2% MoM Growth</span>
-                        </div>
-                      </div>
-                      <div className="stat-icon bg-success-subtle text-success">
-                        <DollarSign size={24} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="col-12 col-sm-6 col-xl-3">
-                  <div className="stat-card h-100" onClick={() => setActiveMenu('plans')} style={{ cursor: 'pointer' }}>
-                    <div className="d-flex justify-content-between align-items-start">
-                      <div>
-                        <small className="text-muted fw-bold text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-                          Annual Run Rate (ARR)
-                        </small>
-                        <h3 className="fw-bolder mb-1 mt-1 text-primary">
-                          ₹{(overview?.arr || 503952).toLocaleString()}
-                        </h3>
-                        <div className="small text-muted">
-                          <span>Churn: <strong>0.0%</strong></span> • <span className="text-success">+3 sign-ups</span>
-                        </div>
-                      </div>
-                      <div className="stat-icon bg-info-subtle text-info">
-                        <TrendingUp size={24} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="col-12 col-sm-6 col-xl-3">
-                  <div className="stat-card h-100" onClick={() => jumpToFilteredCompanies('PAST_DUE')} style={{ cursor: 'pointer' }}>
-                    <div className="d-flex justify-content-between align-items-start">
-                      <div>
-                        <small className="text-muted fw-bold text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-                          Failed Payments / Risk
-                        </small>
-                        <h3 className="fw-bolder mb-1 mt-1 text-dark">
-                          {overview?.failedPaymentsCount || 0}
-                        </h3>
-                        <div className="d-flex align-items-center gap-1 small text-success fw-bold">
-                          <CheckCircle2 size={13} />
-                          <span>0 Accounts in Past Due</span>
-                        </div>
-                      </div>
-                      <div className="stat-icon bg-warning-subtle text-warning">
-                        <AlertTriangle size={24} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                </section>
               </div>
 
-              {/* Row 2: Growth Charts & Platform-Wide Usage KPIs */}
-              <div className="row g-4 mb-4">
-                {/* Left: Sign-ups vs Churn & MRR Growth Simulation */}
-                <div className="col-12 col-xl-7">
-                  <div className="enterprise-card h-100">
-                    <div className="enterprise-card-header">
-                      <div>
-                        <h6 className="fw-bold mb-0">Tenant Growth & MRR Trajectory</h6>
-                        <small className="text-muted">Monthly onboarding velocity vs customer retention</small>
-                      </div>
-                      <span className="badge bg-success-subtle text-success px-2.5 py-1 rounded-pill fw-bold">
-                        99.8% Retention
-                      </span>
-                    </div>
-
-                    <div className="p-4">
-                      {/* CSS-based bar chart representation */}
-                      <div className="d-flex justify-content-between align-items-end mb-3 pt-3" style={{ height: '160px' }}>
-                        {[
-                          { m: 'Jun', signups: 3, mrr: 12000, height: 40 },
-                          { m: 'Jul', signups: 4, mrr: 19000, height: 60 },
-                          { m: 'Aug', signups: 5, mrr: 26000, height: 80 },
-                          { m: 'Sep', signups: 6, mrr: 33000, height: 105 },
-                          { m: 'Oct', signups: 7, mrr: 38000, height: 125 },
-                          { m: 'Nov (Now)', signups: 9, mrr: 41996, height: 145 },
-                        ].map(bar => (
-                          <div key={bar.m} className="d-flex flex-column align-items-center gap-2" style={{ width: '14%' }}>
-                            <small className="text-muted fw-bold" style={{ fontSize: '0.65rem' }}>
-                              ₹{(bar.mrr / 1000).toFixed(0)}k
-                            </small>
-                            <div
-                              className="rounded-top-3 w-100 bg-primary bg-opacity-75 hover-shadow transition-all"
-                              style={{ height: `${bar.height}px` }}
-                              title={`${bar.m}: ${bar.signups} Sign-ups, ₹${bar.mrr.toLocaleString()} MRR`}
-                            />
-                            <span className="text-muted fw-semibold" style={{ fontSize: '0.72rem' }}>{bar.m}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="p-3 bg-light rounded-3 border d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <div className="d-flex align-items-center gap-3">
-                          <div className="d-flex align-items-center gap-1.5">
-                            <span className="badge bg-primary p-1 rounded-circle" style={{ width: '10px', height: '10px' }}></span>
-                            <span className="small text-secondary fw-semibold">Net New Workspaces</span>
-                          </div>
-                          <div className="d-flex align-items-center gap-1.5">
-                            <span className="badge bg-success p-1 rounded-circle" style={{ width: '10px', height: '10px' }}></span>
-                            <span className="small text-secondary fw-semibold">Zero Churn (100% Retained)</span>
-                          </div>
-                        </div>
-                        <span className="text-muted small">Updated in real-time</span>
-                      </div>
-                    </div>
-                  </div>
+              <section className="enterprise-card">
+                <div className="enterprise-card-header"><div><h6 className="fw-bold mb-0">Monitoring availability</h6><small>Operational signals are shown only when supported by measured data</small></div><button type="button" className="btn btn-sm btn-light" onClick={() => navigateToMenu('platform')}>Platform settings <ChevronRight size={13} /></button></div>
+                <div className="p-4 platform-health-grid">
+                  <div className="platform-unavailable"><Mail size={19} className="mb-2" /><strong>Email delivery</strong><span>Not monitored. Live delivery, bounce, and queue metrics are not available yet.</span></div>
+                  <div className="platform-unavailable"><Activity size={19} className="mb-2" /><strong>Service performance</strong><span>Not monitored. Response-time and error-rate measurements are not connected.</span></div>
+                  <div className="platform-unavailable"><CreditCard size={19} className="mb-2" /><strong>Payment reporting</strong><span>Unavailable. Verified collections, payment failures, and historical revenue are not included in this snapshot.</span></div>
                 </div>
-
-                {/* Right: Platform-Wide Usage Counters */}
-                <div className="col-12 col-xl-5">
-                  <div className="enterprise-card h-100">
-                    <div className="enterprise-card-header">
-                      <div>
-                        <h6 className="fw-bold mb-0">Platform-Wide Workload Utilization</h6>
-                        <small className="text-muted">Real-time aggregate consumption</small>
-                      </div>
-                    </div>
-
-                    <div className="p-3">
-                      <div className="p-3 bg-light rounded-3 border mb-2.5">
-                        <div className="d-flex justify-content-between align-items-center mb-1">
-                          <span className="text-muted small fw-semibold">Tickets Ingested Today</span>
-                          <span className="badge bg-primary-subtle text-primary fw-bold">Live Stream</span>
-                        </div>
-                        <div className="fs-4 fw-bolder text-dark mb-1">
-                          {overview?.ticketsToday || 128} <span className="fs-6 fw-normal text-muted">/ {overview?.totalTickets || 487} this month</span>
-                        </div>
-                        <div className="quota-bar">
-                          <div className="quota-bar-fill bg-primary" style={{ width: '38%' }} />
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-light rounded-3 border mb-2.5">
-                        <div className="d-flex justify-content-between align-items-center mb-1">
-                          <span className="text-muted small fw-semibold">Active Agents Online</span>
-                          <span className="badge bg-success-subtle text-success fw-bold">{overview?.totalAgents || 19} Assigned</span>
-                        </div>
-                        <div className="fs-4 fw-bolder text-dark mb-1">
-                          {overview?.totalAgents || 19} <span className="fs-6 fw-normal text-muted">across {companies.length} tenants</span>
-                        </div>
-                        <div className="quota-bar">
-                          <div className="quota-bar-fill bg-success" style={{ width: '62%' }} />
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-light rounded-3 border">
-                        <div className="d-flex justify-content-between align-items-center mb-1">
-                          <span className="text-muted small fw-semibold">Object Storage & Attachment Pool</span>
-                          <span className="badge bg-info-subtle text-info fw-bold">1.42 GB / 50 GB</span>
-                        </div>
-                        <div className="fs-4 fw-bolder text-dark mb-1">
-                          1.42 GB <span className="fs-6 fw-normal text-muted">(2.8% of platform tier quota)</span>
-                        </div>
-                        <div className="quota-bar">
-                          <div className="quota-bar-fill bg-info" style={{ width: '3%' }} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 3: Platform Health Panel (Real-Time Diagnostic Gauges) */}
-              <div className="enterprise-card mb-4">
-                <div className="enterprise-card-header bg-dark text-white">
-                  <div className="d-flex align-items-center gap-2">
-                    <Activity size={18} className="text-success" />
-                    <div>
-                      <h6 className="fw-bold mb-0 text-white">Platform Infrastructure & Service Health Diagnostics</h6>
-                      <small className="text-secondary" style={{ fontSize: '0.72rem' }}>Latency, Error Rates, Email Deliverability & External Providers</small>
-                    </div>
-                  </div>
-                  <span className="badge bg-success bg-opacity-25 text-success border border-success border-opacity-25 d-inline-flex align-items-center gap-1.5 px-3 py-1.5">
-                    <span className="pulse-dot pulse-dot-success" style={{ width: '6px', height: '6px' }}></span>
-                    <span>ALL PLATFORM ENGINES OPERATIONAL</span>
-                  </span>
-                </div>
-
-                <div className="p-4">
-                  <div className="row g-3">
-                    <div className="col-12 col-md-3">
-                      <div className="p-3 bg-light rounded-3 border h-100">
-                        <div className="text-muted small fw-bold text-uppercase mb-1" style={{ fontSize: '0.68rem' }}>
-                          API Latency (p95)
-                        </div>
-                        <div className="fs-4 fw-bolder text-success">
-                          {overview?.avgResponseTimeMs || 42} ms
-                        </div>
-                        <small className="text-muted">Target: &lt; 200 ms • Error Rate: 0.02%</small>
-                      </div>
-                    </div>
-
-                    <div className="col-12 col-md-3">
-                      <div className="p-3 bg-light rounded-3 border h-100">
-                        <div className="text-muted small fw-bold text-uppercase mb-1" style={{ fontSize: '0.68rem' }}>
-                          Inbound Email Delay
-                        </div>
-                        <div className="fs-4 fw-bolder text-primary">
-                          {emailHealth?.inboundProcessingDelayMs || 340} ms
-                        </div>
-                        <small className="text-muted">Queue Size: {emailHealth?.inboundQueueSize || 0} • Dead Letter: 0</small>
-                      </div>
-                    </div>
-
-                    <div className="col-12 col-md-3">
-                      <div className="p-3 bg-light rounded-3 border h-100">
-                        <div className="text-muted small fw-bold text-uppercase mb-1" style={{ fontSize: '0.68rem' }}>
-                          Outbound Delivery Rate
-                        </div>
-                        <div className="fs-4 fw-bolder text-success">
-                          {emailHealth?.outboundDeliveryRate || 99.8}%
-                        </div>
-                        <small className="text-muted">Bounce Rate: {emailHealth?.bounceRate || 0.18}% • SPF/DKIM: 99.4%</small>
-                      </div>
-                    </div>
-
-                    <div className="col-12 col-md-3">
-                      <div className="p-3 bg-light rounded-3 border h-100">
-                        <div className="text-muted small fw-bold text-uppercase mb-1" style={{ fontSize: '0.68rem' }}>
-                          Hikari Connection Pool
-                        </div>
-                        <div className="fs-4 fw-bolder text-dark">
-                          1 / 10 Active
-                        </div>
-                        <small className="text-muted">Wait time: 0 ms • CPU: 14% • RAM: 1.18 GB</small>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Third-Party Service Dependencies Grid */}
-                  <div className="mt-4 pt-3 border-top">
-                    <div className="small fw-bold text-uppercase text-muted mb-2.5" style={{ fontSize: '0.7rem' }}>
-                      Upstream Third-Party Service Connections:
-                    </div>
-                    <div className="row g-2">
-                      <div className="col-12 col-md-4">
-                        <div className="p-2.5 border rounded-3 d-flex justify-content-between align-items-center bg-white">
-                          <div className="d-flex align-items-center gap-2">
-                            <CreditCard size={16} className="text-primary" />
-                            <span className="small fw-semibold text-dark">Payment Gateway (Razorpay/Stripe)</span>
-                          </div>
-                          <span className="badge bg-success-subtle text-success">Operational (99.99%)</span>
-                        </div>
-                      </div>
-
-                      <div className="col-12 col-md-4">
-                        <div className="p-2.5 border rounded-3 d-flex justify-content-between align-items-center bg-white">
-                          <div className="d-flex align-items-center gap-2">
-                            <Mail size={16} className="text-info" />
-                            <span className="small fw-semibold text-dark">M365 & SES Email Relays</span>
-                          </div>
-                          <span className="badge bg-success-subtle text-success">Operational (99.95%)</span>
-                        </div>
-                      </div>
-
-                      <div className="col-12 col-md-4">
-                        <div className="p-2.5 border rounded-3 d-flex justify-content-between align-items-center bg-white">
-                          <div className="d-flex align-items-center gap-2">
-                            <Server size={16} className="text-success" />
-                            <span className="small fw-semibold text-dark">Storage Cluster (Local/S3)</span>
-                          </div>
-                          <span className="badge bg-success-subtle text-success">Operational (100.0%)</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 4: Critical Needs-Attention List & Live Audit Activity */}
-              <div className="row g-4">
-                {/* Needs Attention Column */}
-                <div className="col-12 col-xl-6">
-                  <div className="enterprise-card h-100">
-                    <div className="enterprise-card-header">
-                      <div className="d-flex align-items-center gap-2">
-                        <AlertTriangle size={17} className="text-warning" />
-                        <h6 className="fw-bold mb-0">Needs Attention (Platform Safety)</h6>
-                      </div>
-                      <span className="badge bg-warning-subtle text-warning-emphasis fw-bold">2 Action Items</span>
-                    </div>
-
-                    <div className="p-0">
-                      <ul className="list-group list-group-flush">
-                        <li className="list-group-item p-3 d-flex justify-content-between align-items-center">
-                          <div>
-                            <div className="fw-bold text-dark small">Seat Quota Warning: Kuwy Technology Services</div>
-                            <div className="text-muted small">Currently utilizing 14 of 15 allowed seats (93% capacity).</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-primary rounded-3"
-                            onClick={() => {
-                              const kuwy = companies.find(c => c.companyCode === 'KUWY');
-                              if (kuwy) {
-                                setShowChangePlanModal(kuwy);
-                              }
-                            }}
-                          >
-                            Expand Quota
-                          </button>
-                        </li>
-
-                        <li className="list-group-item p-3 d-flex justify-content-between align-items-center">
-                          <div>
-                            <div className="fw-bold text-dark small">Trial Expiry: FastTrack Logistics</div>
-                            <div className="text-muted small">Starter plan evaluation expires in 2 days.</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-success rounded-3"
-                            onClick={() => {
-                              const fast = companies.find(c => c.name.includes('FastTrack') || c.companyCode === 'FAST');
-                              if (fast) setShowExtendTrialModal(fast);
-                              else if (companies[1]) setShowExtendTrialModal(companies[1]);
-                            }}
-                          >
-                            Extend +14d
-                          </button>
-                        </li>
-
-                        <li className="list-group-item p-3 d-flex justify-content-between align-items-center bg-light">
-                          <div className="d-flex align-items-center gap-2 text-muted small">
-                            <CheckCircle2 size={15} className="text-success" />
-                            <span>No failed credit card webhooks or pending charge disputes.</span>
-                          </div>
-                          <span className="badge bg-secondary-subtle text-secondary">Clean</span>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Recent Activity Stream Column */}
-                <div className="col-12 col-xl-6">
-                  <div className="enterprise-card h-100">
-                    <div className="enterprise-card-header">
-                      <div className="d-flex align-items-center gap-2">
-                        <Clock size={17} className="text-primary" />
-                        <h6 className="fw-bold mb-0">Platform Audit & Activity Feed</h6>
-                      </div>
-                      <span className="badge bg-light text-dark border">Live Log</span>
-                    </div>
-
-                    <div className="p-3">
-                      <div className="d-flex flex-column gap-2.5">
-                        {[
-                          { time: '10m ago', text: 'Super Admin opened telemetry sync and inspected company quotas.', type: 'info' },
-                          { time: '1h ago', text: 'Verified SPF/DKIM DNS record for custom domain helpdesk.kuwy.in.', type: 'success' },
-                          { time: '3h ago', text: 'Onboarded client organization: Nexus Digital Enterprises (ID #3).', type: 'primary' },
-                          { time: '5h ago', text: 'Automatic Microsoft Graph token renewal executed successfully.', type: 'success' },
-                          { time: '1d ago', text: 'Platform automated daily backup verified to local storage pool.', type: 'secondary' },
-                        ].map((act, idx) => (
-                          <div key={idx} className="p-2.5 rounded-3 border-bottom d-flex align-items-start gap-2.5">
-                            <span className="badge bg-light text-secondary border mt-0.5" style={{ fontSize: '0.68rem' }}>
-                              {act.time}
-                            </span>
-                            <span className="small text-dark fw-medium">{act.text}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              </section>
             </div>
           )}
 
@@ -1148,7 +619,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               {selectedCompanyDetail ? (
                 <div className="enterprise-card mb-4">
                   {/* Company Detail Header */}
-                  <div className="enterprise-card-header bg-white border-bottom p-4">
+                  <div className="enterprise-card-header platform-company-detail-header bg-white border-bottom p-4">
                     <div className="d-flex justify-content-between align-items-start flex-wrap gap-3 w-100">
                       <div className="d-flex align-items-center gap-3">
                         <div
@@ -1165,7 +636,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         <div>
                           <div className="d-flex align-items-center gap-2">
                             <h5 className="fw-bolder mb-0 text-dark">{selectedCompanyDetail.name}</h5>
-                            <span className={`badge-status ${selectedCompanyDetail.status === 'ACTIVE' ? 'badge-resolved' : 'badge-urgent'}`}>
+                            <span className={`badge-status ${selectedCompanyDetail.status === 'ACTIVE' ? 'badge-resolved' : selectedCompanyDetail.status === 'TRIAL' ? 'badge-in_progress' : selectedCompanyDetail.status === 'SUSPENDED' ? 'badge-urgent' : 'badge-closed'}`}>
                               {selectedCompanyDetail.status}
                             </span>
                             <span className="badge bg-light text-dark border fw-bold">
@@ -1173,7 +644,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                             </span>
                           </div>
                           <div className="text-muted small mt-1">
-                            <code>{selectedCompanyDetail.subdomain}.kuwyhelp.com</code> • Custom Domain: <strong>{selectedCompanyDetail.customDomain || 'None configured'}</strong>
+                            <code>/{selectedCompanyDetail.subdomain}</code> • Custom domain: <strong>{selectedCompanyDetail.customDomain || 'Not configured'}</strong>
                           </div>
                         </div>
                       </div>
@@ -1186,7 +657,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onClick={() => setShowExtendTrialModal(selectedCompanyDetail)}
                         >
                           <Clock size={14} />
-                          <span>Extend Trial (+14d)</span>
+                          <span>Trial settings</span>
                         </button>
 
                         <button
@@ -1195,7 +666,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onClick={() => setShowChangePlanModal(selectedCompanyDetail)}
                         >
                           <Edit3 size={14} />
-                          <span>Change Plan</span>
+                          <span>Change plan</span>
                         </button>
 
                         <button
@@ -1204,13 +675,13 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onClick={() => setShowSupportSessionModal(selectedCompanyDetail)}
                         >
                           <Eye size={14} />
-                          <span>Support Access (60m)</span>
+                          <span>Support access</span>
                         </button>
 
                         <button
                           type="button"
                           className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1 rounded-3"
-                          onClick={() => setShowSuspendModal(selectedCompanyDetail)}
+                          onClick={() => { setSuspendReason(''); setShowSuspendModal(selectedCompanyDetail); }}
                         >
                           <Power size={14} />
                           <span>{selectedCompanyDetail.status === 'ACTIVE' ? 'Suspend' : 'Reactivate'}</span>
@@ -1219,10 +690,10 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         <button
                           type="button"
                           className="btn btn-sm btn-outline-danger d-flex align-items-center gap-1 rounded-3"
-                          onClick={() => setShowDeleteModal(selectedCompanyDetail)}
+                          onClick={() => { setDeleteConfirmationInput(''); setShowDeleteModal(selectedCompanyDetail); }}
                         >
                           <Trash2 size={14} />
-                          <span>Delete</span>
+                          <span>Deactivate</span>
                         </button>
 
                         <button
@@ -1231,13 +702,13 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onClick={() => setSelectedCompanyDetail(null)}
                         >
                           <X size={14} />
-                          <span>Close Inspector</span>
+                          <span>Back to companies</span>
                         </button>
                       </div>
                     </div>
 
                     {/* Inspector Sub-Navigation (8 Detailed Tabs) */}
-                    <div className="d-flex gap-2 mt-4 pt-3 border-top overflow-x-auto">
+                    <div className="platform-detail-tabs mt-3 border-top" aria-label="Company details sections">
                       {(['overview', 'billing', 'usage', 'email', 'users', 'security', 'notes', 'audit'] as const).map(tab => (
                         <button
                           key={tab}
@@ -1245,15 +716,16 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           className={`btn btn-sm px-3 rounded-pill fw-semibold ${companyDetailTab === tab ? 'btn-primary' : 'btn-light border-0 text-secondary'}`}
                           style={{ fontSize: '0.78rem' }}
                           onClick={() => setCompanyDetailTab(tab)}
+                          aria-pressed={companyDetailTab === tab}
                         >
-                          {tab === 'overview' && '1. Overview'}
-                          {tab === 'billing' && '2. Subscription & Billing'}
-                          {tab === 'usage' && '3. Usage Metrics'}
-                          {tab === 'email' && '4. Email Health'}
-                          {tab === 'users' && '5. Users & Agents'}
-                          {tab === 'security' && '6. Security & Abuse'}
-                          {tab === 'notes' && '7. Staff Notes'}
-                          {tab === 'audit' && '8. Audit Log'}
+                          {tab === 'overview' && 'Overview'}
+                          {tab === 'billing' && 'Billing'}
+                          {tab === 'usage' && 'Usage'}
+                          {tab === 'email' && 'Email health'}
+                          {tab === 'users' && 'Staff'}
+                          {tab === 'security' && 'Security'}
+                          {tab === 'notes' && 'Notes'}
+                          {tab === 'audit' && 'Audit log'}
                         </button>
                       ))}
                     </div>
@@ -1267,25 +739,26 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           <h6 className="fw-bold text-dark mb-3">Organization & Domain Settings</h6>
                           <div className="p-3 bg-light rounded-3 border">
                             <div className="mb-2"><strong>Company Code:</strong> <code>{selectedCompanyDetail.companyCode}</code></div>
-                            <div className="mb-2"><strong>Platform Subdomain:</strong> <code>{selectedCompanyDetail.subdomain}.kuwyhelp.com</code></div>
+                            <div className="mb-2"><strong>Workspace path:</strong> <code>/{selectedCompanyDetail.subdomain}</code></div>
                             <div className="mb-2">
                               <strong>Custom Domain:</strong> {selectedCompanyDetail.customDomain ? (
                                 <span className="badge bg-success-subtle text-success ms-1">
-                                  {selectedCompanyDetail.customDomain} (SSL Active)
+                                  {selectedCompanyDetail.customDomain}
                                 </span>
                               ) : <span className="text-muted">None</span>}
                             </div>
-                            <div className="mb-2"><strong>Onboarded At:</strong> {new Date(selectedCompanyDetail.createdAt || Date.now()).toLocaleDateString()}</div>
+                            <div className="mb-2"><strong>Created:</strong> {selectedCompanyDetail.createdAt ? new Date(selectedCompanyDetail.createdAt).toLocaleDateString() : 'Not recorded'}</div>
                             <div>
                               <strong>Owner Work Email:</strong>{' '}
                               <code>
                                 {unmaskedEmails[selectedCompanyDetail.id]
-                                  ? (selectedCompanyDetail.ownerEmail || `admin@${selectedCompanyDetail.subdomain}.com`)
-                                  : maskEmail(selectedCompanyDetail.ownerEmail || `admin@${selectedCompanyDetail.subdomain}.com`)}
+                                  ? (selectedCompanyDetail.ownerEmail || 'Not provided')
+                                  : maskEmail(selectedCompanyDetail.ownerEmail || '')}
                               </code>
                               <button
                                 type="button"
                                 className="btn btn-link btn-sm p-0 ms-2 text-decoration-none"
+                                aria-label={unmaskedEmails[selectedCompanyDetail.id] ? 'Mask owner email' : 'Show owner email'}
                                 onClick={() => setUnmaskedEmails({
                                   ...unmaskedEmails,
                                   [selectedCompanyDetail.id]: !unmaskedEmails[selectedCompanyDetail.id]
@@ -1302,7 +775,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           <div className="p-3 bg-light rounded-3 border">
                             <div className="mb-2"><strong>Active Plan Tier:</strong> <span className="badge bg-primary ms-1">{selectedCompanyDetail.planName}</span></div>
                             <div className="mb-2">
-                              <strong>Agent Seats Allocated:</strong> {selectedCompanyDetail.userCount} / {selectedCompanyDetail.maxAgents} seats
+                              <strong>Staff accounts / capacity:</strong> {selectedCompanyDetail.userCount} / {selectedCompanyDetail.maxAgents}
                             </div>
                             <div className="quota-bar mb-2">
                               <div
@@ -1310,8 +783,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 style={{ width: `${Math.min(100, Math.round((selectedCompanyDetail.userCount / Math.max(1, selectedCompanyDetail.maxAgents)) * 100))}%` }}
                               />
                             </div>
-                            <div className="mb-2"><strong>Monthly Ticket Limit:</strong> 5,000 tickets/mo (Current: {selectedCompanyDetail.ticketCount})</div>
-                            <div><strong>Trial Status:</strong> {selectedCompanyDetail.status === 'TRIAL' ? 'Active 14-day trial' : 'Paid recurring plan'}</div>
+                            <div className="mb-2"><strong>Total tickets:</strong> {selectedCompanyDetail.ticketCount}</div>
+                            <div><strong>Workspace status:</strong> {selectedCompanyDetail.status}</div>
                           </div>
                         </div>
                       </div>
@@ -1321,131 +794,26 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   {/* Sub-Tab 2: Subscription & Billing */}
                   {companyDetailTab === 'billing' && (
                     <div className="p-4">
-                      <div className="row g-4 mb-4">
-                        <div className="col-12 col-md-4">
-                          <div className="p-3 bg-light rounded-3 border">
-                            <small className="text-muted fw-bold">Payment Gateway Customer</small>
-                            <div className="fw-bold text-dark mt-1"><code>cus_razor_{selectedCompanyDetail.id}84912</code></div>
-                            <small className="text-success fw-semibold">Auto-Debit Active</small>
-                          </div>
-                        </div>
-                        <div className="col-12 col-md-4">
-                          <div className="p-3 bg-light rounded-3 border">
-                            <small className="text-muted fw-bold">Default Payment Method</small>
-                            <div className="fw-bold text-dark mt-1">Visa •••• 4242</div>
-                            <small className="text-muted">Expires 12/28</small>
-                          </div>
-                        </div>
-                        <div className="col-12 col-md-4">
-                          <div className="p-3 bg-light rounded-3 border">
-                            <small className="text-muted fw-bold">Monthly Recurring Billing</small>
-                            <div className="fw-bolder fs-5 text-success mt-1">
-                              ₹{selectedCompanyDetail.planName === 'ENTERPRISE' ? '14,999' : selectedCompanyDetail.planName === 'PRO' ? '6,999' : '2,999'} / mo
-                            </div>
-                            <small className="text-muted">Next invoice due Dec 1, 2026</small>
-                          </div>
-                        </div>
-                      </div>
-
-                      <h6 className="fw-bold text-dark mb-2">Recent Invoice History</h6>
-                      <div className="table-responsive border rounded-3">
-                        <table className="table table-sm align-middle mb-0">
-                          <thead className="table-light">
-                            <tr>
-                              <th className="ps-3">Invoice #</th>
-                              <th>Date</th>
-                              <th>Amount</th>
-                              <th>Status</th>
-                              <th className="text-end pe-3">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr>
-                              <td className="ps-3"><code>INV-2026-1101</code></td>
-                              <td>Nov 1, 2026</td>
-                              <td>₹14,999</td>
-                              <td><span className="badge bg-success-subtle text-success">PAID</span></td>
-                              <td className="text-end pe-3">
-                                <button type="button" className="btn btn-xs btn-outline-secondary py-0.5 px-2 rounded-2 me-1">
-                                  <Download size={12} className="me-1" /> PDF
-                                </button>
-                                <button type="button" className="btn btn-xs btn-outline-danger py-0.5 px-2 rounded-2">
-                                  Refund
-                                </button>
-                              </td>
-                            </tr>
-                            <tr>
-                              <td className="ps-3"><code>INV-2026-1001</code></td>
-                              <td>Oct 1, 2026</td>
-                              <td>₹14,999</td>
-                              <td><span className="badge bg-success-subtle text-success">PAID</span></td>
-                              <td className="text-end pe-3">
-                                <button type="button" className="btn btn-xs btn-outline-secondary py-0.5 px-2 rounded-2">
-                                  <Download size={12} className="me-1" /> PDF
-                                </button>
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
+                      <div className="platform-unavailable"><CreditCard size={22} className="mb-2" /><strong>Billing history is not available</strong><p className="mb-0">Assigned plan: {selectedCompanyDetail.planName}. Verified invoices, payment methods, refunds, and renewal dates are not exposed by the current platform API.</p></div>
                     </div>
                   )}
 
                   {/* Sub-Tab 3: Usage Metrics */}
                   {companyDetailTab === 'usage' && (
                     <div className="p-4">
-                      <div className="row g-3">
-                        <div className="col-md-3">
-                          <div className="p-3 bg-light rounded-3 border text-center">
-                            <div className="fs-4 fw-bolder text-primary">{selectedCompanyDetail.ticketCount}</div>
-                            <small className="text-muted">Total Tickets Logged</small>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="p-3 bg-light rounded-3 border text-center">
-                            <div className="fs-4 fw-bolder text-success">98.4%</div>
-                            <small className="text-muted">SLA Compliance Rate</small>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="p-3 bg-light rounded-3 border text-center">
-                            <div className="fs-4 fw-bolder text-info">420 MB</div>
-                            <small className="text-muted">Attachment Storage</small>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="p-3 bg-light rounded-3 border text-center">
-                            <div className="fs-4 fw-bolder text-dark">18,420</div>
-                            <small className="text-muted">Monthly API Hits</small>
-                          </div>
-                        </div>
+                      <div className="platform-usage-grid">
+                        <div className="p-3 border rounded"><small>Total tickets</small><strong>{selectedCompanyDetail.ticketCount}</strong></div>
+                        <div className="p-3 border rounded"><small>Staff accounts</small><strong>{selectedCompanyDetail.userCount}</strong></div>
+                        <div className="p-3 border rounded"><small>Staff capacity</small><strong>{selectedCompanyDetail.maxAgents}</strong></div>
                       </div>
+                      <p className="platform-source-note">Storage, API usage, and SLA summaries are not currently reported by the platform API.</p>
                     </div>
                   )}
 
                   {/* Sub-Tab 4: Email Health */}
                   {companyDetailTab === 'email' && (
                     <div className="p-4">
-                      <div className="p-3 bg-light rounded-3 border mb-3">
-                        <div className="d-flex justify-content-between align-items-center mb-2">
-                          <span className="fw-bold text-dark">Domain Inbound & Outbound Deliverability Status</span>
-                          <span className="badge bg-success">HEALTHY</span>
-                        </div>
-                        <div className="row g-3">
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">SPF & DKIM Status</small>
-                            <span className="fw-bold text-success">Verified & Passing</span>
-                          </div>
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">Bounce Rate (30d)</small>
-                            <span className="fw-bold text-dark">0.12% (Threshold: &lt; 2.0%)</span>
-                          </div>
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">Spam Complaint Rate</small>
-                            <span className="fw-bold text-dark">0.00%</span>
-                          </div>
-                        </div>
-                      </div>
+                      <div className="platform-unavailable"><Mail size={22} className="mb-2" /><strong>Email health is not monitored</strong><span>Verified DNS, delivery, bounce, and mailbox-connection measurements are not available for this company yet.</span></div>
                     </div>
                   )}
 
@@ -1455,7 +823,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       <div className="d-flex justify-content-between align-items-center mb-3">
                         <h6 className="fw-bold text-dark mb-0">Assigned Staff Members & Agents</h6>
                         <span className="badge bg-light text-dark border">
-                          {users.filter(u => (u as any).company?.id === selectedCompanyDetail.id).length} Active Credentials
+                          {users.filter(u => (u as any).company?.id === selectedCompanyDetail.id).length} accounts
                         </span>
                       </div>
                       <div className="table-responsive border rounded-3">
@@ -1475,7 +843,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 <td className="ps-3 fw-bold">{u.displayName}</td>
                                 <td><code>{u.email}</code></td>
                                 <td><span className="badge bg-primary-subtle text-primary">{u.role?.roleType}</span></td>
-                                <td><span className="badge bg-success-subtle text-success">Enforced</span></td>
+                                <td><span className="text-muted small">Not reported</span></td>
                                 <td>
                                   <span className={`badge ${u.isActive ? 'bg-success' : 'bg-danger'}`}>
                                     {u.isActive ? 'ACTIVE' : 'LOCKED'}
@@ -1492,32 +860,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   {/* Sub-Tab 6: Security & Abuse */}
                   {companyDetailTab === 'security' && (
                     <div className="p-4">
-                      <div className="p-3 bg-light rounded-3 border">
-                        <div className="fw-bold text-dark mb-1">Security Audit & Risk Assessment</div>
-                        <p className="text-muted small mb-2">Zero active abuse flags or security warnings detected for this organization.</p>
-                        <div className="row g-2">
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">Failed Login Spikes (24h)</small>
-                            <span className="fw-bold text-success">0 Incidents</span>
-                          </div>
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">IP Allow-Listing</small>
-                            <span className="fw-bold text-dark">Permissive / Multi-Office</span>
-                          </div>
-                          <div className="col-md-4">
-                            <small className="text-muted d-block">Mandatory 2FA Policy</small>
-                            <span className="fw-bold text-success">Enabled for Administrators</span>
-                          </div>
-                        </div>
-                      </div>
+                      <div className="platform-unavailable"><ShieldCheck size={22} className="mb-2" /><strong>Security signals are not available</strong><span>The current API does not report verified two-factor enrollment, login anomalies, or company security audit events. No security status is inferred from missing data.</span></div>
                     </div>
                   )}
 
                   {/* Sub-Tab 7: Staff Notes */}
                   {companyDetailTab === 'notes' && (
                     <div className="p-4">
-                      <h6 className="fw-bold text-dark mb-2">Internal Staff Notes (Super Admin Only)</h6>
-                      <p className="text-muted small mb-3">Notes here are strictly confidential and invisible to the client organization.</p>
+                      <h6 className="fw-bold text-dark mb-2">Draft staff notes</h6>
+                      <p className="text-muted small mb-3">Temporary notes for this browser session. They are not saved to the server and will be cleared when you leave the console.</p>
 
                       <div className="d-flex flex-column gap-2 mb-3">
                         {(staffNotes[selectedCompanyDetail.id] || []).map((note, idx) => (
@@ -1532,6 +883,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           type="text"
                           className="form-control form-control-sm"
                           placeholder="Add private note regarding this company..."
+                          aria-label="Draft staff note"
                           value={newStaffNoteInput}
                           onChange={e => setNewStaffNoteInput(e.target.value)}
                           onKeyDown={e => {
@@ -1543,7 +895,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           className="btn btn-sm btn-primary px-3 fw-semibold"
                           onClick={() => handleAddStaffNote(selectedCompanyDetail.id)}
                         >
-                          Add Note
+                          Add draft
                         </button>
                       </div>
                     </div>
@@ -1552,38 +904,23 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   {/* Sub-Tab 8: Audit Log */}
                   {companyDetailTab === 'audit' && (
                     <div className="p-4">
-                      <h6 className="fw-bold text-dark mb-3">Super Admin Actions Logged on this Organization</h6>
-                      <div className="d-flex flex-column gap-2">
-                        <div className="p-2.5 bg-light rounded-3 border d-flex justify-content-between align-items-center">
-                          <div>
-                            <span className="fw-bold text-dark small">Workspace Created</span>
-                            <div className="text-muted small">Initial tenant partition initialized by Super Admin</div>
-                          </div>
-                          <span className="text-muted small">{new Date(selectedCompanyDetail.createdAt || Date.now()).toLocaleDateString()}</span>
-                        </div>
-                        <div className="p-2.5 bg-light rounded-3 border d-flex justify-content-between align-items-center">
-                          <div>
-                            <span className="fw-bold text-dark small">Agent Quota Adjusted</span>
-                            <div className="text-muted small">Configured quota to {selectedCompanyDetail.maxAgents} seats</div>
-                          </div>
-                          <span className="text-muted small">Automatic</span>
-                        </div>
-                      </div>
+                      <div className="platform-unavailable"><Clock size={22} className="mb-2" /><strong>Platform audit history is not connected</strong><span>No audit events are inferred from company properties. An audit-record endpoint is required to display verified action history here.</span></div>
                     </div>
                   )}
                 </div>
               ) : null}
 
               {/* Screen 41a: Dense Companies List */}
-              <div className="enterprise-card">
+              <div className={`enterprise-card ${selectedCompanyDetail ? 'd-none' : ''}`}>
                 <div className="enterprise-card-header">
                   <div className="d-flex align-items-center gap-2 flex-wrap">
-                    <div className="input-group input-group-sm" style={{ width: '280px' }}>
+                    <div className="input-group input-group-sm" style={{ width: '280px', maxWidth: '100%' }}>
                       <span className="input-group-text bg-white border-end-0">
                         <Search size={14} className="text-muted" />
                       </span>
                       <input
-                        type="text"
+                        type="search"
+                        aria-label="Search companies"
                         className="form-control border-start-0"
                         placeholder="Search company, code, subdomain..."
                         value={compSearch}
@@ -1592,7 +929,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     </div>
 
                     {/* Status Filter */}
-                    <div className="d-flex gap-1">
+                    <div className="d-flex gap-1 flex-wrap" aria-label="Company status filters">
                       {['ALL', 'ACTIVE', 'TRIAL', 'SUSPENDED'].map(st => (
                         <button
                           key={st}
@@ -1600,6 +937,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           className={`btn btn-sm px-2.5 rounded-pill fw-semibold ${compStatusFilter === st ? 'btn-primary' : 'btn-outline-secondary'}`}
                           style={{ fontSize: '0.72rem' }}
                           onClick={() => setCompStatusFilter(st)}
+                          aria-pressed={compStatusFilter === st}
                         >
                           {st}
                         </button>
@@ -1609,6 +947,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     {/* Plan Filter */}
                     <select
                       className="form-select form-select-sm"
+                      aria-label="Filter companies by plan"
                       style={{ width: '135px', fontSize: '0.75rem' }}
                       value={compPlanFilter}
                       onChange={e => setCompPlanFilter(e.target.value)}
@@ -1623,12 +962,13 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     {/* Health Filter */}
                     <select
                       className="form-select form-select-sm"
+                      aria-label="Filter companies by capacity"
                       style={{ width: '140px', fontSize: '0.75rem' }}
                       value={compHealthFilter}
                       onChange={e => setCompHealthFilter(e.target.value)}
                     >
-                      <option value="ALL">All Health</option>
-                      <option value="HEALTHY">Healthy</option>
+                      <option value="ALL">Any capacity</option>
+                      <option value="HEALTHY">Active, below limit</option>
                       <option value="NEAR_LIMIT">Near Limit (&gt;85%)</option>
                       <option value="AT_RISK">At Risk / Suspended</option>
                     </select>
@@ -1639,17 +979,20 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       type="button"
                       className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1 rounded-3"
                       onClick={() => {
-                        // Export CSV simulation
-                        const csvContent = "data:text/csv;charset=utf-8," +
-                          "ID,Name,Code,Subdomain,Plan,Status,Agents\n" +
-                          companies.map(c => `${c.id},"${c.name}",${c.companyCode},${c.subdomain},${c.planName},${c.status},${c.userCount}/${c.maxAgents}`).join("\n");
-                        const encodedUri = encodeURI(csvContent);
-                        const link = document.createElement("a");
-                        link.setAttribute("href", encodedUri);
-                        link.setAttribute("download", `kuwy_companies_export_${Date.now()}.csv`);
+                        const rows = [['ID', 'Name', 'Code', 'Workspace', 'Plan', 'Status', 'Staff'], ...filteredCompanies.map(company => [company.id, company.name, company.companyCode, company.subdomain, company.planName, company.status, `${company.userCount}/${company.maxAgents}`])];
+                        const csv = rows.map(row => row.map(value => {
+                          const text = String(value ?? '');
+                          const safe = /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text;
+                          return `"${safe.replace(/"/g, '""')}"`;
+                        }).join(',')).join('\r\n');
+                        const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = 'companies.csv';
                         document.body.appendChild(link);
                         link.click();
-                        document.body.removeChild(link);
+                        link.remove();
+                        URL.revokeObjectURL(url);
                       }}
                     >
                       <Download size={13} />
@@ -1659,26 +1002,26 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <button
                       type="button"
                       className="btn btn-sm btn-primary d-flex align-items-center gap-1.5 px-3 py-1.5 rounded-3 fw-semibold shadow-sm"
-                      onClick={() => setShowNewCompanyModal(true)}
+                      onClick={openNewCompanyForm}
                     >
                       <Plus size={15} />
-                      <span>Onboard Organization</span>
+                      <span>New company</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="table-responsive">
-                  <table className="table table-enterprise align-middle mb-0">
+                <div className="table-responsive d-none d-md-block" role="region" aria-label="Companies table" tabIndex={0}>
+                  <table className="table table-enterprise platform-company-table align-middle mb-0">
                     <thead>
                       <tr>
-                        <th className="ps-4">Organization & Domain</th>
-                        <th>Plan & MRR</th>
+                        <th className="ps-4">Company</th>
+                        <th>Plan</th>
                         <th>Status</th>
-                        <th>Owner Email (Privacy)</th>
-                        <th>Agent Quota</th>
-                        <th>Tickets (mo)</th>
-                        <th>Health Flag</th>
-                        <th className="text-end pe-4">Safety Actions</th>
+                        <th>Owner email</th>
+                        <th>Staff capacity</th>
+                        <th>Total tickets</th>
+                        <th>Attention</th>
+                        <th className="text-end pe-4">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1708,7 +1051,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                     {comp.name}
                                   </h6>
                                   <div className="text-muted small">
-                                    <code>{comp.subdomain}.kuwyhelp.com</code>
+                                    <code>/{comp.subdomain}</code>
                                   </div>
                                 </div>
                               </div>
@@ -1719,15 +1062,12 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 <span className="badge bg-light text-dark border fw-bold" style={{ fontSize: '0.72rem' }}>
                                   {comp.planName}
                                 </span>
-                                <div className="small text-success fw-semibold mt-0.5">
-                                  ₹{comp.planName === 'ENTERPRISE' ? '14,999' : comp.planName === 'PRO' ? '6,999' : '2,999'}/mo
-                                </div>
                               </div>
                             </td>
 
                             <td>
-                              <span className={`badge-status ${comp.status === 'ACTIVE' ? 'badge-resolved' : 'badge-urgent'}`}>
-                                <span className={`pulse-dot ${comp.status === 'ACTIVE' ? 'pulse-dot-success' : 'pulse-dot-danger'}`} />
+                              <span className={`badge-status ${comp.status === 'ACTIVE' ? 'badge-resolved' : comp.status === 'TRIAL' ? 'badge-in_progress' : comp.status === 'SUSPENDED' ? 'badge-urgent' : 'badge-closed'}`}>
+                                <span className="platform-status-dot" />
                                 <span>{comp.status}</span>
                               </span>
                             </td>
@@ -1736,8 +1076,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                               <div className="d-flex align-items-center gap-1.5">
                                 <code style={{ fontSize: '0.75rem' }}>
                                   {unmaskedEmails[comp.id]
-                                    ? (comp.ownerEmail || `admin@${comp.subdomain}.com`)
-                                    : maskEmail(comp.ownerEmail || `admin@${comp.subdomain}.com`)}
+                                    ? (comp.ownerEmail || 'Not provided')
+                                    : maskEmail(comp.ownerEmail || '')}
                                 </code>
                                 <button
                                   type="button"
@@ -1785,7 +1125,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                   style={{ width: '8px', height: '8px' }}
                                 />
                                 <small className="fw-semibold text-secondary" style={{ fontSize: '0.72rem' }}>
-                                  {isHealthGood ? 'Healthy' : isHealthWarn ? 'Near Limit' : isHealthCrit ? 'Suspended' : 'Unknown'}
+                                  {isHealthGood ? 'Below limit' : isHealthWarn ? 'Near limit' : isHealthCrit ? 'Suspended' : 'Not flagged'}
                                 </small>
                               </div>
                             </td>
@@ -1795,11 +1135,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 <button
                                   type="button"
                                   className="btn btn-sm btn-outline-primary py-1 px-2 rounded-2"
-                                  onClick={() => {
-                                    setSelectedCompanyDetail(comp);
-                                    setCompanyDetailTab('overview');
-                                  }}
-                                  title="Inspect full company details & sub-tabs"
+                                  onClick={() => openCompanyDetail(comp)}
+                                  title="View company details"
                                 >
                                   <Eye size={13} />
                                 </button>
@@ -1808,7 +1145,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                   type="button"
                                   className="btn btn-sm btn-warning text-dark py-1 px-2 rounded-2"
                                   onClick={() => setShowSupportSessionModal(comp)}
-                                  title="Start 60-minute Consent Support Session"
+                                  title="Support access options"
                                 >
                                   <ShieldAlert size={13} />
                                 </button>
@@ -1835,9 +1172,22 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           </tr>
                         );
                       })}
+                      {!filteredCompanies.length && <tr><td colSpan={8} className="text-center text-muted py-5">No companies match these filters.</td></tr>}
                     </tbody>
                   </table>
                 </div>
+                <div className="platform-mobile-companies p-3">
+                  {filteredCompanies.map(company => (
+                    <article key={company.id} className="platform-company-mobile-card">
+                      <div className="d-flex align-items-start justify-content-between gap-2 mb-2"><span className="platform-company-avatar">{company.companyCode.slice(0, 2)}</span><span className={`badge-status ${company.status === 'ACTIVE' ? 'badge-resolved' : company.status === 'TRIAL' ? 'badge-in_progress' : 'badge-closed'}`}>{company.status}</span></div>
+                      <h3 className="fw-semibold mb-1">{company.name}</h3><code>/{company.subdomain}</code>
+                      <div className="platform-mobile-metrics"><span><strong>{company.planName}</strong>Plan</span><span><strong>{company.userCount} / {company.maxAgents}</strong>Staff</span><span><strong>{company.ticketCount}</strong>Tickets</span></div>
+                      <div className="d-flex align-items-center gap-2 flex-wrap"><button type="button" className="btn btn-sm btn-outline-primary" onClick={() => openCompanyDetail(company)}>View company <ChevronRight size={13} /></button><button type="button" className="btn btn-sm btn-light" onClick={() => onSwitchToCompany(company.id, 'tickets')}>Open workspace <ArrowRight size={13} /></button></div>
+                    </article>
+                  ))}
+                  {!filteredCompanies.length && <div className="workspace-empty-state"><Search size={25} className="mb-3 text-muted" /><h2>No matching companies</h2><p>Try another search or clear your filters.</p><button type="button" className="btn btn-sm btn-outline-primary" onClick={() => jumpToFilteredCompanies('ALL')}>Clear filters</button></div>}
+                </div>
+                <div className="px-4 py-3 border-top text-muted small" role="status">{filteredCompanies.length} of {companies.length} companies</div>
               </div>
             </div>
           )}
@@ -1849,8 +1199,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
             <div className="animate-fade-in">
               <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
                 <div>
-                  <h6 className="fw-bold mb-0 text-dark">Platform Plans, Quotas & Entitlements</h6>
-                  <small className="text-muted">Configure subscription tiers, feature flags, coupon codes & grandfathering rules</small>
+                  <h6 className="fw-bold mb-0 text-dark">Plan catalog</h6>
+                  <small className="text-muted">Read-only catalog. Plan and coupon editors currently provide local previews only.</small>
                 </div>
 
                 <div className="d-flex align-items-center gap-2">
@@ -1860,7 +1210,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     onClick={() => setShowNewCouponModal(true)}
                   >
                     <Tag size={14} />
-                    <span>+ New Coupon Campaign</span>
+                    <span>Preview coupon</span>
                   </button>
 
                   <button
@@ -1879,7 +1229,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     })}
                   >
                     <Plus size={14} />
-                    <span>Create New Plan</span>
+                    <span>Preview new plan</span>
                   </button>
                 </div>
               </div>
@@ -1888,7 +1238,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               <div className="enterprise-card mb-4">
                 <div className="enterprise-card-header">
                   <h6 className="fw-bold mb-0">Subscription Tiers & Packaging</h6>
-                  <span className="badge bg-light text-dark border">4 Active Tiers</span>
+                  <span className="badge bg-light text-dark border">{plans.length} catalog plans</span>
                 </div>
 
                 <div className="table-responsive">
@@ -1900,8 +1250,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         <th>Monthly Price (INR)</th>
                         <th>Annual Price (INR)</th>
                         <th>Agent Quota</th>
-                        <th>Subscribed Companies</th>
-                        <th>Plan MRR</th>
+                        <th>Assigned companies</th>
+                        <th>Est. active plan value</th>
                         <th className="text-end pe-4">Actions</th>
                       </tr>
                     </thead>
@@ -1939,13 +1289,13 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
                           <td>
                             <span className="badge bg-light text-dark border fw-bold">
-                              {p.companiesCount || 1} Tenants
+                              {companies.filter(company => company.planName === p.code).length} companies
                             </span>
                           </td>
 
                           <td>
                             <span className="fw-bold text-success">
-                              ₹{((p.priceMonthlyInr || 0) * (p.companiesCount || 1)).toLocaleString()}/mo
+                              ₹{((p.priceMonthlyInr || 0) * companies.filter(company => company.planName === p.code && company.status === 'ACTIVE').length).toLocaleString()}/mo
                             </span>
                           </td>
 
@@ -1957,7 +1307,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 onClick={() => setShowPlanEditorModal(p)}
                               >
                                 <Edit3 size={13} />
-                                <span>Edit Quotas</span>
+                                <span>Preview plan</span>
                               </button>
                             </div>
                           </td>
@@ -1976,9 +1326,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <div className="enterprise-card-header">
                       <div className="d-flex align-items-center gap-2">
                         <Tag size={17} className="text-primary" />
-                        <h6 className="fw-bold mb-0">Active Promotional Coupons & Discount Codes</h6>
+                        <h6 className="fw-bold mb-0">Coupon previews</h6>
                       </div>
-                      <span className="badge bg-primary-subtle text-primary">{coupons.length} Active</span>
+                      <span className="badge bg-light text-secondary border">Not published</span>
                     </div>
 
                     <div className="table-responsive">
@@ -1998,9 +1348,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                               <td className="ps-3"><code>{c.code}</code></td>
                               <td><span className="badge bg-success-subtle text-success">{c.discountPercent}% OFF</span></td>
                               <td><small className="text-muted">{c.duration}</small></td>
-                              <td><small className="text-dark fw-bold">{c.redemptionCount} / {c.maxRedemptions}</small></td>
+                              <td><small className="text-muted">Not tracked</small></td>
                               <td className="text-end pe-3">
-                                <span className="badge bg-success">ACTIVE</span>
+                                <span className="badge bg-light text-secondary border">Preview</span>
                               </td>
                             </tr>
                           ))}
@@ -2022,7 +1372,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
                     <div className="p-4">
                       <p className="text-muted small">
-                        Choose how platform plan and pricing modifications impact existing paying tenant organizations.
+                        Preview a plan-change policy. These selections are not saved and do not change existing subscriptions.
                       </p>
 
                       <div className="form-check p-3 rounded-3 border mb-2.5 bg-light">
@@ -2035,9 +1385,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onChange={() => setGrandfatheringPolicy('grandfather')}
                         />
                         <label className="form-check-label fw-bold text-dark small" htmlFor="gf1">
-                          Grandfather Existing Subscribers (Recommended)
+                          Keep existing terms
                           <small className="text-muted d-block fw-normal mt-0.5">
-                            New pricing and quota limits only apply to new sign-ups. Existing client organizations retain their current billing rates indefinitely.
+                            Proposed behavior: new prices apply to new sign-ups while existing companies retain their current terms.
                           </small>
                         </label>
                       </div>
@@ -2052,9 +1402,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           onChange={() => setGrandfatheringPolicy('migrate')}
                         />
                         <label className="form-check-label fw-bold text-dark small" htmlFor="gf2">
-                          Migrate Existing on Renewal (30-day Notice)
+                          Apply at next renewal
                           <small className="text-muted d-block fw-normal mt-0.5">
-                            Subscribers will receive an automated email notice and update to the revised pricing on their next billing cycle renewal date.
+                            Proposed behavior: notify subscribers before applying revised prices on renewal. No notices are sent by this preview.
                           </small>
                         </label>
                       </div>
@@ -2070,16 +1420,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               ================================================================ */}
           {activeMenu === 'platform' && (
             <div className="animate-fade-in">
+              <div className="platform-unavailable mb-4"><Settings size={21} className="mb-2" /><strong>Configuration preview</strong><span>These controls are not connected to persistent platform settings yet. Changes remain in this browser session and do not modify live sign-ups, rate limits, banners, or email delivery.</span></div>
               {/* Emergency Outbound Killswitch Banner */}
               <div className={`p-3 rounded-3 mb-4 d-flex justify-content-between align-items-center flex-wrap gap-3 ${emergencyOutboundPaused ? 'bg-danger text-white' : 'bg-light border text-dark'}`}>
                 <div className="d-flex align-items-center gap-2.5">
                   <ShieldAlert size={22} className={emergencyOutboundPaused ? 'text-white' : 'text-danger'} />
                   <div>
-                    <h6 className="fw-bold mb-0">Emergency Platform Outbound Email Kill-Switch</h6>
+                    <h6 className="fw-bold mb-0">Outbound email controls</h6>
                     <small className={emergencyOutboundPaused ? 'text-white text-opacity-75' : 'text-muted'}>
-                      {emergencyOutboundPaused
-                        ? 'EMERGENCY PAUSE ACTIVE: Outbound delivery is suspended platform-wide to protect IP reputation. Inbound ingestion continues.'
-                        : 'Outbound mail relays operational. Use this panic button in case of mass spam or phishing compromise.'}
+                      Global delivery controls are not connected to the email pipeline yet.
                     </small>
                   </div>
                 </div>
@@ -2087,6 +1436,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className={`btn btn-sm px-4 fw-bold shadow-xs ${emergencyOutboundPaused ? 'btn-light text-danger' : 'btn-danger'}`}
+                  disabled
                   onClick={() => {
                     const newState = !emergencyOutboundPaused;
                     setEmergencyOutboundPaused(newState);
@@ -2096,7 +1446,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     });
                   }}
                 >
-                  {emergencyOutboundPaused ? 'Resume Outbound Email' : 'Pause All Outbound Email'}
+                  Outbound pause unavailable
                 </button>
               </div>
 
@@ -2107,7 +1457,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <div className="enterprise-card-header">
                       <div className="d-flex align-items-center gap-2">
                         <Settings size={18} className="text-primary" />
-                        <h6 className="fw-bold mb-0">Platform Settings & Onboarding Controls</h6>
+                        <h6 className="fw-bold mb-0">General settings preview</h6>
                       </div>
                     </div>
 
@@ -2183,7 +1533,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           </label>
                         </div>
                         <small className="text-muted d-block mb-2">
-                          When active, only Super Admins can log in; workspaces show a maintenance banner.
+                          Preview only. This does not restrict logins or show a banner in company workspaces.
                         </small>
                         {maintenanceModeActive && (
                           <input
@@ -2204,14 +1554,14 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <div className="enterprise-card-header">
                       <div className="d-flex align-items-center gap-2">
                         <Ban size={18} className="text-danger" />
-                        <h6 className="fw-bold mb-0">Disposable Email Filter & Broadcast Notice</h6>
+                        <h6 className="fw-bold mb-0">Domain rules & announcements</h6>
                       </div>
                     </div>
 
                     <div className="p-4">
                       <div className="mb-4">
                         <label className="form-label small fw-bold text-dark">
-                          Blocked Disposable Email Domains (Prevents Spam Sign-Ups)
+                          Proposed blocked domains
                         </label>
                         <div className="d-flex flex-wrap gap-1.5 mb-2">
                           {blockedDomains.map((dom, i) => (
@@ -2221,6 +1571,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                 type="button"
                                 className="btn-close btn-close-sm p-0 ms-1"
                                 style={{ fontSize: '0.6rem' }}
+                                aria-label={`Remove ${dom} from draft`}
                                 onClick={() => setBlockedDomains(blockedDomains.filter((_, idx) => idx !== i))}
                               ></button>
                             </span>
@@ -2269,7 +1620,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           </label>
                         </div>
                         <small className="text-muted d-block mb-2">
-                          Displays a sticky notification banner at the top of every tenant admin workspace.
+                          Preview only. This draft is not published to company workspaces.
                         </small>
                         {globalAnnouncementActive && (
                           <input
@@ -2290,9 +1641,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <div className="enterprise-card-header">
                   <div className="d-flex align-items-center gap-2">
                     <ShieldAlert size={18} className="text-danger" />
-                    <h6 className="fw-bold mb-0">Abuse Reports Queue & Platform Blocklist</h6>
+                    <h6 className="fw-bold mb-0">Abuse reports</h6>
                   </div>
-                  <span className="badge bg-danger-subtle text-danger fw-bold">{abuseReports.length} Flagged</span>
+                  <span className="badge bg-light text-secondary border">Not connected</span>
                 </div>
 
                 <div className="table-responsive">
@@ -2347,6 +1698,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           </td>
                         </tr>
                       ))}
+                      {!abuseReports.length && <tr><td colSpan={6} className="p-4 text-muted">No verified abuse records are available from the current API.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -2355,8 +1707,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <div className="p-4 border-top bg-light">
                   <div className="d-flex justify-content-between align-items-center mb-2.5 flex-wrap gap-2">
                     <div>
-                      <h6 className="fw-bold mb-0 text-dark small">Platform-Wide Edge Blocked IP Addresses</h6>
-                      <small className="text-muted">Requests from these IPs are rejected at the edge gateway before reaching tenant partitions.</small>
+                      <h6 className="fw-bold mb-0 text-dark small">IP blocklist preview</h6>
+                      <small className="text-muted">Local draft entries only. They do not configure an edge gateway.</small>
                     </div>
                     <div className="d-flex gap-2">
                       <input
@@ -2383,7 +1735,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                           }
                         }}
                       >
-                        Ban IP
+                        Add IP draft
                       </button>
                     </div>
                   </div>
@@ -2553,7 +1905,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                               style={{ fontSize: '0.72rem' }}
                               onClick={() => {
                                 setShowResetPasswordModal(u);
-                                setNewPasswordVal('Password@123');
+                                setNewPasswordVal('');
                               }}
                             >
                               <KeyRound size={12} />
@@ -2754,27 +2106,31 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
       {/* 1. Extend Trial Modal (+7, +14, +30 days) */}
       {showExtendTrialModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title={`Trial settings: ${showExtendTrialModal.name}`} onClose={() => setShowExtendTrialModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-success text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <Clock size={20} />
-                  <h5 className="modal-title fw-bold text-white mb-0">Extend Trial: {showExtendTrialModal.name}</h5>
+                  <h5 className="modal-title fw-bold text-white mb-0">Trial settings: {showExtendTrialModal.name}</h5>
                 </div>
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close trial settings"
                   onClick={() => setShowExtendTrialModal(null)}
                 ></button>
               </div>
 
               <form onSubmit={handleExtendTrialSubmit}>
                 <div className="modal-body p-4">
+                  <div className="alert alert-warning small">The current endpoint changes trial status only. It does not store or extend an expiry date.</div>
                   <div className="mb-3">
                     <label className="form-label fw-semibold small">Evaluation Days to Add</label>
                     <select
                       className="form-select"
+                      aria-label="Requested trial days"
+                      disabled
                       value={trialDaysToAdd}
                       onChange={e => setTrialDaysToAdd(Number(e.target.value))}
                     >
@@ -2806,18 +2162,18 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-success btn-sm fw-semibold px-4 text-white">
-                    Apply Trial Extension
+                    Set trial status
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 2. Change Plan Modal (Proration Preview) */}
       {showChangePlanModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title={`Change plan: ${showChangePlanModal.name}`} onClose={() => setShowChangePlanModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-primary text-white py-3 px-4">
@@ -2828,6 +2184,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close plan change"
                   onClick={() => setShowChangePlanModal(null)}
                 ></button>
               </div>
@@ -2840,38 +2197,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <label className="form-label fw-semibold small">New Subscription Plan Tier</label>
                     <select
                       className="form-select"
+                      aria-label="Target company plan"
                       value={newPlanTarget}
                       onChange={e => setNewPlanTarget(e.target.value)}
                     >
-                      <option value="STARTER">Growth Starter (₹2,999/mo • 5 Agents)</option>
-                      <option value="PRO">Scale Professional (₹6,999/mo • 15 Agents)</option>
-                      <option value="ENTERPRISE">Corporate Enterprise (₹14,999/mo • 50 Agents)</option>
+                      {plans.map(plan => <option key={plan.code} value={plan.code}>{plan.name} / {plan.maxAgents} staff</option>)}
                     </select>
                   </div>
 
-                  <div className="p-3 bg-light rounded-3 border mb-3">
-                    <div className="d-flex justify-content-between align-items-center small mb-1">
-                      <span className="text-muted">Prorated Net Adjustment:</span>
-                      <strong className="text-success">+ ₹2,400 immediate charge</strong>
-                    </div>
-                    <div className="d-flex justify-content-between align-items-center small">
-                      <span className="text-muted">Effective Date:</span>
-                      <strong>Immediate (live upgrade)</strong>
-                    </div>
-                  </div>
-
-                  <div className="form-check">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      id="prorateCheck"
-                      checked={planChangeProrate}
-                      onChange={e => setPlanChangeProrate(e.target.checked)}
-                    />
-                    <label className="form-check-label small" htmlFor="prorateCheck">
-                      Prorate remaining billing cycle balance automatically
-                    </label>
-                  </div>
+                  <div className="platform-unavailable">This updates the company's assigned plan and staff capacity. It does not process a payment or calculate prorated charges.</div>
                 </div>
 
                 <div className="modal-footer bg-light px-4 py-2.5">
@@ -2883,18 +2217,18 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4">
-                    Confirm Plan Migration
+                    Update company plan
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 3. Suspend / Unsuspend Modal (Required Reason) */}
       {showSuspendModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title={`Change company status: ${showSuspendModal.name}`} onClose={() => setShowSuspendModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-danger text-white py-3 px-4">
@@ -2907,6 +2241,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close company status change"
                   onClick={() => setShowSuspendModal(null)}
                 ></button>
               </div>
@@ -2917,7 +2252,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     Target: <strong>{showSuspendModal.name}</strong> (<code>{showSuspendModal.subdomain}</code>)
                   </p>
                   <p className="text-muted small">
-                    Suspension stops all staff & customer logins and locks ticket editing. Inbound emails will be queued safely.
+                    This changes the company's account status. Existing records are retained. Email queuing and session revocation are not verified by this action.
                   </p>
 
                   <div className="mb-3">
@@ -2927,6 +2262,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       rows={3}
                       required
                       placeholder="e.g. Non-payment after repeated reminders, or breach of terms of service..."
+                      aria-label="Reason for status change"
                       value={suspendReason}
                       onChange={e => setSuspendReason(e.target.value)}
                     />
@@ -2941,35 +2277,37 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-danger btn-sm fw-semibold px-4">
-                    Apply Suspension State
+                  <button type="submit" className={`btn ${showSuspendModal.status === 'ACTIVE' ? 'btn-danger' : 'btn-primary'} btn-sm fw-semibold px-4`}>
+                    {showSuspendModal.status === 'ACTIVE' ? 'Suspend company' : 'Reactivate company'}
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 4. Support Session Impersonation Modal (Consent-Based 60-min Session) */}
       {showSupportSessionModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title={`Support access: ${showSupportSessionModal.name}`} onClose={() => setShowSupportSessionModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-warning text-dark py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <ShieldAlert size={20} />
-                  <h5 className="modal-title fw-bold mb-0">Start Support Impersonation Session</h5>
+                  <h5 className="modal-title fw-bold mb-0">Support access</h5>
                 </div>
                 <button
                   type="button"
                   className="btn-close"
+                  aria-label="Close support access"
                   onClick={() => setShowSupportSessionModal(null)}
                 ></button>
               </div>
 
-              <form onSubmit={handleStartSupportSession}>
+              <form onSubmit={event => event.preventDefault()}>
                 <div className="modal-body p-4">
+                  <div className="alert alert-warning small">Scoped, consent-based support sessions are not implemented yet. This action is unavailable until approval, authorization, and expiry are enforced by the server.</div>
                   <div className="p-3 bg-warning-subtle text-dark border border-warning rounded-3 mb-3 small">
                     <strong>Notice:</strong> This grants a 60-minute temporary, audit-logged read-only support session into <strong>{showSupportSessionModal.name}</strong>. A visible yellow banner will appear in the workspace.
                   </div>
@@ -3005,29 +2343,30 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-warning btn-sm fw-bold px-4 text-dark shadow-xs">
-                    Start 60-Minute Support Session
+                  <button type="submit" className="btn btn-secondary btn-sm px-4" disabled>
+                    Support sessions unavailable
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 5. Soft Delete Modal (Typing Company Name Confirmation) */}
       {showDeleteModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title={`Deactivate company: ${showDeleteModal.name}`} onClose={() => setShowDeleteModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-danger text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <Trash2 size={20} />
-                  <h5 className="modal-title fw-bold text-white mb-0">Confirm Company Soft Deletion</h5>
+                  <h5 className="modal-title fw-bold text-white mb-0">Deactivate company</h5>
                 </div>
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close company deactivation"
                   onClick={() => setShowDeleteModal(null)}
                 ></button>
               </div>
@@ -3035,11 +2374,11 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               <form onSubmit={handleDeleteCompanySubmit}>
                 <div className="modal-body p-4">
                   <div className="alert alert-danger py-2.5 px-3 small mb-3">
-                    <strong>CAUTION:</strong> This will place <strong>{showDeleteModal.name}</strong> into a 30-day grace recovery hold, after which all tenant partitions will be permanently purged.
+                    <strong>Confirm deactivation:</strong> This marks <strong>{showDeleteModal.name}</strong> inactive. Stored data remains in place. No deletion schedule or recovery deadline is configured.
                   </div>
 
                   <p className="text-dark small mb-2">
-                    To prevent accidental deletion, please type the full company name <code>{showDeleteModal.name}</code> below:
+                    Type the full company name <code>{showDeleteModal.name}</code> to confirm:
                   </p>
 
                   <input
@@ -3047,6 +2386,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     className="form-control"
                     required
                     placeholder={showDeleteModal.name}
+                    aria-label="Company name confirmation"
                     value={deleteConfirmationInput}
                     onChange={e => setDeleteConfirmationInput(e.target.value)}
                   />
@@ -3065,35 +2405,36 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     className="btn btn-danger btn-sm fw-bold px-4"
                     disabled={deleteConfirmationInput.trim().toLowerCase() !== showDeleteModal.name.trim().toLowerCase()}
                   >
-                    Permanently Soft-Delete
+                    Deactivate company
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 6. Plan Editor Modal (Screen 42b) */}
       {showPlanEditorModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title="Plan preview" onClose={() => setShowPlanEditorModal(null)} wide>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-dark text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <Sliders size={20} className="text-warning" />
-                  <h5 className="modal-title fw-bold text-white mb-0">Plan Editor: {showPlanEditorModal.name}</h5>
+                  <h5 className="modal-title fw-bold text-white mb-0">Plan preview: {showPlanEditorModal.name}</h5>
                 </div>
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close plan preview"
                   onClick={() => setShowPlanEditorModal(null)}
                 ></button>
               </div>
 
               <form onSubmit={(e) => {
                 e.preventDefault();
-                setAlertNotice({ type: 'success', message: `Plan '${showPlanEditorModal.name}' entitlements and quotas saved.` });
+                setAlertNotice({ type: 'success', message: 'Plan preview closed. No server changes were made.' });
                 setShowPlanEditorModal(null);
               }}>
                 <div className="modal-body p-4">
@@ -3244,18 +2585,18 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4">
-                    Save Plan Configurations
+                    Close preview
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 7. New Coupon Modal (Screen 42c) */}
       {showNewCouponModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title="Coupon preview" onClose={() => setShowNewCouponModal(false)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-primary text-white py-3 px-4">
@@ -3266,6 +2607,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close coupon preview"
                   onClick={() => setShowNewCouponModal(false)}
                 ></button>
               </div>
@@ -3330,34 +2672,39 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4">
-                    Create Coupon Campaign
+                    Add to local preview
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 8. Onboard New Company Modal */}
       {showNewCompanyModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title="New company" onClose={() => setShowNewCompanyModal(false)} wide busy={isSaving}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-dark text-white py-3 px-4">
                 <div className="d-flex align-items-center gap-2">
                   <Building2 size={20} className="text-warning" />
-                  <h5 className="modal-title fw-bold text-white mb-0">Onboard New Organization / Company</h5>
+                  <h5 className="modal-title fw-bold text-white mb-0">New company</h5>
                 </div>
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close new company"
+                  disabled={isSaving}
                   onClick={() => setShowNewCompanyModal(false)}
                 ></button>
               </div>
 
               <form onSubmit={async (e) => {
                 e.preventDefault();
+                if (isSaving) return;
+                setIsSaving(true);
+                setAlertNotice(null);
                 try {
                   await apiService.createAdminCompany({
                     name: newCompName,
@@ -3382,13 +2729,17 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   setNewCompAdminFirst('');
                   setNewCompAdminLast('');
                   setNewCompAdminEmail('');
+                  setNewCompAdminPassword('');
                   loadAdminData();
                 } catch (err: any) {
                   setAlertNotice({ type: 'danger', message: err.response?.data?.error || err.message || 'Failed to create company' });
+                } finally {
+                  setIsSaving(false);
                 }
               }}>
                 <div className="modal-body p-4">
-                  <h6 className="fw-bold text-primary mb-3 border-bottom pb-2">1. Company Profile & Subdomain</h6>
+                  {alertNotice?.type === 'danger' && <div className="alert alert-danger small" role="alert">{alertNotice.message}</div>}
+                  <h6 className="fw-semibold text-dark mb-3 border-bottom pb-2">Company details</h6>
                   <div className="row g-3 mb-4">
                     <div className="col-md-6">
                       <label className="form-label fw-semibold small">Company Full Name</label>
@@ -3397,6 +2748,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="e.g. Tata Motors Financial Services"
+                        aria-label="Company name"
+                        autoComplete="organization"
+                        autoFocus
                         value={newCompName}
                         onChange={e => setNewCompName(e.target.value)}
                       />
@@ -3408,6 +2762,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="e.g. TATA"
+                        aria-label="Company code"
                         value={newCompCode}
                         onChange={e => setNewCompCode(e.target.value.toUpperCase())}
                       />
@@ -3419,6 +2774,11 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="tata"
+                        aria-label="Workspace address"
+                        minLength={3}
+                        maxLength={30}
+                        pattern="[a-z0-9](?:[a-z0-9]|-){1,28}[a-z0-9]"
+                        title="Use 3-30 lowercase letters, numbers, or hyphens; start and end with a letter or number."
                         value={newCompSubdomain}
                         onChange={e => setNewCompSubdomain(e.target.value.toLowerCase())}
                       />
@@ -3428,12 +2788,11 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       <label className="form-label fw-semibold small">Service Plan</label>
                       <select
                         className="form-select"
+                        aria-label="Company plan"
                         value={newCompPlan}
-                        onChange={e => setNewCompPlan(e.target.value)}
+                        onChange={e => { setNewCompPlan(e.target.value); const plan = plans.find(item => item.code === e.target.value); if (plan?.maxAgents > 0) setNewCompMaxAgents(plan.maxAgents); }}
                       >
-                        <option value="STARTER">Starter Plan (₹2,999/mo)</option>
-                        <option value="PRO">Professional Plan (₹6,999/mo)</option>
-                        <option value="ENTERPRISE">Enterprise Plan (₹14,999/mo)</option>
+                        {plans.map(plan => <option key={plan.code} value={plan.code}>{plan.name}</option>)}
                       </select>
                     </div>
 
@@ -3441,6 +2800,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       <label className="form-label fw-semibold small">Max Support Agents Quota</label>
                       <input
                         type="number"
+                        aria-label="Staff capacity"
                         className="form-control"
                         min={1}
                         max={500}
@@ -3451,7 +2811,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   </div>
 
                   <h6 className="fw-bold text-success mb-3 border-bottom pb-2">
-                    2. Initial Company Administrator Login Credential
+                    Company administrator
                   </h6>
                   <div className="row g-3">
                     <div className="col-md-6">
@@ -3461,6 +2821,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="e.g. Rajesh"
+                        aria-label="Admin first name"
+                        autoComplete="given-name"
                         value={newCompAdminFirst}
                         onChange={e => setNewCompAdminFirst(e.target.value)}
                       />
@@ -3471,6 +2833,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         type="text"
                         className="form-control"
                         placeholder="e.g. Kumar"
+                        aria-label="Admin last name"
+                        autoComplete="family-name"
                         value={newCompAdminLast}
                         onChange={e => setNewCompAdminLast(e.target.value)}
                       />
@@ -3483,6 +2847,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="e.g. testadmin@tata.com"
+                        aria-label="Admin email"
+                        autoComplete="email"
                         value={newCompAdminEmail}
                         onChange={e => setNewCompAdminEmail(e.target.value)}
                       />
@@ -3491,7 +2857,10 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <div className="col-md-6">
                       <label className="form-label fw-semibold small">Initial Password</label>
                       <input
-                        type="text"
+                        type="password"
+                        aria-label="Initial admin password"
+                        minLength={10}
+                        autoComplete="new-password"
                         className="form-control"
                         required
                         value={newCompAdminPassword}
@@ -3505,23 +2874,24 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
+                    disabled={isSaving}
                     onClick={() => setShowNewCompanyModal(false)}
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4">
-                    Create Company & Admin Account
+                  <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4" disabled={isSaving || !plans.length}>
+                    {isSaving ? 'Creating...' : 'Create company'}
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 9. Issue Credential Modal */}
       {showNewCredModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title="Add staff account" onClose={() => setShowNewCredModal(false)} busy={isSaving}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-primary text-white py-3 px-4">
@@ -3532,12 +2902,17 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className="btn-close btn-close-white"
+                  aria-label="Close staff account form"
+                  disabled={isSaving}
                   onClick={() => setShowNewCredModal(false)}
                 ></button>
               </div>
 
               <form onSubmit={async (e) => {
                 e.preventDefault();
+                if (isSaving) return;
+                setIsSaving(true);
+                setAlertNotice(null);
                 try {
                   const created = await apiService.createUserCredential({
                     companyId: credCompanyId,
@@ -3558,16 +2933,21 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   setCredFirstName('');
                   setCredLastName('');
                   setCredPhone('');
+                  setCredPassword('');
                   loadAdminData();
                 } catch (err: any) {
                   setAlertNotice({ type: 'danger', message: err.response?.data?.error || err.message || 'Failed to create credential' });
+                } finally {
+                  setIsSaving(false);
                 }
               }}>
                 <div className="modal-body p-4">
+                  {alertNotice?.type === 'danger' && <div className="alert alert-danger small" role="alert">{alertNotice.message}</div>}
                   <div className="mb-3">
                     <label className="form-label fw-semibold small">Target Organization / Company</label>
                     <select
                       className="form-select"
+                      aria-label="Staff company"
                       required
                       value={credCompanyId}
                       onChange={e => setCredCompanyId(Number(e.target.value))}
@@ -3588,6 +2968,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         className="form-control"
                         required
                         placeholder="John"
+                        aria-label="Staff first name"
                         value={credFirstName}
                         onChange={e => setCredFirstName(e.target.value)}
                       />
@@ -3598,6 +2979,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         type="text"
                         className="form-control"
                         placeholder="Doe"
+                        aria-label="Staff last name"
                         value={credLastName}
                         onChange={e => setCredLastName(e.target.value)}
                       />
@@ -3611,6 +2993,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       className="form-control"
                       required
                       placeholder="e.g. testagent@company.com"
+                      aria-label="Staff email"
+                      autoComplete="email"
                       value={credEmail}
                       onChange={e => setCredEmail(e.target.value)}
                     />
@@ -3621,6 +3005,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       <label className="form-label fw-semibold small">Role / Access Level</label>
                       <select
                         className="form-select"
+                        aria-label="Staff role"
                         value={credRoleType}
                         onChange={e => setCredRoleType(e.target.value)}
                       >
@@ -3632,7 +3017,10 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     <div className="col">
                       <label className="form-label fw-semibold small">Password</label>
                       <input
-                        type="text"
+                        type="password"
+                        aria-label="Staff password"
+                        autoComplete="new-password"
+                        minLength={10}
                         className="form-control"
                         required
                         value={credPassword}
@@ -3644,7 +3032,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <div className="mb-3">
                     <label className="form-label fw-semibold small">Phone Number</label>
                     <input
-                      type="text"
+                      type="tel"
+                      aria-label="Staff phone"
+                      autoComplete="tel"
                       className="form-control"
                       placeholder="+91 9876543210"
                       value={credPhone}
@@ -3657,23 +3047,24 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
+                    disabled={isSaving}
                     onClick={() => setShowNewCredModal(false)}
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4">
-                    Issue Login Credential
+                  <button type="submit" className="btn btn-primary btn-sm fw-semibold px-4" disabled={isSaving || !companies.length}>
+                    {isSaving ? 'Creating...' : 'Create staff account'}
                   </button>
                 </div>
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
 
       {/* 10. Reset Password Modal */}
       {showResetPasswordModal && (
-        <div className="modal show d-block modal-backdrop-blur">
+        <PlatformDialog title="Reset staff password" onClose={() => setShowResetPasswordModal(null)}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <div className="modal-header bg-white border-bottom py-3 px-4">
@@ -3684,6 +3075,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <button
                   type="button"
                   className="btn-close"
+                  aria-label="Close password reset"
                   onClick={() => setShowResetPasswordModal(null)}
                 ></button>
               </div>
@@ -3698,7 +3090,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     message: `Password successfully reset for ${showResetPasswordModal.email}.`,
                   });
                   setShowResetPasswordModal(null);
-                  setNewPasswordVal('Password@123');
+                  setNewPasswordVal('');
                 } catch (err: any) {
                   setAlertNotice({ type: 'danger', message: err.message || 'Failed to reset password' });
                 }
@@ -3710,7 +3102,10 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <div className="mb-3">
                     <label className="form-label fw-semibold small">New Password</label>
                     <input
-                      type="text"
+                      type="password"
+                      aria-label="New password"
+                      autoComplete="new-password"
+                      minLength={10}
                       className="form-control"
                       required
                       value={newPasswordVal}
@@ -3734,7 +3129,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               </form>
             </div>
           </div>
-        </div>
+        </PlatformDialog>
       )}
     </div>
   );

@@ -6,7 +6,11 @@ import org.springframework.stereotype.Service;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.util.*;
 
 @Slf4j
@@ -15,6 +19,16 @@ public class TwoFactorAuthService {
 
     private static final String BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     private static final SecureRandom RANDOM = new SecureRandom();
+
+    private final Clock clock;
+
+    public TwoFactorAuthService() {
+        this(Clock.systemUTC());
+    }
+
+    TwoFactorAuthService(Clock clock) {
+        this.clock = Objects.requireNonNull(clock);
+    }
 
     /**
      * Generate a new 160-bit (32 base32 characters) secret key
@@ -51,50 +65,43 @@ public class TwoFactorAuthService {
      * Verify a 6-digit TOTP code against the secret key
      */
     public boolean verifyTotpCode(String secret, String inputCode) {
-        if (inputCode == null || inputCode.isBlank()) return false;
-        String cleanCode = inputCode.trim().replaceAll("\\s+", "");
-
-        // Developer friendly backdoor for test accounts
-        if ("123456".equals(cleanCode) || "000000".equals(cleanCode)) {
-            return true;
-        }
-
-        if (secret == null || secret.isBlank()) {
+        if (secret == null || inputCode == null) return false;
+        String cleanCode = inputCode.trim();
+        if (!cleanCode.matches("[0-9]{6}")) {
             return false;
         }
 
         try {
-            long currentWindow = System.currentTimeMillis() / 1000L / 30L;
+            byte[] key = decodeBase32(secret);
+            long currentWindow = clock.instant().getEpochSecond() / 30L;
+            boolean matched = false;
             // Check current window and +/- 1 window for clock drift
             for (long i = -1; i <= 1; i++) {
-                String expected = generateTotpForWindow(secret, currentWindow + i);
-                if (expected != null && expected.equals(cleanCode)) {
-                    return true;
-                }
+                String expected = generateTotpForWindow(key, currentWindow + i);
+                matched |= constantTimeEquals(expected, cleanCode);
             }
-        } catch (Exception e) {
-            log.error("Error verifying TOTP code: {}", e.getMessage());
+            return matched;
+        } catch (IllegalArgumentException e) {
+            return false;
+        } catch (GeneralSecurityException e) {
+            log.error("Error verifying TOTP code", e);
         }
         return false;
     }
 
     /**
-     * Verify and consume a backup code from comma-separated list
+     * Verify a backup code against the comma-separated list of unused codes
      */
     public boolean verifyBackupCode(String commaSeparatedBackupCodes, String inputCode) {
         if (commaSeparatedBackupCodes == null || inputCode == null) return false;
-        String cleanInput = inputCode.trim().toUpperCase();
+        String cleanInput = inputCode.trim();
+        if (!cleanInput.matches("[0-9]{4}-[0-9]{4}")) return false;
 
-        // Allow dev bypass code
-        if ("BACKUP-9999".equalsIgnoreCase(cleanInput)) return true;
-
-        List<String> codes = Arrays.asList(commaSeparatedBackupCodes.split(","));
-        for (String c : codes) {
-            if (c.trim().equalsIgnoreCase(cleanInput)) {
-                return true;
-            }
+        boolean matched = false;
+        for (String code : commaSeparatedBackupCodes.split(",")) {
+            matched |= constantTimeEquals(code.trim(), cleanInput);
         }
-        return false;
+        return matched;
     }
 
     /**
@@ -102,32 +109,35 @@ public class TwoFactorAuthService {
      */
     public String removeUsedBackupCode(String commaSeparatedBackupCodes, String usedCode) {
         if (commaSeparatedBackupCodes == null) return "";
-        String cleanInput = usedCode.trim().toUpperCase();
-        List<String> codes = new ArrayList<>(Arrays.asList(commaSeparatedBackupCodes.split(",")));
-        codes.removeIf(c -> c.trim().equalsIgnoreCase(cleanInput));
+        if (usedCode == null) return commaSeparatedBackupCodes;
+        String cleanInput = usedCode.trim();
+        if (!cleanInput.matches("[0-9]{4}-[0-9]{4}")) return commaSeparatedBackupCodes;
+
+        List<String> codes = new ArrayList<>(Arrays.asList(commaSeparatedBackupCodes.split(",", -1)));
+        codes.removeIf(code -> constantTimeEquals(code.trim(), cleanInput));
         return String.join(",", codes);
     }
 
-    private String generateTotpForWindow(String secret, long window) {
-        try {
-            byte[] key = decodeBase32(secret);
-            byte[] data = ByteBuffer.allocate(8).putLong(window).array();
+    private boolean constantTimeEquals(String expected, String actual) {
+        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
+                actual.getBytes(StandardCharsets.UTF_8));
+    }
 
-            Mac mac = Mac.getInstance("HmacSHA1");
-            mac.init(new SecretKeySpec(key, "RAW"));
-            byte[] hash = mac.doFinal(data);
+    private String generateTotpForWindow(byte[] key, long window) throws GeneralSecurityException {
+        byte[] data = ByteBuffer.allocate(8).putLong(window).array();
 
-            int offset = hash[hash.length - 1] & 0xf;
-            int binary = ((hash[offset] & 0x7f) << 24)
-                    | ((hash[offset + 1] & 0xff) << 16)
-                    | ((hash[offset + 2] & 0xff) << 8)
-                    | (hash[offset + 3] & 0xff);
+        Mac mac = Mac.getInstance("HmacSHA1");
+        mac.init(new SecretKeySpec(key, "RAW"));
+        byte[] hash = mac.doFinal(data);
 
-            int otp = binary % 1000000;
-            return String.format("%06d", otp);
-        } catch (Exception e) {
-            return null;
-        }
+        int offset = hash[hash.length - 1] & 0xf;
+        int binary = ((hash[offset] & 0x7f) << 24)
+                | ((hash[offset + 1] & 0xff) << 16)
+                | ((hash[offset + 2] & 0xff) << 8)
+                | (hash[offset + 3] & 0xff);
+
+        int otp = binary % 1000000;
+        return String.format(Locale.ROOT, "%06d", otp);
     }
 
     private String encodeBase32(byte[] data) {
@@ -151,7 +161,18 @@ public class TwoFactorAuthService {
     }
 
     private byte[] decodeBase32(String base32) {
-        String clean = base32.toUpperCase().replaceAll("[^A-Z2-7]", "");
+        if (base32 == null || !base32.matches("[A-Za-z2-7]+={0,6}")) {
+            throw new IllegalArgumentException("Invalid Base32 secret");
+        }
+        int paddingStart = base32.indexOf('=');
+        String clean = (paddingStart < 0 ? base32 : base32.substring(0, paddingStart))
+                .toUpperCase(Locale.ROOT);
+        int remainder = clean.length() % 8;
+        if (remainder == 1 || remainder == 3 || remainder == 6
+                || (paddingStart >= 0 && base32.length() % 8 != 0)) {
+            throw new IllegalArgumentException("Invalid Base32 secret");
+        }
+
         int outputLength = clean.length() * 5 / 8;
         byte[] result = new byte[outputLength];
         int buffer = 0;
@@ -159,17 +180,16 @@ public class TwoFactorAuthService {
         int next = 0;
         for (char c : clean.toCharArray()) {
             int val = BASE32_CHARS.indexOf(c);
-            if (val < 0) continue;
             buffer = (buffer << 5) | val;
             bitsLeft += 5;
             if (bitsLeft >= 8) {
                 bitsLeft -= 8;
-                if (next < result.length) {
-                    result[next++] = (byte) ((buffer >> bitsLeft) & 0xff);
-                }
+                result[next++] = (byte) ((buffer >> bitsLeft) & 0xff);
             }
+        }
+        if ((buffer & ((1 << bitsLeft) - 1)) != 0) {
+            throw new IllegalArgumentException("Invalid Base32 secret");
         }
         return result;
     }
 }
-

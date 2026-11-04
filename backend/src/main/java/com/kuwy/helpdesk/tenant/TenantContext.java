@@ -1,5 +1,9 @@
 package com.kuwy.helpdesk.tenant;
 
+import com.kuwy.helpdesk.models.Role;
+
+import java.util.Locale;
+
 /**
  * ThreadLocal storage for the active tenant user context.
  * Enforces strict multi-tenant isolation and prevents cross-tenant data leakage.
@@ -17,7 +21,7 @@ public final class TenantContext {
     public static void setContext(Long companyId, Long userId, String role, String email) {
         CURRENT_TENANT.set(companyId);
         CURRENT_USER_ID.set(userId);
-        CURRENT_USER_ROLE.set(role);
+        CURRENT_USER_ROLE.set(role == null ? null : role.trim().toUpperCase(Locale.ROOT));
         CURRENT_USER_EMAIL.set(email);
     }
 
@@ -43,7 +47,23 @@ public final class TenantContext {
 
     public static boolean isSuperAdmin() {
         String role = CURRENT_USER_ROLE.get();
-        return role != null && "SUPER_ADMIN".equalsIgnoreCase(role.trim());
+        return isAuthenticated() && Role.RoleType.SUPER_ADMIN.name().equals(role);
+    }
+
+    public static boolean isAuthenticated() {
+        Long userId = getUserId();
+        String email = getUserEmail();
+        String role = getUserRole();
+        if (userId == null || userId <= 0 || email == null || email.isBlank() || role == null) {
+            return false;
+        }
+        try {
+            Role.RoleType roleType = Role.RoleType.valueOf(role);
+            if (roleType == Role.RoleType.CUSTOMER) return false;
+            return roleType == Role.RoleType.SUPER_ADMIN || getCompanyId() != null && getCompanyId() > 0;
+        } catch (IllegalArgumentException invalidRole) {
+            return false;
+        }
     }
 
     /**
@@ -51,6 +71,9 @@ public final class TenantContext {
      * Super Admin has cross-tenant access. All other roles are strictly bound to their own company.
      */
     public static boolean hasAccessTo(Long targetCompanyId) {
+        if (!isAuthenticated() || targetCompanyId == null || targetCompanyId <= 0) {
+            return false;
+        }
         if (isSuperAdmin()) {
             return true;
         }
@@ -64,8 +87,7 @@ public final class TenantContext {
      */
     public static void assertAccessTo(Long targetCompanyId) {
         if (!hasAccessTo(targetCompanyId)) {
-            throw new SecurityException("Cross-tenant access violation: Tenant [" + getCompanyId() +
-                    "] attempted to access resources of Tenant [" + targetCompanyId + "]");
+            throw new SecurityException("Access to this workspace is not permitted.");
         }
     }
 
